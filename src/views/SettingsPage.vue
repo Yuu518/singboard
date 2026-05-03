@@ -16,6 +16,7 @@ import { normalizeVersionText } from '@/utils/format'
 import { open } from '@tauri-apps/plugin-dialog'
 import { patchConfig, fetchConfig } from '@/api'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import DnsQueryTool from '@/components/settings/DnsQueryTool.vue'
 
 const {
   config,
@@ -394,7 +395,7 @@ watch(
 </script>
 
 <template>
-  <div class="space-y-6 max-w-2xl">
+  <div class="space-y-6 max-w-2xl mx-auto w-full">
     <h1 class="text-xl font-bold">设置</h1>
     <ConfirmDialog ref="confirmDialogRef" />
 
@@ -688,6 +689,8 @@ watch(
         </div>
       </div>
     </div>
+
+    <DnsQueryTool />
 
     <div class="bg-base-200 rounded-lg p-4 space-y-3">
       <h2 class="font-semibold text-sm">路径配置</h2>
