@@ -72,9 +72,12 @@ function sortConnections(list: Connection[]): Connection[] {
 const sortedActiveConnections = computed(() => sortConnections(filteredConnections.value))
 const sortedClosedConnections = computed(() => sortConnections(filteredClosedConnections.value))
 
-function getHost(conn: any): string {
+function getHost(conn: Connection): string {
   const m = conn.metadata
-  return m.host || m.destinationIP || '-'
+  if (m.host && !isIPAddress(m.host)) {
+    return m.host
+  }
+  return m.sniffHost || m.host || m.destinationIP || '-'
 }
 
 function getProcess(conn: Connection): string {

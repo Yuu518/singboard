@@ -22,6 +22,7 @@ function matchesFilter(c: Connection, q: string): boolean {
   const m = c.metadata
   return (
     (m.host || '').toLowerCase().includes(q) ||
+    (m.sniffHost || '').toLowerCase().includes(q) ||
     (m.destinationIP || '').toLowerCase().includes(q) ||
     (m.sourceIP || '').toLowerCase().includes(q) ||
     (m.process || '').toLowerCase().includes(q) ||
