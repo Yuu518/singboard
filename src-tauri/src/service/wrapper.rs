@@ -6,8 +6,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use windows_service::service::{
-    ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState,
-    ServiceStatus, ServiceType,
+    ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType,
 };
 use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
 use windows_service::service_dispatcher;
@@ -244,22 +243,33 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
     Ok(())
 }
 
-fn spawn_singbox(singbox_path: &str, config_path: &str, working_dir: &str) -> Result<Child, String> {
+fn spawn_singbox(
+    singbox_path: &str,
+    config_path: &str,
+    working_dir: &str,
+) -> Result<Child, String> {
     let work_dir = if working_dir.is_empty() {
         let config = std::path::Path::new(config_path);
-        config.parent()
+        config
+            .parent()
             .map(|p| p.to_path_buf())
             .or_else(|| {
                 let singbox = std::path::Path::new(singbox_path);
                 singbox.parent().map(|p| p.to_path_buf())
             })
-            .ok_or_else(|| "WorkingDir is empty and cannot be inferred from configPath or singboxPath".to_string())?
+            .ok_or_else(|| {
+                "WorkingDir is empty and cannot be inferred from configPath or singboxPath"
+                    .to_string()
+            })?
     } else {
         std::path::PathBuf::from(working_dir)
     };
 
     if !work_dir.is_dir() {
-        return Err(format!("Working directory does not exist: {}", work_dir.display()));
+        return Err(format!(
+            "Working directory does not exist: {}",
+            work_dir.display()
+        ));
     }
 
     let mut cmd = Command::new(singbox_path);

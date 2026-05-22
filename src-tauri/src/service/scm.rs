@@ -13,7 +13,14 @@ type ScHandle = *mut std::ffi::c_void;
 pub const SERVICE_ERROR_LOG_NAME: &str = "singbox_last_error.log";
 
 fn to_wide(s: &str) -> Vec<u16> {
-    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+fn ps_single_quoted(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
 }
 
 fn is_log_dir_name(name: &str) -> bool {
@@ -82,7 +89,11 @@ fn resolve_service_base_dir(service_name: &str) -> Option<PathBuf> {
 
 pub fn resolve_service_error_log_path(service_name: &str) -> PathBuf {
     let base_dir = resolve_service_base_dir(service_name)
-        .or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|p| p.to_path_buf())))
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+        })
         .unwrap_or_default();
 
     let log_dir = find_log_dir(&base_dir).unwrap_or(base_dir);
@@ -165,7 +176,10 @@ pub fn query_service_status(service_name: &str) -> Result<ServiceStatus, String>
         CloseServiceHandle(scm);
 
         if ok == 0 {
-            return Err(format!("QueryServiceStatusEx failed: error {}", GetLastError()));
+            return Err(format!(
+                "QueryServiceStatusEx failed: error {}",
+                GetLastError()
+            ));
         }
 
         let state = match status.dwCurrentState {
@@ -193,7 +207,11 @@ pub fn query_service_status(service_name: &str) -> Result<ServiceStatus, String>
 pub fn start_service(service_name: &str) -> Result<(), String> {
     unsafe {
         let scm = open_scm()?;
-        let svc = open_service_handle(scm, service_name, SERVICE_START | SERVICE_QUERY_STATUS | SERVICE_STOP)?;
+        let svc = open_service_handle(
+            scm,
+            service_name,
+            SERVICE_START | SERVICE_QUERY_STATUS | SERVICE_STOP,
+        )?;
 
         {
             let mut status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
@@ -272,8 +290,7 @@ pub fn start_service(service_name: &str) -> Result<(), String> {
                 SERVICE_STOPPED => {
                     CloseServiceHandle(svc);
                     CloseServiceHandle(scm);
-                    let detail = read_service_error_log(service_name)
-                        .unwrap_or_default();
+                    let detail = read_service_error_log(service_name).unwrap_or_default();
                     let msg = if detail.is_empty() {
                         "服务启动后立即退出，可能是配置文件有误，请检查配置".to_string()
                     } else {
@@ -486,8 +503,8 @@ pub fn write_service_params(
     config_path: &str,
     working_dir: &str,
 ) -> Result<(), String> {
-    use winreg::enums::*;
     use winreg::RegKey;
+    use winreg::enums::*;
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let key_path = format!(
@@ -507,8 +524,8 @@ pub fn write_service_params(
 }
 
 pub fn read_service_params(service_name: &str) -> Result<(String, String, String), String> {
-    use winreg::enums::*;
     use winreg::RegKey;
+    use winreg::enums::*;
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let key_path = format!(
@@ -524,31 +541,33 @@ pub fn read_service_params(service_name: &str) -> Result<(String, String, String
     let config_path: String = key
         .get_value("ConfigPath")
         .map_err(|e| format!("Failed to read ConfigPath: {}", e))?;
-    let working_dir: String = key
-        .get_value("WorkingDir")
-        .unwrap_or_default();
+    let working_dir: String = key.get_value("WorkingDir").unwrap_or_default();
     Ok((singbox_path, config_path, working_dir))
 }
 
 pub fn read_service_error_log(service_name: &str) -> Result<String, String> {
     let log_path = resolve_service_error_log_path(service_name);
-    std::fs::read_to_string(&log_path)
-        .map_err(|e| format!("Failed to read error log: {}", e))
+    std::fs::read_to_string(&log_path).map_err(|e| format!("Failed to read error log: {}", e))
 }
 
 pub fn create_startup_task(service_name: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
 
     let task_name = format!("singboard-autostart-{}", service_name);
+    let action_args = format!("start {}", service_name);
     let script = format!(
-        "$a=New-ScheduledTaskAction -Execute 'sc.exe' -Argument 'start {svc}';\
+        "$u=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name;\
+         $a=New-ScheduledTaskAction -Execute 'sc.exe' -Argument {args};\
          $t=New-ScheduledTaskTrigger -AtLogOn;\
          $t.Delay='PT30S';\
-         $s=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit 0;\
-         $p=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest;\
-         Register-ScheduledTask -TaskName '{name}' -Action $a -Trigger $t -Settings $s -Principal $p -Force",
-        svc = service_name,
-        name = task_name,
+         $s=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit 0 -Compatibility Vista;\
+         $s.Hidden=$true;\
+         $s.DisallowStartIfOnBatteries=$false;\
+         $s.StopIfGoingOnBatteries=$false;\
+         $p=New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Highest;\
+         Register-ScheduledTask -TaskName {name} -Action $a -Trigger $t -Settings $s -Principal $p -Force",
+        args = ps_single_quoted(&action_args),
+        name = ps_single_quoted(&task_name),
     );
 
     let status = std::process::Command::new("powershell")

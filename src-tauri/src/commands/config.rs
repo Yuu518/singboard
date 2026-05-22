@@ -86,7 +86,9 @@ fn scan_dir(
 }
 
 #[tauri::command]
-pub async fn detect_runtime_files(base_dir: Option<String>) -> Result<DetectedRuntimeFiles, String> {
+pub async fn detect_runtime_files(
+    base_dir: Option<String>,
+) -> Result<DetectedRuntimeFiles, String> {
     tokio::task::spawn_blocking(move || {
         let base_dir = if let Some(input) = base_dir {
             let trimmed = input.trim();
@@ -96,10 +98,16 @@ pub async fn detect_runtime_files(base_dir: Option<String>) -> Result<DetectedRu
             } else {
                 let path = PathBuf::from(trimmed);
                 if !path.exists() {
-                    return Err(format!("Working directory does not exist: {}", path.display()));
+                    return Err(format!(
+                        "Working directory does not exist: {}",
+                        path.display()
+                    ));
                 }
                 if !path.is_dir() {
-                    return Err(format!("Working directory is not a directory: {}", path.display()));
+                    return Err(format!(
+                        "Working directory is not a directory: {}",
+                        path.display()
+                    ));
                 }
                 path
             }
@@ -180,10 +188,16 @@ fn resolve_working_dir(working_dir: Option<&str>, config_path: &str) -> Result<P
     if let Some(dir) = working_dir.map(str::trim).filter(|v| !v.is_empty()) {
         let path = PathBuf::from(dir);
         if !path.exists() {
-            return Err(format!("Working directory does not exist: {}", path.display()));
+            return Err(format!(
+                "Working directory does not exist: {}",
+                path.display()
+            ));
         }
         if !path.is_dir() {
-            return Err(format!("Working directory is not a directory: {}", path.display()));
+            return Err(format!(
+                "Working directory is not a directory: {}",
+                path.display()
+            ));
         }
         return Ok(path);
     }
@@ -235,18 +249,16 @@ pub async fn validate_config_content(
         .await
         .map_err(|e| format!("Failed to write temp config for validation: {}", e))?;
 
-    let check_result = run_singbox_check(
-        &singbox_path,
-        &temp_path_str,
-        working_dir.as_deref(),
-    )
-    .await;
+    let check_result =
+        run_singbox_check(&singbox_path, &temp_path_str, working_dir.as_deref()).await;
     let _ = tokio::fs::remove_file(&temp_path).await;
     check_result
 }
 
 fn resolve_remote_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let data_dir = app.path().app_data_dir()
+    let data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
     let remote_dir = data_dir.join("Remote Config");
     if !remote_dir.exists() {
@@ -257,9 +269,7 @@ fn resolve_remote_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> 
 }
 
 #[tauri::command]
-pub async fn get_remote_config_dir(
-    app: tauri::AppHandle,
-) -> Result<String, String> {
+pub async fn get_remote_config_dir(app: tauri::AppHandle) -> Result<String, String> {
     let dir = resolve_remote_config_dir(&app)?;
     Ok(normalize_path_for_client(&dir))
 }
@@ -275,7 +285,9 @@ pub async fn get_remote_config_path(
 }
 
 fn resolve_running_config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let data_dir = app.path().app_data_dir()
+    let data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
     if !data_dir.exists() {
         std::fs::create_dir_all(&data_dir)
@@ -285,9 +297,7 @@ fn resolve_running_config_path(app: &tauri::AppHandle) -> Result<PathBuf, String
 }
 
 #[tauri::command]
-pub async fn get_running_config_path(
-    app: tauri::AppHandle,
-) -> Result<String, String> {
+pub async fn get_running_config_path(app: tauri::AppHandle) -> Result<String, String> {
     let running_config_path = resolve_running_config_path(&app)?;
     Ok(normalize_path_for_client(&running_config_path))
 }

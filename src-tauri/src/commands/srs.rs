@@ -30,7 +30,10 @@ fn read_uvarint<R: Read>(r: &mut R) -> io::Result<u64> {
         }
         shift += 7;
         if shift >= 64 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "uvarint overflow"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "uvarint overflow",
+            ));
         }
     }
 }
@@ -138,7 +141,11 @@ impl SuccinctSet {
         let leaves = read_u64_slice(r)?;
         let label_bitmap = read_u64_slice(r)?;
         let labels = read_byte_slice(r)?;
-        Ok(SuccinctSet { leaves, label_bitmap, labels })
+        Ok(SuccinctSet {
+            leaves,
+            label_bitmap,
+            labels,
+        })
     }
 
     /// Match a domain against the trie.
@@ -269,7 +276,8 @@ impl AdGuardMatcher {
                 }
                 if lbl == Self::ANY || lbl == Self::SUFFIX {
                     let next_node = count_zeros(&self.set.label_bitmap, bm_idx + 1);
-                    let next_bm = select_ith_one(&self.set.label_bitmap, next_node.saturating_sub(1)) + 1;
+                    let next_bm =
+                        select_ith_one(&self.set.label_bitmap, next_node.saturating_sub(1)) + 1;
                     if self.has(&key[i..], next_node, next_bm, depth + 1) {
                         return true;
                     }
@@ -302,7 +310,8 @@ impl AdGuardMatcher {
             }
             if lbl == Self::ANY {
                 let next_node = count_zeros(&self.set.label_bitmap, bm_idx + 1);
-                let next_bm = select_ith_one(&self.set.label_bitmap, next_node.saturating_sub(1)) + 1;
+                let next_bm =
+                    select_ith_one(&self.set.label_bitmap, next_node.saturating_sub(1)) + 1;
                 return self.has(&[], next_node, next_bm, depth + 1);
             }
             bm_idx += 1;
@@ -345,7 +354,10 @@ fn read_ip_set<R: Read>(r: &mut R) -> io::Result<IpSet> {
             _ => {}
         }
     }
-    Ok(IpSet { ranges_v4: v4, ranges_v6: v6 })
+    Ok(IpSet {
+        ranges_v4: v4,
+        ranges_v6: v6,
+    })
 }
 
 fn skip_ip_set<R: Read>(r: &mut R) -> io::Result<()> {
@@ -432,18 +444,18 @@ fn match_default_rule<R: Read>(r: &mut R, query: &Query) -> io::Result<bool> {
             ITEM_FINAL => {
                 let invert = read_u8(r)? != 0;
                 let result = match query {
-                    Query::Domain(_) => {
-                        domain_seen && domain_matched
-                    }
-                    Query::Ip(_) => {
-                        ip_seen && ip_matched
-                    }
+                    Query::Domain(_) => domain_seen && domain_matched,
+                    Query::Ip(_) => ip_seen && ip_matched,
                 };
                 return Ok(if invert { !result } else { result });
             }
             ITEM_DOMAIN => {
                 let set = SuccinctSet::read(r)?;
-                let m = if let Query::Domain(d) = query { set.match_domain(d) } else { false };
+                let m = if let Query::Domain(d) = query {
+                    set.match_domain(d)
+                } else {
+                    false
+                };
                 domain_seen = true;
                 domain_matched = domain_matched || m;
             }
@@ -465,7 +477,11 @@ fn match_default_rule<R: Read>(r: &mut R, query: &Query) -> io::Result<bool> {
             }
             ITEM_IP_CIDR => {
                 let set = read_ip_set(r)?;
-                let m = if let Query::Ip(ip) = query { set.contains(ip) } else { false };
+                let m = if let Query::Ip(ip) = query {
+                    set.contains(ip)
+                } else {
+                    false
+                };
                 ip_seen = true;
                 ip_matched = ip_matched || m;
             }
@@ -493,7 +509,11 @@ fn match_default_rule<R: Read>(r: &mut R, query: &Query) -> io::Result<bool> {
             }
             ITEM_ADGUARD_DOMAIN => {
                 let matcher = AdGuardMatcher::read(r)?;
-                let m = if let Query::Domain(d) = query { matcher.match_domain(d) } else { false };
+                let m = if let Query::Domain(d) = query {
+                    matcher.match_domain(d)
+                } else {
+                    false
+                };
                 domain_seen = true;
                 domain_matched = domain_matched || m;
             }
@@ -588,7 +608,7 @@ fn srs_match_bytes(data: &[u8], query: &Query) -> Result<bool, String> {
 
 const PAGE_HEADER_SIZE: usize = 16; // pgid(8) + flags(2) + count(2) + overflow(4)
 const BRANCH_ELEM_SIZE: usize = 16; // pos(4) + ksize(4) + pgid(8)
-const LEAF_ELEM_SIZE: usize = 16;   // flags(4) + pos(4) + ksize(4) + vsize(4)
+const LEAF_ELEM_SIZE: usize = 16; // flags(4) + pos(4) + ksize(4) + vsize(4)
 const BRANCH_PAGE_FLAG: u16 = 0x01;
 const LEAF_PAGE_FLAG: u16 = 0x02;
 const BUCKET_LEAF_FLAG: u32 = 0x01;
@@ -599,7 +619,11 @@ fn bolt_page_size(data: &[u8]) -> usize {
         return 4096;
     }
     let ps = u32::from_le_bytes(data[24..28].try_into().unwrap()) as usize;
-    if ps >= 512 && ps.is_power_of_two() { ps } else { 4096 }
+    if ps >= 512 && ps.is_power_of_two() {
+        ps
+    } else {
+        4096
+    }
 }
 
 /// Read the root bucket's pgid from the meta page with the highest txid.
@@ -609,7 +633,9 @@ fn bolt_page_size(data: &[u8]) -> usize {
 ///   48: freelist(u64), 56: pgid(u64), 64: txid(u64), 72: checksum(u64)
 fn bolt_meta_root(data: &[u8], ps: usize) -> u64 {
     let read_u64_le = |off: usize| -> u64 {
-        if off + 8 > data.len() { return 0; }
+        if off + 8 > data.len() {
+            return 0;
+        }
         u64::from_le_bytes(data[off..off + 8].try_into().unwrap())
     };
     let root0 = read_u64_le(32);
@@ -639,7 +665,10 @@ fn bolt_btree_lookup(
         let overflow = u32::from_le_bytes(data[off + 12..off + 16].try_into().unwrap()) as usize;
         let page_end = off + ps * (1 + overflow);
         if page_end > data.len() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "overflow page extends beyond file"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "overflow page extends beyond file",
+            ));
         }
         let page = &data[off..page_end];
         let flags = u16::from_le_bytes([page[8], page[9]]);
@@ -675,7 +704,8 @@ fn bolt_branch_child(page: &[u8], count: usize, key: &[u8]) -> u64 {
             continue;
         }
         let pos = u32::from_le_bytes(page[elem_start..elem_start + 4].try_into().unwrap()) as usize;
-        let ksize = u32::from_le_bytes(page[elem_start + 4..elem_start + 8].try_into().unwrap()) as usize;
+        let ksize =
+            u32::from_le_bytes(page[elem_start + 4..elem_start + 8].try_into().unwrap()) as usize;
         let k_end = elem_start + pos + ksize;
         if k_end > page.len() {
             hi = mid;
@@ -696,7 +726,13 @@ fn bolt_branch_child(page: &[u8], count: usize, key: &[u8]) -> u64 {
         let ksize = u32::from_le_bytes(page[es + 4..es + 8].try_into().unwrap()) as usize;
         es + pos + ksize <= page.len() && &page[es + pos..es + pos + ksize] == key
     };
-    let idx = if is_exact { lo } else if lo > 0 { lo - 1 } else { 0 };
+    let idx = if is_exact {
+        lo
+    } else if lo > 0 {
+        lo - 1
+    } else {
+        0
+    };
     let elem_start = PAGE_HEADER_SIZE + idx * BRANCH_ELEM_SIZE;
     u64::from_le_bytes(page[elem_start + 8..elem_start + 16].try_into().unwrap())
 }
@@ -713,9 +749,12 @@ fn bolt_leaf_lookup(page: &[u8], count: usize, key: &[u8]) -> Option<(bool, Vec<
             break;
         }
         let elem_flags = u32::from_le_bytes(page[elem_start..elem_start + 4].try_into().unwrap());
-        let pos = u32::from_le_bytes(page[elem_start + 4..elem_start + 8].try_into().unwrap()) as usize;
-        let ksize = u32::from_le_bytes(page[elem_start + 8..elem_start + 12].try_into().unwrap()) as usize;
-        let vsize = u32::from_le_bytes(page[elem_start + 12..elem_start + 16].try_into().unwrap()) as usize;
+        let pos =
+            u32::from_le_bytes(page[elem_start + 4..elem_start + 8].try_into().unwrap()) as usize;
+        let ksize =
+            u32::from_le_bytes(page[elem_start + 8..elem_start + 12].try_into().unwrap()) as usize;
+        let vsize =
+            u32::from_le_bytes(page[elem_start + 12..elem_start + 16].try_into().unwrap()) as usize;
         let k_start = elem_start + pos;
         let k_end = k_start + ksize;
         if k_end > page.len() {
@@ -726,7 +765,11 @@ fn bolt_leaf_lookup(page: &[u8], count: usize, key: &[u8]) -> Option<(bool, Vec<
             std::cmp::Ordering::Equal => {
                 let v_start = k_end;
                 let v_end = v_start + vsize;
-                let v = if v_end <= page.len() { page[v_start..v_end].to_vec() } else { vec![] };
+                let v = if v_end <= page.len() {
+                    page[v_start..v_end].to_vec()
+                } else {
+                    vec![]
+                };
                 return Some((elem_flags & BUCKET_LEAF_FLAG != 0, v));
             }
             std::cmp::Ordering::Less => lo = mid + 1,
@@ -900,11 +943,7 @@ fn resolve_path_candidates(base_dirs: &[PathBuf], raw_path: &str) -> Vec<PathBuf
 
 /// Resolve local binary rule-set path from config.json by tag.
 /// Reads route.rule_set and returns a matching file path when type=local and path exists.
-fn find_local_srs_from_config(
-    working_dir: &str,
-    config_path: &str,
-    tag: &str,
-) -> Option<PathBuf> {
+fn find_local_srs_from_config(working_dir: &str, config_path: &str, tag: &str) -> Option<PathBuf> {
     if config_path.is_empty() {
         return None;
     }
@@ -935,7 +974,10 @@ fn find_local_srs_from_config(
         if item_tag != tag {
             continue;
         }
-        let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("inline");
+        let item_type = item
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("inline");
         if item_type != "local" {
             continue;
         }
@@ -992,8 +1034,7 @@ pub fn find_cache_db_path(
 
 #[tauri::command]
 pub fn srs_match_cache(cache_path: String, tag: String, query: String) -> Result<bool, String> {
-    let data = std::fs::read(&cache_path)
-        .map_err(|e| format!("read '{}': {}", cache_path, e))?;
+    let data = std::fs::read(&cache_path).map_err(|e| format!("read '{}': {}", cache_path, e))?;
 
     let ps = bolt_page_size(&data);
     let root_pgid = bolt_meta_root(&data, ps);
@@ -1160,7 +1201,11 @@ fn range_to_cidrs_v4(from: u32, to: u32) -> Vec<String> {
         if prefix_len > 32 {
             prefix_len = 32;
         }
-        let mask = if prefix_len == 0 { 0 } else { !((1u64 << (32 - prefix_len)) - 1) as u32 };
+        let mask = if prefix_len == 0 {
+            0
+        } else {
+            !((1u64 << (32 - prefix_len)) - 1) as u32
+        };
         let broadcast = start | !mask;
         let ip = Ipv4Addr::from(start);
         results.push(format!("{}/{}", ip, prefix_len));
@@ -1256,109 +1301,172 @@ fn list_default_rule<R: Read>(r: &mut R) -> io::Result<Vec<RuleEntry>> {
             ITEM_DOMAIN => {
                 let set = SuccinctSet::read(r)?;
                 for (t, v) in set.enumerate() {
-                    entries.push(RuleEntry { rule_type: t, value: v });
+                    entries.push(RuleEntry {
+                        rule_type: t,
+                        value: v,
+                    });
                 }
             }
             ITEM_DOMAIN_KEYWORD => {
                 for kw in read_string_list(r)? {
-                    entries.push(RuleEntry { rule_type: "domain_keyword".into(), value: kw });
+                    entries.push(RuleEntry {
+                        rule_type: "domain_keyword".into(),
+                        value: kw,
+                    });
                 }
             }
             ITEM_DOMAIN_REGEX => {
                 for rx in read_string_list(r)? {
-                    entries.push(RuleEntry { rule_type: "domain_regex".into(), value: rx });
+                    entries.push(RuleEntry {
+                        rule_type: "domain_regex".into(),
+                        value: rx,
+                    });
                 }
             }
             ITEM_IP_CIDR => {
                 let set = read_ip_set(r)?;
                 for cidr in set.to_cidrs() {
-                    entries.push(RuleEntry { rule_type: "ip_cidr".into(), value: cidr });
+                    entries.push(RuleEntry {
+                        rule_type: "ip_cidr".into(),
+                        value: cidr,
+                    });
                 }
             }
             ITEM_SOURCE_IP_CIDR => {
                 let set = read_ip_set(r)?;
                 for cidr in set.to_cidrs() {
-                    entries.push(RuleEntry { rule_type: "source_ip_cidr".into(), value: cidr });
+                    entries.push(RuleEntry {
+                        rule_type: "source_ip_cidr".into(),
+                        value: cidr,
+                    });
                 }
             }
             ITEM_QUERY_TYPE => {
                 for qt in read_u16_list(r)? {
-                    entries.push(RuleEntry { rule_type: "query_type".into(), value: qt.to_string() });
+                    entries.push(RuleEntry {
+                        rule_type: "query_type".into(),
+                        value: qt.to_string(),
+                    });
                 }
             }
             ITEM_NETWORK => {
                 for n in read_string_list(r)? {
-                    entries.push(RuleEntry { rule_type: "network".into(), value: n });
+                    entries.push(RuleEntry {
+                        rule_type: "network".into(),
+                        value: n,
+                    });
                 }
             }
             ITEM_SOURCE_PORT => {
                 for p in read_u16_list(r)? {
-                    entries.push(RuleEntry { rule_type: "source_port".into(), value: p.to_string() });
+                    entries.push(RuleEntry {
+                        rule_type: "source_port".into(),
+                        value: p.to_string(),
+                    });
                 }
             }
             ITEM_PORT => {
                 for p in read_u16_list(r)? {
-                    entries.push(RuleEntry { rule_type: "port".into(), value: p.to_string() });
+                    entries.push(RuleEntry {
+                        rule_type: "port".into(),
+                        value: p.to_string(),
+                    });
                 }
             }
             ITEM_SOURCE_PORT_RANGE => {
                 for s in read_string_list(r)? {
-                    entries.push(RuleEntry { rule_type: "source_port_range".into(), value: s });
+                    entries.push(RuleEntry {
+                        rule_type: "source_port_range".into(),
+                        value: s,
+                    });
                 }
             }
             ITEM_PORT_RANGE => {
                 for s in read_string_list(r)? {
-                    entries.push(RuleEntry { rule_type: "port_range".into(), value: s });
+                    entries.push(RuleEntry {
+                        rule_type: "port_range".into(),
+                        value: s,
+                    });
                 }
             }
             ITEM_PROCESS_NAME => {
                 for s in read_string_list(r)? {
-                    entries.push(RuleEntry { rule_type: "process_name".into(), value: s });
+                    entries.push(RuleEntry {
+                        rule_type: "process_name".into(),
+                        value: s,
+                    });
                 }
             }
             ITEM_PROCESS_PATH => {
                 for s in read_string_list(r)? {
-                    entries.push(RuleEntry { rule_type: "process_path".into(), value: s });
+                    entries.push(RuleEntry {
+                        rule_type: "process_path".into(),
+                        value: s,
+                    });
                 }
             }
             ITEM_PACKAGE_NAME => {
                 for s in read_string_list(r)? {
-                    entries.push(RuleEntry { rule_type: "package_name".into(), value: s });
+                    entries.push(RuleEntry {
+                        rule_type: "package_name".into(),
+                        value: s,
+                    });
                 }
             }
             ITEM_WIFI_SSID => {
                 for s in read_string_list(r)? {
-                    entries.push(RuleEntry { rule_type: "wifi_ssid".into(), value: s });
+                    entries.push(RuleEntry {
+                        rule_type: "wifi_ssid".into(),
+                        value: s,
+                    });
                 }
             }
             ITEM_WIFI_BSSID => {
                 for s in read_string_list(r)? {
-                    entries.push(RuleEntry { rule_type: "wifi_bssid".into(), value: s });
+                    entries.push(RuleEntry {
+                        rule_type: "wifi_bssid".into(),
+                        value: s,
+                    });
                 }
             }
             ITEM_PROCESS_PATH_REGEX => {
                 for s in read_string_list(r)? {
-                    entries.push(RuleEntry { rule_type: "process_path_regex".into(), value: s });
+                    entries.push(RuleEntry {
+                        rule_type: "process_path_regex".into(),
+                        value: s,
+                    });
                 }
             }
             ITEM_ADGUARD_DOMAIN => {
                 let matcher = AdGuardMatcher::read(r)?;
                 for (t, v) in matcher.enumerate() {
-                    entries.push(RuleEntry { rule_type: t, value: v });
+                    entries.push(RuleEntry {
+                        rule_type: t,
+                        value: v,
+                    });
                 }
             }
             ITEM_NETWORK_TYPE => {
                 let count = read_uvarint(r)? as usize;
                 for _ in 0..count {
                     let b = read_u8(r)?;
-                    entries.push(RuleEntry { rule_type: "network_type".into(), value: b.to_string() });
+                    entries.push(RuleEntry {
+                        rule_type: "network_type".into(),
+                        value: b.to_string(),
+                    });
                 }
             }
             ITEM_NETWORK_IS_EXPENSIVE => {
-                entries.push(RuleEntry { rule_type: "network_is_expensive".into(), value: "true".into() });
+                entries.push(RuleEntry {
+                    rule_type: "network_is_expensive".into(),
+                    value: "true".into(),
+                });
             }
             ITEM_NETWORK_IS_CONSTRAINED => {
-                entries.push(RuleEntry { rule_type: "network_is_constrained".into(), value: "true".into() });
+                entries.push(RuleEntry {
+                    rule_type: "network_is_constrained".into(),
+                    value: "true".into(),
+                });
             }
             ITEM_NETWORK_INTERFACE_ADDRESS => {
                 let size = read_uvarint(r)? as usize;
@@ -1473,7 +1581,9 @@ fn resolve_srs_data(
             parse_saved_binary_content(&saved)
                 .map_err(|e| format!("parse SavedBinary '{}': {}", tag, e))
         })() {
-            Ok(srs_bytes) if srs_bytes.len() >= 4 && &srs_bytes[0..3] == b"SRS" => return Ok(srs_bytes),
+            Ok(srs_bytes) if srs_bytes.len() >= 4 && &srs_bytes[0..3] == b"SRS" => {
+                return Ok(srs_bytes);
+            }
             Ok(_) => last_cache_error = Some(format!("cache.db '{}': invalid SRS content", tag)),
             Err(e) => last_cache_error = Some(e),
         }
@@ -1492,7 +1602,10 @@ fn resolve_srs_data(
     if let Some(e) = last_cache_error {
         Err(format!("{}; and local '{}.srs' not found", e, tag))
     } else {
-        Err(format!("no cache.db found; and local '{}.srs' not found", tag))
+        Err(format!(
+            "no cache.db found; and local '{}.srs' not found",
+            tag
+        ))
     }
 }
 
@@ -1542,7 +1655,9 @@ pub fn srs_match_provider(
         return srs_match_bytes(&data, &q);
     }
 
-    if let Some(srs_path) = find_local_srs_by_tag(&[&working_dir, &config_path, &singbox_path], &tag) {
+    if let Some(srs_path) =
+        find_local_srs_by_tag(&[&working_dir, &config_path, &singbox_path], &tag)
+    {
         let data = std::fs::read(&srs_path)
             .map_err(|e| format!("read '{}': {}", srs_path.to_string_lossy(), e))?;
         let q = parse_query(&query);
