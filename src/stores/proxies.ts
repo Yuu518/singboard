@@ -436,28 +436,12 @@ export function useProxiesStore() {
     const proxy = proxyMap.value[resolved]
     if (!proxy) return 0
 
-    let latest = 0
-    let latestTime = ''
-
     if (proxy.history?.length) {
       const last = proxy.history[proxy.history.length - 1]
-      latest = last.delay
-      latestTime = last.time
+      return last.delay
     }
 
-    if (proxy.extra) {
-      for (const extra of Object.values(proxy.extra)) {
-        if (extra.history?.length) {
-          const last = extra.history[extra.history.length - 1]
-          if (last.time > latestTime) {
-            latest = last.delay
-            latestTime = last.time
-          }
-        }
-      }
-    }
-
-    return latest
+    return 0
   }
 
   function resolveNowNodeName(name: string): string {

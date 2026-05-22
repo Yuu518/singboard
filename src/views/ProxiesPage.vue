@@ -101,6 +101,27 @@ function getTypeDescription(nodeName: string): string {
   return [type, udpLabel, ipv6Label].filter(Boolean).join(' / ')
 }
 
+function isDirectNode(nodeName: string): boolean {
+  return getProxy(nodeName)?.type.toLowerCase() === 'direct'
+}
+
+function getLatencyLabel(nodeName: string): string {
+  const delay = getLatency(nodeName)
+  if (delay > 0) return formatLatency(delay)
+  return isDirectNode(nodeName) ? '' : formatLatency(delay)
+}
+
+function shouldShowLatencyBadge(nodeName: string): boolean {
+  return getLatency(nodeName) > 0 || !isDirectNode(nodeName)
+}
+
+function getLatencyBadgeClass(nodeName: string): string {
+  if (!shouldShowLatencyBadge(nodeName)) {
+    return 'h-4 w-4 bg-transparent p-0'
+  }
+  return latencyColor(getLatency(nodeName))
+}
+
 async function handleSelect(group: string, name: string) {
   await switchProxy(group, name)
 }
@@ -262,6 +283,13 @@ watch(isRunning, (running) => {
                 <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
               </svg>
               <span class="truncate">{{ group.now }}</span>
+              <span
+                v-if="group.now && shouldShowLatencyBadge(group.now)"
+                class="shrink-0 text-xs leading-none px-1.5 py-0.5 rounded"
+                :class="getLatencyBadgeClass(group.now)"
+              >
+                {{ getLatencyLabel(group.now) }}
+              </span>
             </div>
             <div v-show="!expandedGroups.has(group.name)" class="flex flex-wrap gap-1.5">
               <span
@@ -278,21 +306,12 @@ watch(isRunning, (running) => {
           </div>
           <div class="flex flex-col items-end gap-0.5 shrink-0">
             <button
-              class="btn btn-xs btn-ghost min-w-0 px-1 h-5 min-h-0"
+              class="btn btn-xs btn-ghost min-w-0 px-2 h-6 min-h-0"
               :class="{ 'loading loading-xs': testingGroup === group.name }"
               @click.stop="handleTestGroup(group.name)"
-              :title="'测试延迟 - ' + group.now"
+              title="测试代理组节点延迟"
             >
-              <template v-if="testingGroup !== group.name">
-                <span
-                  v-if="group.now && getLatency(group.now)"
-                  class="text-xs leading-none px-1.5 py-0.5 rounded"
-                  :class="latencyColor(getLatency(group.now))"
-                >
-                  {{ formatLatency(getLatency(group.now)) }}
-                </span>
-                <span v-else class="text-xs text-base-content/40">N/A</span>
-              </template>
+              <template v-if="testingGroup !== group.name">延迟测试</template>
             </button>
             <span class="text-xs text-base-content/40 pr-1">↓{{ formatSpeed(getGroupSpeed(group.name).down) }}</span>
             <span class="text-xs text-base-content/40 pr-1">↑{{ formatSpeed(getGroupSpeed(group.name).up) }}</span>
@@ -322,11 +341,11 @@ watch(isRunning, (running) => {
                 >{{ getTypeDescription(nodeName) }}</span>
                 <button
                   class="shrink-0 cursor-pointer text-xs leading-none px-1.5 py-0.5 rounded"
-                  :class="[latencyColor(getLatency(nodeName)), { 'loading loading-xs': testingNodes.has(nodeName) }]"
+                  :class="[getLatencyBadgeClass(nodeName), { 'loading loading-xs': testingNodes.has(nodeName) }]"
                   @click="handleTestNode($event, nodeName, group.name)"
                   title="点击测速"
                 >
-                  <template v-if="!testingNodes.has(nodeName)">{{ formatLatency(getLatency(nodeName)) }}</template>
+                  <template v-if="!testingNodes.has(nodeName)">{{ getLatencyLabel(nodeName) }}</template>
                 </button>
               </div>
             </div>
@@ -420,11 +439,11 @@ watch(isRunning, (running) => {
                 </span>
                 <button
                   class="shrink-0 cursor-pointer text-xs leading-none px-1.5 py-0.5 rounded"
-                  :class="[latencyColor(getLatency(node.name)), { 'loading loading-xs': testingNodes.has(node.name) }]"
+                  :class="[getLatencyBadgeClass(node.name), { 'loading loading-xs': testingNodes.has(node.name) }]"
                   @click.stop="handleTestNode($event, node.name, provider.name)"
                   title="点击测速"
                 >
-                  <template v-if="!testingNodes.has(node.name)">{{ formatLatency(getLatency(node.name)) }}</template>
+                  <template v-if="!testingNodes.has(node.name)">{{ getLatencyLabel(node.name) }}</template>
                 </button>
               </div>
             </div>
