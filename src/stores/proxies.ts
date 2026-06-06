@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import { fetchProxies, fetchProxy, fetchProxyProviders, selectProxy, testLatency, testGroupLatency } from '@/api'
+import { fetchProxies, fetchProxy, fetchProxyProviders, selectProxy, testLatency } from '@/api'
 import { useConfigStore } from '@/stores/config'
 import type { LatencyHistory, Proxy, ProxyGroup, ProxyProvider } from '@/types'
 
@@ -313,69 +313,31 @@ export function useProxiesStore() {
     const group = proxyMap.value[groupName]
     if (!group?.all) return
 
-    const type = group.type.toLowerCase()
     const url = getTestUrl(groupName)
 
-    if (['selector', 'loadbalance', 'smart'].includes(type)) {
-      const nodes = [...group.all]
-      const run = async () => {
-        while (nodes.length > 0) {
-          const name = nodes.shift()!
-          const now = new Date().toISOString()
-          try {
-            const { data } = await testLatency(name, url, LATENCY_TIMEOUT)
-            appendProxyHistory(name, data.delay, now)
-          } catch {
-            appendProxyHistory(name, 0, now)
-          }
-          if (config.value.ipv6TestEnabled) {
-            try {
-              const { data } = await testLatency(name, IPV6_TEST_URL, IPV6_TEST_TIMEOUT)
-              ipv6Map.value[resolveNowNodeName(name)] = data.delay > 0
-            } catch {
-              ipv6Map.value[resolveNowNodeName(name)] = false
-            }
-          }
-        }
-      }
-      await Promise.all(Array.from({ length: Math.min(5, group.all.length) }, () => run()))
-      if (config.value.ipv6TestEnabled) saveIPv6Map()
-    } else {
-      if (config.value.ipv6TestEnabled) {
-        await testGroupLatency(groupName, IPV6_TEST_URL, IPV6_TEST_TIMEOUT)
-          .then(({ data }) => {
-            const results = data as Record<string, number>
-            for (const [name, delay] of Object.entries(results)) {
-              ipv6Map.value[resolveNowNodeName(name)] = delay > 0
-            }
-            saveIPv6Map()
-          })
-          .catch(() => {
-            for (const name of group.all!) {
-              ipv6Map.value[resolveNowNodeName(name)] = false
-            }
-            saveIPv6Map()
-          })
-      }
-      const now = new Date().toISOString()
-      try {
-        const { data } = await testGroupLatency(groupName, url, Math.max(5000, LATENCY_TIMEOUT))
-        const results = data as Record<string, number>
-        const tested = new Set(Object.keys(results))
-        for (const [name, delay] of Object.entries(results)) {
-          appendProxyHistory(name, delay, now)
-        }
-        for (const name of group.all!) {
-          if (!tested.has(name)) {
-            appendProxyHistory(name, 0, now)
-          }
-        }
-      } catch {
-        for (const name of group.all!) {
+    const nodes = [...group.all]
+    const run = async () => {
+      while (nodes.length > 0) {
+        const name = nodes.shift()!
+        const now = new Date().toISOString()
+        try {
+          const { data } = await testLatency(name, url, LATENCY_TIMEOUT)
+          appendProxyHistory(name, data.delay, now)
+        } catch {
           appendProxyHistory(name, 0, now)
+        }
+        if (config.value.ipv6TestEnabled) {
+          try {
+            const { data } = await testLatency(name, IPV6_TEST_URL, IPV6_TEST_TIMEOUT)
+            ipv6Map.value[resolveNowNodeName(name)] = data.delay > 0
+          } catch {
+            ipv6Map.value[resolveNowNodeName(name)] = false
+          }
         }
       }
     }
+    await Promise.all(Array.from({ length: Math.min(5, group.all.length) }, () => run()))
+    if (config.value.ipv6TestEnabled) saveIPv6Map()
 
     flushLatencyHistoryMap()
     await loadProxies()
