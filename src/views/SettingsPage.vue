@@ -10,6 +10,8 @@ import {
   installService,
   uninstallService,
   readServiceErrorLog,
+  startupTaskExists,
+  createStartupTask,
 } from '@/bridge/service'
 import { getSingboxVersion, validateSingboxConfig, getRunningConfigPath, getRemoteConfigPath, copyToRunningConfig } from '@/bridge/config'
 import { normalizeVersionText } from '@/utils/format'
@@ -93,6 +95,14 @@ const clashMode = ref('Rule')
 const clashModeOptions = ref<string[]>(['Rule'])
 const singboxVersion = ref('')
 const actionLoading = ref('')
+const showServiceConfigPanel = ref(false)
+const startupTaskSyncing = ref(false)
+
+function normalizeStartupDelayValue(value: unknown): number {
+  const delay = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(delay)) return 30
+  return Math.min(3600, Math.max(0, Math.round(delay)))
+}
 function parseApiUrl(url: string) {
   const match = url.match(/^(https?):\/\/([^:]+)(?::(\d+))?$/)
   if (match) return { protocol: match[1] as 'http' | 'https', host: match[2], port: match[3] ?? '' }
@@ -318,7 +328,15 @@ async function handleServiceAction(action: string) {
       case 'stop': await stopService(name); break
       case 'install': {
         const runningConfigPath = await getRunningConfigPath()
-        await installService(name, config.value.singboxPath, runningConfigPath, config.value.workingDir)
+        const startupDelaySeconds = normalizeStartupDelayValue(config.value.startupDelaySeconds)
+        config.value.startupDelaySeconds = startupDelaySeconds
+        await installService(
+          name,
+          config.value.singboxPath,
+          runningConfigPath,
+          config.value.workingDir,
+          startupDelaySeconds,
+        )
         break
       }
       case 'uninstall': await uninstallService(name); break
@@ -362,6 +380,27 @@ async function checkVersion() {
   }
 }
 
+function updateStartupDelay() {
+  config.value.startupDelaySeconds = normalizeStartupDelayValue(config.value.startupDelaySeconds)
+}
+
+async function syncStartupDelayToTask() {
+  const serviceName = config.value.serviceName.trim()
+  if (!serviceName || startupTaskSyncing.value) return
+
+  startupTaskSyncing.value = true
+  try {
+    if (await startupTaskExists(serviceName)) {
+      await createStartupTask(serviceName, config.value.startupDelaySeconds)
+      pushToast({ message: `自启延迟已同步为 ${config.value.startupDelaySeconds} 秒`, type: 'info' })
+    }
+  } catch (e: any) {
+    pushToast({ message: '同步自启延迟失败: ' + (e?.message || e), type: 'error' }, 6000)
+  } finally {
+    startupTaskSyncing.value = false
+  }
+}
+
 const statusColor = computed(() => {
   switch (serviceStatus.value.state) {
     case 'running': return 'badge-success'
@@ -399,7 +438,7 @@ watch(
     <h1 class="text-xl font-bold">设置</h1>
     <ConfirmDialog ref="confirmDialogRef" />
 
-    <div class="bg-base-200 rounded-lg p-4 space-y-3">
+    <div class="relative bg-base-200 rounded-lg p-4 space-y-3">
       <h2 class="font-semibold text-sm">服务控制</h2>
       <div class="flex items-center gap-2">
         <span class="text-sm">状态:</span>
@@ -446,6 +485,75 @@ watch(
         >
           卸载服务
         </button>
+        <button
+          class="btn btn-sm btn-square btn-outline relative"
+          :class="{ 'btn-primary z-30': showServiceConfigPanel }"
+          title="服务配置"
+          @click.stop="showServiceConfigPanel = !showServiceConfigPanel"
+        >
+          ⚙
+        </button>
+      </div>
+
+      <div
+        v-if="showServiceConfigPanel"
+        class="fixed inset-0 z-20"
+        @click="showServiceConfigPanel = false"
+      ></div>
+      <div
+        v-if="showServiceConfigPanel"
+        class="absolute left-4 right-4 top-[calc(100%_-_0.5rem)] z-30 rounded-lg border border-base-300 bg-base-200 p-4 shadow-xl space-y-3"
+        @click.stop
+      >
+        <h3 class="text-sm font-semibold">服务配置</h3>
+        <div class="form-control">
+          <label class="label"><span class="label-text text-xs">服务名称</span></label>
+          <input
+            v-model="config.serviceName"
+            type="text"
+            class="input input-sm input-bordered"
+            placeholder="sing-box"
+          />
+        </div>
+        <div class="form-control">
+          <label class="label"><span class="label-text text-xs">sing-box 可执行文件路径</span></label>
+          <div class="flex gap-2">
+            <input
+              v-model="config.singboxPath"
+              type="text"
+              class="input input-sm input-bordered flex-1"
+              placeholder="C:\sing-box\sing-box.exe"
+            />
+            <button class="btn btn-sm btn-outline shrink-0" @click="browseSingboxPath">浏览</button>
+          </div>
+        </div>
+        <div class="form-control">
+          <label class="label"><span class="label-text text-xs">sing-box 工作目录</span></label>
+          <div class="flex gap-2">
+            <input
+              v-model="config.workingDir"
+              type="text"
+              class="input input-sm input-bordered flex-1"
+              placeholder="留空则使用配置文件所在目录"
+            />
+            <button class="btn btn-sm btn-outline shrink-0" @click="browseWorkingDir">浏览</button>
+          </div>
+        </div>
+        <div class="form-control max-w-xs">
+          <label class="label"><span class="label-text text-xs">延迟启动时间</span></label>
+          <div class="flex items-center gap-2">
+            <input
+              v-model.number="config.startupDelaySeconds"
+              type="number"
+              min="0"
+              max="3600"
+              step="1"
+              class="input input-sm input-bordered w-28"
+              @change="updateStartupDelay(); syncStartupDelayToTask()"
+            />
+            <span class="text-xs text-base-content/60">秒</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -575,6 +683,11 @@ watch(
           <button class="btn btn-sm btn-outline" @click="handleAddApi">新增并切换</button>
         </div>
       </div>
+
+      <div class="flex items-center gap-2">
+        <button class="btn btn-sm btn-ghost" @click="checkVersion">检测版本</button>
+        <span v-if="singboxVersion" class="text-xs text-base-content/60">{{ singboxVersion }}</span>
+      </div>
     </div>
 
     <div class="bg-base-200 rounded-lg p-4 space-y-3">
@@ -691,47 +804,6 @@ watch(
     </div>
 
     <DnsQueryTool />
-
-    <div class="bg-base-200 rounded-lg p-4 space-y-3">
-      <h2 class="font-semibold text-sm">路径配置</h2>
-      <div class="form-control">
-        <label class="label"><span class="label-text text-xs">服务名称</span></label>
-        <input
-          v-model="config.serviceName"
-          type="text"
-          class="input input-sm input-bordered"
-          placeholder="sing-box"
-        />
-      </div>
-      <div class="form-control">
-        <label class="label"><span class="label-text text-xs">sing-box 可执行文件路径</span></label>
-        <div class="flex gap-2">
-          <input
-            v-model="config.singboxPath"
-            type="text"
-            class="input input-sm input-bordered flex-1"
-            placeholder="C:\sing-box\sing-box.exe"
-          />
-          <button class="btn btn-sm btn-outline shrink-0" @click="browseSingboxPath">浏览</button>
-        </div>
-      </div>
-      <div class="form-control">
-        <label class="label"><span class="label-text text-xs">工作目录</span></label>
-        <div class="flex gap-2">
-          <input
-            v-model="config.workingDir"
-            type="text"
-            class="input input-sm input-bordered flex-1"
-            placeholder="留空则使用配置文件所在目录"
-          />
-          <button class="btn btn-sm btn-outline shrink-0" @click="browseWorkingDir">浏览</button>
-        </div>
-      </div>
-      <div class="flex items-center gap-2">
-        <button class="btn btn-sm btn-ghost" @click="checkVersion">检测版本</button>
-        <span v-if="singboxVersion" class="text-xs text-base-content/60">{{ singboxVersion }}</span>
-      </div>
-    </div>
 
     <div class="bg-base-200 rounded-lg p-4 space-y-3">
       <h2 class="font-semibold text-sm">外观</h2>

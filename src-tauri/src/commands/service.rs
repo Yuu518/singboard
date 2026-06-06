@@ -34,6 +34,7 @@ pub async fn service_install(
     singbox_path: String,
     config_path: String,
     working_dir: String,
+    startup_delay_seconds: u32,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let exe_path = std::env::current_exe()
@@ -45,7 +46,7 @@ pub async fn service_install(
 
         scm::install_service(&service_name, &bin_path, &display_name)?;
 
-        scm::create_startup_task(&service_name)?;
+        scm::create_startup_task(&service_name, startup_delay_seconds)?;
 
         Ok(())
     })
@@ -71,8 +72,11 @@ pub async fn service_startup_task_exists(service_name: String) -> bool {
 }
 
 #[tauri::command]
-pub async fn service_create_startup_task(service_name: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || scm::create_startup_task(&service_name))
+pub async fn service_create_startup_task(
+    service_name: String,
+    startup_delay_seconds: u32,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || scm::create_startup_task(&service_name, startup_delay_seconds))
         .await
         .map_err(|e| format!("Task join error: {}", e))?
 }

@@ -22,8 +22,9 @@ export async function installService(
   singboxPath: string,
   configPath: string,
   workingDir: string,
+  startupDelaySeconds: number,
 ): Promise<void> {
-  return invoke('service_install', { serviceName, singboxPath, configPath, workingDir })
+  return invoke('service_install', { serviceName, singboxPath, configPath, workingDir, startupDelaySeconds })
 }
 
 export async function uninstallService(serviceName: string): Promise<void> {
@@ -38,8 +39,8 @@ export async function startupTaskExists(serviceName: string): Promise<boolean> {
   return invoke<boolean>('service_startup_task_exists', { serviceName })
 }
 
-export async function createStartupTask(serviceName: string): Promise<void> {
-  return invoke('service_create_startup_task', { serviceName })
+export async function createStartupTask(serviceName: string, startupDelaySeconds: number): Promise<void> {
+  return invoke('service_create_startup_task', { serviceName, startupDelaySeconds })
 }
 
 export async function deleteStartupTask(serviceName: string): Promise<void> {

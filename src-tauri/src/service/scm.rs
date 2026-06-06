@@ -550,34 +550,50 @@ pub fn read_service_error_log(service_name: &str) -> Result<String, String> {
     std::fs::read_to_string(&log_path).map_err(|e| format!("Failed to read error log: {}", e))
 }
 
-pub fn create_startup_task(service_name: &str) -> Result<(), String> {
+pub fn create_startup_task(service_name: &str, startup_delay_seconds: u32) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
 
     let task_name = format!("singboard-autostart-{}", service_name);
     let action_args = format!("start {}", service_name);
+    let delay = startup_delay_seconds.min(3600);
+    let delay_duration = format!("PT{}S", delay);
     let script = format!(
         "$u=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name;\
          $a=New-ScheduledTaskAction -Execute 'sc.exe' -Argument {args};\
          $t=New-ScheduledTaskTrigger -AtLogOn;\
-         $t.Delay='PT30S';\
+         $t.Delay={delay};\
          $s=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit 0 -Compatibility Vista;\
          $s.Hidden=$true;\
          $s.DisallowStartIfOnBatteries=$false;\
          $s.StopIfGoingOnBatteries=$false;\
          $p=New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Highest;\
-         Register-ScheduledTask -TaskName {name} -Action $a -Trigger $t -Settings $s -Principal $p -Force",
+         Register-ScheduledTask -TaskName {name} -Action $a -Trigger $t -Settings $s -Principal $p -Force | Out-Null;\
+         $created=Get-ScheduledTask -TaskName {name};\
+         $actual=[string]$created.Triggers[0].Delay;\
+         if ($actual -ne {delay}) {{ throw \"计划任务延迟保存不一致: expected {delay_text}, actual $actual\" }}",
         args = ps_single_quoted(&action_args),
         name = ps_single_quoted(&task_name),
+        delay = ps_single_quoted(&delay_duration),
+        delay_text = delay_duration,
     );
 
-    let status = std::process::Command::new("powershell")
+    let output = std::process::Command::new("powershell")
         .args(["-NonInteractive", "-NoProfile", "-Command", &script])
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .status()
+        .output()
         .map_err(|e| format!("执行 PowerShell 失败: {}", e))?;
 
-    if !status.success() {
-        return Err(format!("创建任务计划失败: exit code {:?}", status.code()));
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            format!("exit code {:?}", output.status.code())
+        };
+        return Err(format!("创建任务计划失败: {}", detail));
     }
     Ok(())
 }

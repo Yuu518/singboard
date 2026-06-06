@@ -28,6 +28,11 @@ function normalizeConfig(raw: any): AppConfig {
     if (value.startsWith('\\\\?\\')) return value.slice(4)
     return value
   }
+  const normalizeStartupDelay = (value: unknown): number => {
+    const delay = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(delay)) return 30
+    return Math.min(3600, Math.max(0, Math.round(delay)))
+  }
 
   const savedProfiles = Array.isArray(raw?.clashApis)
     ? raw.clashApis
@@ -93,6 +98,7 @@ function normalizeConfig(raw: any): AppConfig {
     singboxPath: normalizeWindowsPath(raw?.singboxPath),
     workingDir: normalizeWindowsPath(raw?.workingDir),
     serviceName: typeof raw?.serviceName === 'string' && raw.serviceName ? raw.serviceName : 'sing-box',
+    startupDelaySeconds: normalizeStartupDelay(raw?.startupDelaySeconds),
     theme: typeof raw?.theme === 'string' && raw.theme ? raw.theme : 'light',
     latencyTestUrl: typeof raw?.latencyTestUrl === 'string' && raw.latencyTestUrl
       ? raw.latencyTestUrl
