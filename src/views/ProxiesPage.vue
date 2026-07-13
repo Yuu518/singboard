@@ -53,7 +53,24 @@ function getGroupSpeed(groupName: string): { down: number; up: number } {
 const isRunning = computed(() => serviceStatus.value.state === 'running')
 
 const activeTab = ref<'groups' | 'providers'>('groups')
-const expandedGroups = ref<Set<string>>(new Set())
+
+// 展开的代理组持久化到 localStorage
+const EXPANDED_GROUPS_KEY = 'singboard-expanded-groups'
+
+function loadExpandedGroups(): Set<string> {
+  try {
+    const saved = localStorage.getItem(EXPANDED_GROUPS_KEY)
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.filter((item): item is string => typeof item === 'string'))
+      }
+    }
+  } catch { }
+  return new Set()
+}
+
+const expandedGroups = ref<Set<string>>(loadExpandedGroups())
 const testingGroup = ref<string | null>(null)
 const testingNodes = ref<Set<string>>(new Set())
 
@@ -82,6 +99,7 @@ function toggleGroup(name: string) {
   } else {
     expandedGroups.value.add(name)
   }
+  localStorage.setItem(EXPANDED_GROUPS_KEY, JSON.stringify([...expandedGroups.value]))
 }
 
 function typeFormatter(type: string): string {
