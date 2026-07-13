@@ -14,6 +14,7 @@ import { isLaunchedHidden } from '@/bridge/app'
 import { appVisible } from '@/stores/appVisible'
 import TrayMenu from '@/components/tray/TrayMenu.vue'
 import { useConfigAutoUpdate } from '@/composables/useConfigAutoUpdate'
+import { useSingboxVersionStore } from '@/stores/singboxVersion'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getIPFromIpipnet, getIPFromIpsb } from '@/api/geoip'
 import {
@@ -24,7 +25,6 @@ import {
   getYoutubeLatency,
 } from '@/api/latency'
 
-// 托盘菜单窗口复用同一前端入口，仅渲染 TrayMenu 组件
 const isTrayWindow = getCurrentWindow().label === 'tray'
 
 const { config, configProfiles } = useConfigStore()
@@ -33,6 +33,7 @@ const { start: startAutoUpdate } = useConfigAutoUpdate()
 const { loadProxies, resumePendingTests } = useProxiesStore()
 const { resetHistory: resetOverviewHistory } = useOverviewStore()
 const { resetOnRestart: resetConnections } = useConnectionsStore()
+const { detectVersion } = useSingboxVersionStore()
 
 const setupWizardVisible = ref(false)
 const setupWizardRef = ref<InstanceType<typeof SetupWizard> | null>(null)
@@ -110,7 +111,6 @@ async function syncActiveConfigToRunning() {
 onMounted(async () => {
   if (isTrayWindow) return
   await serviceReady
-  // 开机自启（--hidden）时静默运行，不弹出面板
   const launchedHidden = await isLaunchedHidden().catch(() => false)
   if (launchedHidden) {
     appVisible.value = false
@@ -122,7 +122,15 @@ onMounted(async () => {
   await loadProxies()
   resumePendingTests()
   startAutoUpdate()
+  void detectVersion()
 })
+
+watch(
+  () => config.value.singboxPath,
+  () => {
+    if (!isTrayWindow) void detectVersion()
+  },
+)
 
 let coreStartedOnce = false
 

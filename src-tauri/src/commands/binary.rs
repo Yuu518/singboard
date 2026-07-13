@@ -1,3 +1,15 @@
+use sha2::{Digest, Sha256};
+
+#[tauri::command]
+pub async fn get_file_hash(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let content = std::fs::read(&path).map_err(|e| format!("读取文件失败: {}", e))?;
+        Ok(format!("{:x}", Sha256::digest(&content)))
+    })
+    .await
+    .map_err(|e| format!("任务执行失败: {}", e))?
+}
+
 #[tauri::command]
 pub async fn get_singbox_version(singbox_path: String) -> Result<String, String> {
     let output = tokio::process::Command::new(&singbox_path)

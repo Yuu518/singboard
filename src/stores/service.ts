@@ -26,7 +26,7 @@ async function poll() {
 export function useServiceStore() {
   if (refCount === 0) {
     poll()
-    pollTimer = setInterval(poll, 2000)
+    pollTimer = setInterval(poll, 1000)
   }
   refCount++
 

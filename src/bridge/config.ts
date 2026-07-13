@@ -36,6 +36,10 @@ export async function getSingboxVersion(singboxPath: string): Promise<string> {
   return invoke<string>('get_singbox_version', { singboxPath })
 }
 
+export async function getFileHash(path: string): Promise<string> {
+  return invoke<string>('get_file_hash', { path })
+}
+
 export async function detectRuntimeFiles(baseDir?: string): Promise<DetectedRuntimeFiles> {
   return invoke<DetectedRuntimeFiles>('detect_runtime_files', { baseDir })
 }

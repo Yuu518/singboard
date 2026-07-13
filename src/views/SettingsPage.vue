@@ -13,9 +13,9 @@ import {
   startupTaskExists,
   createStartupTask,
 } from '@/bridge/service'
-import { getSingboxVersion, validateSingboxConfig, getRunningConfigPath, getRemoteConfigPath, copyToRunningConfig } from '@/bridge/config'
+import { validateSingboxConfig, getRunningConfigPath, getRemoteConfigPath, copyToRunningConfig } from '@/bridge/config'
+import { useSingboxVersionStore } from '@/stores/singboxVersion'
 import { getAutoLaunch, setAutoLaunch } from '@/bridge/app'
-import { normalizeVersionText } from '@/utils/format'
 import { open } from '@tauri-apps/plugin-dialog'
 import { patchConfig, fetchConfig } from '@/api'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -109,7 +109,7 @@ async function toggleAutoLaunch(e: Event) {
 
 const clashMode = ref('Rule')
 const clashModeOptions = ref<string[]>(['Rule'])
-const singboxVersion = ref('')
+const { singboxVersion } = useSingboxVersionStore()
 const actionLoading = ref('')
 const showServiceConfigPanel = ref(false)
 const startupTaskSyncing = ref(false)
@@ -386,15 +386,6 @@ async function browseWorkingDir() {
   }
 }
 
-async function checkVersion() {
-  if (!config.value.singboxPath) return
-  try {
-    const raw = await getSingboxVersion(config.value.singboxPath)
-    singboxVersion.value = normalizeVersionText(raw)
-  } catch {
-    singboxVersion.value = '获取失败'
-  }
-}
 
 function updateStartupDelay() {
   config.value.startupDelaySeconds = normalizeStartupDelayValue(config.value.startupDelaySeconds)
@@ -587,7 +578,10 @@ watch(
     </div>
 
     <div class="bg-base-200 rounded-lg p-4 space-y-3">
-      <h2 class="font-semibold text-sm">后端</h2>
+      <div class="flex items-center gap-2">
+        <h2 class="font-semibold text-sm">后端</h2>
+        <span v-if="singboxVersion" class="text-xs text-base-content/60">{{ singboxVersion }}</span>
+      </div>
       <div class="space-y-2">
         <label class="label py-0"><span class="label-text text-xs">当前后端</span></label>
         <div class="flex items-center gap-2">
@@ -700,10 +694,6 @@ watch(
         </div>
       </div>
 
-      <div class="flex items-center gap-2">
-        <button class="btn btn-sm btn-ghost" @click="checkVersion">检测版本</button>
-        <span v-if="singboxVersion" class="text-xs text-base-content/60">{{ singboxVersion }}</span>
-      </div>
     </div>
 
     <div class="bg-base-200 rounded-lg p-4 space-y-3">

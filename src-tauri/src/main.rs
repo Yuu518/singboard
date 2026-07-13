@@ -211,6 +211,7 @@ fn run_gui() {
             singboard_lib::commands::config::get_remote_config_path,
             singboard_lib::commands::config::delete_file,
             singboard_lib::commands::binary::get_singbox_version,
+            singboard_lib::commands::binary::get_file_hash,
             singboard_lib::commands::srs::srs_match,
             singboard_lib::commands::srs::srs_match_provider,
             singboard_lib::commands::srs::srs_list_provider,
