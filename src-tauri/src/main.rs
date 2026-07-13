@@ -76,6 +76,7 @@ fn run_gui() {
                 .icon(app.default_window_icon().cloned().expect("app icon"))
                 .tooltip("Singboard")
                 .menu(&menu)
+                .show_menu_on_left_click(false)
                 .on_tray_icon_event(move |_tray, event| {
                     if let TrayIconEvent::Click {
                         button,
