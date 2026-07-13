@@ -3,13 +3,16 @@ import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useServiceStore } from '@/stores/service'
 import { useConfigStore } from '@/stores/config'
+import { useToastStore } from '@/stores/toast'
 import { getSingboxVersion } from '@/bridge/config'
-import { normalizeVersionText } from '@/utils/format'
+import { startService, stopService } from '@/bridge/service'
+import { normalizeVersionText, formatUptime } from '@/utils/format'
 
 const route = useRoute()
 const router = useRouter()
-const { serviceStatus, statusText } = useServiceStore()
+const { serviceStatus, statusText, refresh } = useServiceStore()
 const { config } = useConfigStore()
+const { pushToast } = useToastStore()
 const singboxVersion = ref('')
 const versionWrapEl = ref<HTMLElement | null>(null)
 const versionTrackEl = ref<HTMLElement | null>(null)
@@ -33,13 +36,43 @@ function navigate(path: string) {
   router.push(path)
 }
 
-const statusColor = computed(() => {
+const uptimeText = computed(() => {
+  if (serviceStatus.value.state !== 'running') return ''
+  const s = serviceStatus.value.uptimeSeconds
+  return typeof s === 'number' ? formatUptime(s) : ''
+})
+
+const togglingService = ref(false)
+const pillBusy = computed(() =>
+  togglingService.value
+  || serviceStatus.value.state === 'starting'
+  || serviceStatus.value.state === 'stopping',
+)
+
+async function toggleService() {
+  if (togglingService.value) return
+  togglingService.value = true
+  const name = config.value.serviceName.trim()
+  try {
+    if (serviceStatus.value.state === 'running') {
+      await stopService(name)
+    } else {
+      await startService(name)
+    }
+  } catch (e: any) {
+    pushToast({ message: '服务操作失败: ' + (e?.message || e), type: 'error' }, 6000)
+  }
+  await refresh()
+  togglingService.value = false
+}
+
+const statusPillClass = computed(() => {
   switch (serviceStatus.value.state) {
-    case 'running': return 'bg-success'
-    case 'stopped': return 'bg-error'
+    case 'running': return 'bg-success/15 text-success'
+    case 'stopped': return 'bg-error/15 text-error'
     case 'starting':
-    case 'stopping': return 'bg-warning'
-    default: return 'bg-base-content/30'
+    case 'stopping': return 'bg-warning/15 text-warning'
+    default: return 'bg-base-content/10 text-base-content/60'
   }
 })
 
@@ -129,8 +162,27 @@ onBeforeUnmount(() => {
 
     <div class="p-3 border-t border-base-300">
       <div class="flex items-center gap-2 text-xs text-base-content/60 whitespace-nowrap overflow-hidden">
-        <span class="w-2 h-2 rounded-full shrink-0" :class="statusColor"></span>
-        <span class="shrink-0">{{ statusText }}</span>
+        <span
+          class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full font-medium shrink-0"
+          :class="statusPillClass"
+        >
+          <span v-if="pillBusy" class="loading loading-spinner w-3 h-3 shrink-0"></span>
+          <button
+            v-else-if="serviceStatus.state === 'running' || serviceStatus.state === 'stopped'"
+            class="inline-flex shrink-0 hover:opacity-60 transition-opacity"
+            :title="serviceStatus.state === 'running' ? '停止服务' : '启动服务'"
+            @click="toggleService"
+          >
+            <svg v-if="serviceStatus.state === 'running'" class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="6" width="12" height="12" rx="2" />
+            </svg>
+            <svg v-else class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          </button>
+          <span v-if="uptimeText" class="tabular-nums">{{ uptimeText }}</span>
+          <span v-else-if="serviceStatus.state !== 'running'">{{ statusText }}</span>
+        </span>
         <span
           v-if="serviceStatus.state === 'running' && singboxVersion"
           ref="versionWrapEl"

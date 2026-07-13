@@ -110,6 +110,7 @@ export interface ClashConfig {
 export interface ServiceStatus {
   state: 'running' | 'stopped' | 'starting' | 'stopping' | 'not_installed' | 'unknown'
   pid?: number
+  uptimeSeconds?: number
 }
 
 export interface ProxyProvider {

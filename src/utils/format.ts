@@ -29,6 +29,18 @@ export function formatDuration(start: string): string {
   return h + 'h ' + (m % 60) + 'm'
 }
 
+export function formatUptime(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds))
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const days = Math.floor(s / 86400)
+  const hours = Math.floor((s % 86400) / 3600)
+  const minutes = Math.floor((s % 3600) / 60)
+  const seconds = s % 60
+  if (days > 0) return `${days}天 ${hours}:${pad(minutes)}:${pad(seconds)}`
+  if (hours > 0) return `${hours}:${pad(minutes)}:${pad(seconds)}`
+  return `${minutes}:${pad(seconds)}`
+}
+
 export function formatDate(dateStr: string): string {
   if (!dateStr) return ''
   const diff = Date.now() - new Date(dateStr).getTime()

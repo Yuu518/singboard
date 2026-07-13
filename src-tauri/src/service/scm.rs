@@ -139,9 +139,44 @@ fn open_service_handle(scm: ScHandle, name: &str, access: u32) -> Result<ScHandl
 }
 
 #[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ServiceStatus {
     pub state: String,
     pub pid: Option<u32>,
+    pub uptime_seconds: Option<u64>,
+}
+
+// 通过进程创建时间计算运行时长（秒）
+fn process_uptime_seconds(pid: u32) -> Option<u64> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut creation: FILETIME = std::mem::zeroed();
+        let mut exit: FILETIME = std::mem::zeroed();
+        let mut kernel: FILETIME = std::mem::zeroed();
+        let mut user: FILETIME = std::mem::zeroed();
+        let ok = GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user);
+        CloseHandle(handle);
+        if ok == 0 {
+            return None;
+        }
+        // FILETIME（1601-01-01 起 100ns）转 Unix 秒
+        let created_100ns =
+            ((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64;
+        let created_unix = (created_100ns / 10_000_000).checked_sub(11_644_473_600)?;
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+        Some(now_unix.saturating_sub(created_unix))
+    }
 }
 
 pub fn query_service_status(service_name: &str) -> Result<ServiceStatus, String> {
@@ -154,6 +189,7 @@ pub fn query_service_status(service_name: &str) -> Result<ServiceStatus, String>
                 return Ok(ServiceStatus {
                     state: "not_installed".into(),
                     pid: None,
+                    uptime_seconds: None,
                 });
             }
             Err(e) => {
@@ -193,10 +229,17 @@ pub fn query_service_status(service_name: &str) -> Result<ServiceStatus, String>
             _ => "unknown",
         };
 
+        let pid = if status.dwProcessId != 0 {
+            Some(status.dwProcessId)
+        } else {
+            None
+        };
+
         Ok(ServiceStatus {
             state: state.into(),
-            pid: if status.dwProcessId != 0 {
-                Some(status.dwProcessId)
+            pid,
+            uptime_seconds: if state == "running" {
+                pid.and_then(process_uptime_seconds)
             } else {
                 None
             },
