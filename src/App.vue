@@ -10,6 +10,8 @@ import { useProxiesStore } from '@/stores/proxies'
 import { useOverviewStore } from '@/stores/overview'
 import { useConnectionsStore } from '@/stores/connections'
 import { copyToRunningConfig, getRemoteConfigPath } from '@/bridge/config'
+import { isLaunchedHidden } from '@/bridge/app'
+import { appVisible } from '@/stores/appVisible'
 import { useConfigAutoUpdate } from '@/composables/useConfigAutoUpdate'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getIPFromIpipnet, getIPFromIpsb } from '@/api/geoip'
@@ -103,7 +105,13 @@ async function syncActiveConfigToRunning() {
 
 onMounted(async () => {
   await serviceReady
-  getCurrentWindow().show()
+  // 开机自启（--hidden）时静默运行，不弹出面板
+  const launchedHidden = await isLaunchedHidden().catch(() => false)
+  if (launchedHidden) {
+    appVisible.value = false
+  } else {
+    getCurrentWindow().show()
+  }
   setupWizardRef.value?.checkAndOpen()
   await syncActiveConfigToRunning()
   await loadProxies()

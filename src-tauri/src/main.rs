@@ -8,10 +8,45 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
 static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(false);
+static LAUNCHED_HIDDEN: AtomicBool = AtomicBool::new(false);
+
+const AUTO_LAUNCH_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const AUTO_LAUNCH_NAME: &str = "Singboard";
 
 #[tauri::command]
 fn set_close_to_tray(enabled: bool) {
     CLOSE_TO_TRAY.store(enabled, Ordering::Relaxed);
+}
+
+#[tauri::command]
+fn is_launched_hidden() -> bool {
+    LAUNCHED_HIDDEN.load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+fn get_auto_launch() -> bool {
+    winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .open_subkey(AUTO_LAUNCH_KEY)
+        .and_then(|key| key.get_value::<String, _>(AUTO_LAUNCH_NAME))
+        .is_ok()
+}
+
+#[tauri::command]
+fn set_auto_launch(enabled: bool) -> Result<(), String> {
+    let (key, _) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .create_subkey(AUTO_LAUNCH_KEY)
+        .map_err(|e| format!("打开注册表失败: {}", e))?;
+    if enabled {
+        let exe = env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
+        let value = format!("\"{}\" --hidden", exe.display());
+        key.set_value(AUTO_LAUNCH_NAME, &value)
+            .map_err(|e| format!("写入注册表失败: {}", e))?;
+    } else if let Err(e) = key.delete_value(AUTO_LAUNCH_NAME) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!("删除注册表值失败: {}", e));
+        }
+    }
+    Ok(())
 }
 
 fn main() {
@@ -29,6 +64,10 @@ fn main() {
         return;
     }
 
+    if args.iter().any(|a| a == "--hidden") {
+        LAUNCHED_HIDDEN.store(true, Ordering::Relaxed);
+    }
+
     run_gui();
 }
 
@@ -43,8 +82,10 @@ fn show_window(app: &tauri::AppHandle) {
 
 fn run_gui() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !args.iter().any(|a| a == "--hidden") {
+                show_window(app);
+            }
         }))
         .plugin(
             tauri_plugin_window_state::Builder::new()
@@ -117,6 +158,9 @@ fn run_gui() {
         })
         .invoke_handler(tauri::generate_handler![
             set_close_to_tray,
+            is_launched_hidden,
+            get_auto_launch,
+            set_auto_launch,
             singboard_lib::commands::service::service_status,
             singboard_lib::commands::service::service_start,
             singboard_lib::commands::service::service_stop,

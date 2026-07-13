@@ -14,6 +14,7 @@ import {
   createStartupTask,
 } from '@/bridge/service'
 import { getSingboxVersion, validateSingboxConfig, getRunningConfigPath, getRemoteConfigPath, copyToRunningConfig } from '@/bridge/config'
+import { getAutoLaunch, setAutoLaunch } from '@/bridge/app'
 import { normalizeVersionText } from '@/utils/format'
 import { open } from '@tauri-apps/plugin-dialog'
 import { patchConfig, fetchConfig } from '@/api'
@@ -89,6 +90,21 @@ function removeGroupTestUrl(group: string) {
   const { [group]: _, ...rest } = config.value.groupTestUrls
   config.value.groupTestUrls = rest
   if (editingGroupTestUrl.value === group) editingGroupTestUrl.value = null
+}
+
+const autoLaunchEnabled = ref(false)
+getAutoLaunch().then((v) => { autoLaunchEnabled.value = v }).catch(() => {})
+
+async function toggleAutoLaunch(e: Event) {
+  const target = e.target as HTMLInputElement
+  const enabled = target.checked
+  try {
+    await setAutoLaunch(enabled)
+    autoLaunchEnabled.value = enabled
+  } catch (err: any) {
+    target.checked = autoLaunchEnabled.value
+    pushToast({ message: '设置开机自启失败: ' + (err?.message || err), type: 'error' }, 6000)
+  }
 }
 
 const clashMode = ref('Rule')
@@ -821,7 +837,7 @@ watch(
     </div>
 
     <div class="bg-base-200 rounded-lg p-4 space-y-3">
-      <h2 class="font-semibold text-sm">窗口行为</h2>
+      <h2 class="font-semibold text-sm">面板行为</h2>
       <div class="form-control">
         <div class="label justify-start gap-2">
           <input
@@ -831,6 +847,17 @@ watch(
           />
           <span class="label-text text-xs">关闭时隐藏到系统托盘</span>
 
+        </div>
+      </div>
+      <div class="form-control">
+        <div class="label justify-start gap-2">
+          <input
+            type="checkbox"
+            class="toggle toggle-sm toggle-primary"
+            :checked="autoLaunchEnabled"
+            @change="toggleAutoLaunch"
+          />
+          <span class="label-text text-xs">开机自动启动面板（静默启动，不弹出面板）</span>
         </div>
       </div>
     </div>
