@@ -809,7 +809,7 @@ watch(
       <h2 class="font-semibold text-sm">外观</h2>
       <div class="flex gap-2">
         <button
-          v-for="t in ['light', 'dark', 'dracula', 'nord']"
+          v-for="t in ['auto', 'light', 'dark', 'dracula', 'nord']"
           :key="t"
           class="btn btn-sm"
           :class="config.theme === t ? 'btn-primary' : 'btn-ghost'"

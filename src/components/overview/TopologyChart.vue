@@ -10,7 +10,7 @@ import { useConfigStore } from '@/stores/config'
 echarts.use([SankeyChart, TooltipComponent, CanvasRenderer])
 
 const { connections, start } = useConnectionsStore()
-const { config } = useConfigStore()
+const { resolvedTheme } = useConfigStore()
 const chartEl = ref<HTMLElement>()
 const isPaused = ref(false)
 let myChart: echarts.ECharts | null = null
@@ -18,7 +18,7 @@ let resizeOb: ResizeObserver | null = null
 
 const layerColors = ['#6a6fc5', '#a8d4a0', '#fddb8a', '#f2a0a0']
 const darkThemes = new Set(['dark', 'dracula'])
-const labelColor = computed(() => (darkThemes.has(config.value.theme) ? '#ffffff' : '#000000'))
+const labelColor = computed(() => (darkThemes.has(resolvedTheme.value) ? '#ffffff' : '#000000'))
 
 const sankeyData = computed(() => {
   const conns = connections.value
@@ -177,7 +177,7 @@ onMounted(() => {
   }
 
   watch(sankeyData, () => updateChart(), { deep: true })
-  watch(() => config.value.theme, () => updateChart())
+  watch(resolvedTheme, () => updateChart())
 
   resizeOb = new ResizeObserver(() => {
     myChart?.resize()

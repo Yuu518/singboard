@@ -127,15 +127,31 @@ function loadConfig(): AppConfig {
 
 const config = ref<AppConfig>(loadConfig())
 
+// auto 主题：跟随系统明亮/暗黑模式
+const systemDarkQuery = window.matchMedia('(prefers-color-scheme: dark)')
+const systemDark = ref(systemDarkQuery.matches)
+systemDarkQuery.addEventListener('change', (e) => {
+  systemDark.value = e.matches
+})
+
+const resolvedTheme = computed(() =>
+  config.value.theme === 'auto'
+    ? (systemDark.value ? 'dark' : 'light')
+    : config.value.theme,
+)
+
 function applyTheme(theme: string) {
   document.documentElement.setAttribute('data-theme', theme)
 }
 
-applyTheme(config.value.theme)
+applyTheme(resolvedTheme.value)
+
+watch(resolvedTheme, (val) => {
+  applyTheme(val)
+})
 
 watch(config, (val) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(val))
-  applyTheme(val.theme)
 }, { deep: true })
 
 // 同步 closeToTray 状态到 Rust 后端
@@ -246,6 +262,7 @@ export function useConfigStore() {
 
   return {
     config,
+    resolvedTheme,
     clashApis,
     activeClashApi,
     activeClashApiId,
