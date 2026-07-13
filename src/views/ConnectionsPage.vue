@@ -213,10 +213,10 @@ onMounted(() => {
               </span>
               <span class="truncate inline">{{ getHost(conn) }}</span>
             </td>
-            <td class="text-xs text-base-content/60 align-top min-w-64 max-w-xl" :title="conn.rule">
+            <td class="text-xs text-base-content/100 align-top min-w-64 max-w-xl" :title="conn.rule">
               <span class="block whitespace-normal break-words leading-relaxed [overflow-wrap:anywhere]">{{ conn.rule }}</span>
             </td>
-            <td class="text-xs text-base-content/60 max-w-xl truncate" :title="formatChains(conn.chains)">
+            <td class="text-xs text-base-content/100 max-w-xl truncate" :title="formatChains(conn.chains)">
               {{ formatChains(conn.chains) }}
             </td>
             <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatSpeed(conn.downloadSpeed || 0) }}</td>
@@ -273,10 +273,10 @@ onMounted(() => {
               </span>
               <span class="truncate inline">{{ getHost(conn) }}</span>
             </td>
-            <td class="text-xs text-base-content/60 align-top min-w-64 max-w-xl" :title="conn.rule">
+            <td class="text-xs text-base-content/100 align-top min-w-64 max-w-xl" :title="conn.rule">
               <span class="block whitespace-normal break-words leading-relaxed [overflow-wrap:anywhere]">{{ conn.rule }}</span>
             </td>
-            <td class="text-xs text-base-content/60 max-w-xl truncate" :title="formatChains(conn.chains)">
+            <td class="text-xs text-base-content/100 max-w-xl truncate" :title="formatChains(conn.chains)">
               {{ formatChains(conn.chains) }}
             </td>
             <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatSpeed(conn.downloadSpeed || 0) }}</td>
