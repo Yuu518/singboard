@@ -89,14 +89,29 @@ fn show_window(app: &tauri::AppHandle) {
     }
 }
 
-// 在托盘图标附近弹出自定义托盘菜单窗口
+// 以鼠标为锚点弹出托盘菜单窗口：默认向右上方展开，越界时翻转到左侧/下方
 fn show_tray_menu(app: &tauri::AppHandle, position: tauri::PhysicalPosition<f64>) {
     if let Some(window) = app.get_webview_window("tray") {
         let size = window
             .outer_size()
             .unwrap_or_else(|_| tauri::PhysicalSize::new(0, 0));
-        let x = (position.x as i32 - size.width as i32 / 2).max(0);
-        let y = (position.y as i32 - size.height as i32 - 8).max(0);
+        let (w, h) = (size.width as i32, size.height as i32);
+        let (px, py) = (position.x as i32, position.y as i32);
+
+        let monitor = app
+            .monitor_from_point(position.x, position.y)
+            .ok()
+            .flatten()
+            .or_else(|| app.primary_monitor().ok().flatten());
+        let (mx, my, mw, mh) = monitor
+            .map(|m| (m.position().x, m.position().y, m.size().width as i32, m.size().height as i32))
+            .unwrap_or((0, 0, i32::MAX, i32::MAX));
+
+        let x = if px + w <= mx + mw { px } else { px - w };
+        let y = if py - h >= my { py - h } else { py };
+        let x = x.max(mx).min(mx + mw - w);
+        let y = y.max(my).min(my + mh - h);
+
         let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
         let _ = window.show();
         let _ = window.set_focus();
