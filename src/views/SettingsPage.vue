@@ -857,7 +857,7 @@ watch(
             :checked="autoLaunchEnabled"
             @change="toggleAutoLaunch"
           />
-          <span class="label-text text-xs">开机自动启动面板（静默启动，不弹出面板）</span>
+          <span class="label-text text-xs">开机自动启动面板</span>
         </div>
       </div>
     </div>
