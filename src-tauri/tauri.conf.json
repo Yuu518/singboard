@@ -13,6 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "Singboard",
         "width": 1100,
         "height": 700,
@@ -22,6 +23,24 @@
         "transparent": false,
         "visible": false,
         "center": true
+      },
+      {
+        "label": "tray",
+        "url": "index.html",
+        "title": "Singboard Tray",
+        "width": 144,
+        "height": 132,
+        "minWidth": 100,
+        "minHeight": 100,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "visible": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false
       }
     ],
     "security": {

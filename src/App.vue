@@ -12,6 +12,7 @@ import { useConnectionsStore } from '@/stores/connections'
 import { copyToRunningConfig, getRemoteConfigPath } from '@/bridge/config'
 import { isLaunchedHidden } from '@/bridge/app'
 import { appVisible } from '@/stores/appVisible'
+import TrayMenu from '@/components/tray/TrayMenu.vue'
 import { useConfigAutoUpdate } from '@/composables/useConfigAutoUpdate'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getIPFromIpipnet, getIPFromIpsb } from '@/api/geoip'
@@ -22,6 +23,9 @@ import {
   getCloudflareLatency,
   getYoutubeLatency,
 } from '@/api/latency'
+
+// 托盘菜单窗口复用同一前端入口，仅渲染 TrayMenu 组件
+const isTrayWindow = getCurrentWindow().label === 'tray'
 
 const { config, configProfiles } = useConfigStore()
 const { serviceStatus, ready: serviceReady } = useServiceStore()
@@ -104,6 +108,7 @@ async function syncActiveConfigToRunning() {
 }
 
 onMounted(async () => {
+  if (isTrayWindow) return
   await serviceReady
   // 开机自启（--hidden）时静默运行，不弹出面板
   const launchedHidden = await isLaunchedHidden().catch(() => false)
@@ -121,28 +126,31 @@ onMounted(async () => {
 
 let coreStartedOnce = false
 
-watch(
-  () => serviceStatus.value.state,
-  (state) => {
-    if (state === 'running') {
-      if (coreStartedOnce) {
+if (!isTrayWindow) {
+  watch(
+    () => serviceStatus.value.state,
+    (state) => {
+      if (state === 'running') {
+        if (coreStartedOnce) {
+          resetOverviewHistory()
+          resetConnections()
+          sessionStorage.removeItem(NETWORK_CACHE_KEY)
+        }
+        coreStartedOnce = true
+        setTimeout(runNetworkAutoTest, 3000)
+      } else if (coreStartedOnce) {
         resetOverviewHistory()
         resetConnections()
-        sessionStorage.removeItem(NETWORK_CACHE_KEY)
       }
-      coreStartedOnce = true
-      setTimeout(runNetworkAutoTest, 3000)
-    } else if (coreStartedOnce) {
-      resetOverviewHistory()
-      resetConnections()
-    }
-  },
-  { immediate: true },
-)
+    },
+    { immediate: true },
+  )
+}
 </script>
 
 <template>
-  <div class="flex flex-col h-screen bg-base-100 text-base-content">
+  <TrayMenu v-if="isTrayWindow" />
+  <div v-else class="flex flex-col h-screen bg-base-100 text-base-content">
     <Titlebar />
     <div class="flex flex-1 overflow-hidden">
       <Sidebar />

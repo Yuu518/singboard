@@ -11,3 +11,11 @@ export async function getAutoLaunch(): Promise<boolean> {
 export async function setAutoLaunch(enabled: boolean): Promise<void> {
   return invoke('set_auto_launch', { enabled })
 }
+
+export async function showMainWindow(): Promise<void> {
+  return invoke('show_main_window')
+}
+
+export async function quitApp(): Promise<void> {
+  return invoke('quit_app')
+}

@@ -4,7 +4,6 @@ use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Emitter;
 use tauri::Manager;
-use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
 static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(false);
@@ -49,6 +48,16 @@ fn set_auto_launch(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn show_main_window(app: tauri::AppHandle) {
+    show_window(&app);
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -80,6 +89,20 @@ fn show_window(app: &tauri::AppHandle) {
     }
 }
 
+// 在托盘图标附近弹出自定义托盘菜单窗口
+fn show_tray_menu(app: &tauri::AppHandle, position: tauri::PhysicalPosition<f64>) {
+    if let Some(window) = app.get_webview_window("tray") {
+        let size = window
+            .outer_size()
+            .unwrap_or_else(|_| tauri::PhysicalSize::new(0, 0));
+        let x = (position.x as i32 - size.width as i32 / 2).max(0);
+        let y = (position.y as i32 - size.height as i32 - 8).max(0);
+        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 fn run_gui() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
@@ -93,50 +116,30 @@ fn run_gui() {
                     tauri_plugin_window_state::StateFlags::all()
                         .difference(tauri_plugin_window_state::StateFlags::VISIBLE),
                 )
+                .with_denylist(&["tray"])
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
 
-            let show = MenuItemBuilder::with_id("show", "打开面板")
-                .build(&app_handle)
-                .expect("menu item");
-            let sep = PredefinedMenuItem::separator(&app_handle).expect("separator");
-            let quit = MenuItemBuilder::with_id("quit", "退出")
-                .build(&app_handle)
-                .expect("menu item");
-            let menu = MenuBuilder::new(&app_handle)
-                .item(&show)
-                .item(&sep)
-                .item(&quit)
-                .build()
-                .expect("tray menu");
-
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().cloned().expect("app icon"))
                 .tooltip("Singboard")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
                 .on_tray_icon_event(move |_tray, event| {
                     if let TrayIconEvent::Click {
                         button,
-                        button_state,
+                        button_state: MouseButtonState::Up,
+                        position,
                         ..
                     } = event
                     {
-                        if matches!(
-                            (button, button_state),
-                            (MouseButton::Left, MouseButtonState::Up)
-                        ) {
-                            show_window(&app_handle);
+                        match button {
+                            MouseButton::Left => show_window(&app_handle),
+                            MouseButton::Right => show_tray_menu(&app_handle, position),
+                            _ => {}
                         }
                     }
-                })
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => show_window(app),
-                    "quit" => app.exit(0),
-                    _ => {}
                 })
                 .build(&app.handle().clone())
                 .expect("tray icon");
@@ -144,16 +147,25 @@ fn run_gui() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
-                    if CLOSE_TO_TRAY.load(Ordering::Relaxed) {
-                        api.prevent_close();
-                        let _ = window.emit("window-visibility", false);
-                        let _ = window.hide();
-                    } else {
-                        let _ = window.app_handle().exit(0);
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if window.label() == "main" {
+                        if CLOSE_TO_TRAY.load(Ordering::Relaxed) {
+                            api.prevent_close();
+                            let _ = window.emit("window-visibility", false);
+                            let _ = window.hide();
+                        } else {
+                            let _ = window.app_handle().exit(0);
+                        }
                     }
                 }
+                // 托盘菜单窗口失去焦点时自动隐藏
+                tauri::WindowEvent::Focused(false) => {
+                    if window.label() == "tray" {
+                        let _ = window.hide();
+                    }
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -161,6 +173,8 @@ fn run_gui() {
             is_launched_hidden,
             get_auto_launch,
             set_auto_launch,
+            show_main_window,
+            quit_app,
             singboard_lib::commands::service::service_status,
             singboard_lib::commands::service::service_start,
             singboard_lib::commands::service::service_stop,
