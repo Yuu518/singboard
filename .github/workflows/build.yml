@@ -43,11 +43,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Read package version
+      - name: Read app version
         shell: pwsh
         run: |
-          $version = node -p "require('./package.json').version"
-          "APP_VERSION=$version" >> $env:GITHUB_ENV
+          $metadata = cargo metadata `
+            --manifest-path src-tauri/Cargo.toml `
+            --no-deps `
+            --format-version 1 | ConvertFrom-Json
+          $app = $metadata.packages |
+            Where-Object { $_.name -eq "singboard" } |
+            Select-Object -First 1
+
+          if (-not $app) {
+            throw "Could not find the singboard package in Cargo metadata"
+          }
+
+          "APP_VERSION=$($app.version)" >> $env:GITHUB_ENV
 
       - name: Build Tauri app
         run: pnpm tauri build
