@@ -5,7 +5,7 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "cd src-tauri && cargo build --release -p singboard-service && cd .. && pnpm dev",
     "beforeBuildCommand": "pnpm build && cd src-tauri && cargo build --release -p singboard-service"
   },
   "app": {

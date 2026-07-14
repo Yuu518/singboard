@@ -89,12 +89,13 @@ Build desktop app:
 pnpm tauri build
 ```
 
-This produces two executables in `src-tauri/target/release/` that must be distributed together:
+This produces the distributable panel executable:
 
-- `singboard.exe` — the panel (GUI)
-- `singboard-service.exe` — the Windows service host that supervises sing-box
+- `src-tauri/target/release/singboard.exe` — the panel (GUI), with the service host embedded
 
-The service host is a standalone crate (`src-tauri/service-host/`). On startup the panel copies it to `%APPDATA%\singboard\` and registers the Windows service against that copy, so the panel's own files are never locked while the service runs — upgrading is just overwriting the exes. The deployed copy is refreshed automatically (brief service restart) only when its SHA-256 differs from the bundled one; it is built with `/Brepro` for reproducible bytes, so panel-only releases never touch the running service. Always build it via `cargo build --release -p singboard-service` **run from `src-tauri/`** (the `tauri build` hook does this) — a `--workspace` build unifies dependency features differently, and running cargo from another directory misses `src-tauri/.cargo/config.toml` (static CRT); both yield a different hash.
+The service host remains a standalone crate (`src-tauri/service-host/`), but its executable bytes are embedded into `singboard.exe` at build time. When installing or repairing the service, the panel extracts it to `%APPDATA%\singboard\singboard-service.exe` and registers the Windows service against that copy, so the panel's own file is never locked while the service runs. Only `singboard.exe` needs to be distributed.
+
+The deployed copy is refreshed automatically (with a brief service restart) only when its SHA-256 differs from the embedded payload. The helper is built with `/Brepro` for reproducible bytes, so panel-only releases do not normally touch the running service. Both development and release panels embed the release helper, preventing a development session from replacing an installed service with a debug build. The Tauri hooks build the helper before compiling the panel. If building Rust directly, first run `cargo build --release -p singboard-service` from `src-tauri/`. Avoid `--workspace`: it can build the panel before the helper payload exists and can unify dependency features differently.
 
 ## Project Structure
 

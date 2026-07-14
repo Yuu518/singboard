@@ -31,8 +31,8 @@ export async function uninstallService(serviceName: string): Promise<void> {
   return invoke('service_uninstall', { serviceName })
 }
 
-// 同步服务宿主组件(singboard-service.exe):迁移旧注册路径或热换新版本
-// 返回 'not_installed' | 'skipped' | 'ok' | 'migrated' | 'updated'
+// 同步内嵌的服务宿主组件(singboard-service.exe):迁移旧注册路径或热换新版本
+// 返回 'not_installed' | 'ok' | 'migrated' | 'updated'
 export async function syncServiceComponent(serviceName: string): Promise<string> {
   return invoke<string>('service_component_sync', { serviceName })
 }

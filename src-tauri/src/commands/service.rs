@@ -77,7 +77,7 @@ pub async fn service_uninstall(app: tauri::AppHandle, service_name: String) -> R
 }
 
 /// 面板启动时静默调用：服务仍指向旧的面板 exe 时迁移到独立宿主；
-/// 部署副本与随包 helper 哈希不一致时热换。
+/// 部署副本与内嵌 helper 哈希不一致时热换。
 #[tauri::command]
 pub async fn service_component_sync(
     app: tauri::AppHandle,
@@ -96,7 +96,6 @@ pub async fn service_component_sync(
 
         let need = helper::sync_needed(&app, &service_name)?;
         let result = match need {
-            helper::SyncNeed::Skip => return Ok("skipped".to_string()),
             helper::SyncNeed::UpToDate => return Ok("ok".to_string()),
             helper::SyncNeed::Migrate => "migrated",
             helper::SyncNeed::Update => "updated",
