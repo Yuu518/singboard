@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "singboard",
-  "version": "3.0.0",
   "identifier": "singboard",
   "build": {
     "frontendDist": "../dist",
