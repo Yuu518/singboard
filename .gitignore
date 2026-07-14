@@ -4,7 +4,6 @@ dist/
 .vite/
 *.tsbuildinfo
 .pnpm-store/
-pnpm-workspace.yaml
 
 # Logs
 *.log

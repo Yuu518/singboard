@@ -13,24 +13,21 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
-          cache: pnpm
+          node-version: 24
+
+      - name: Install pnpm
+        run: npm install --global pnpm@11.13.0
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -39,9 +36,6 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
 
       - name: Read app version
         shell: pwsh
@@ -64,10 +58,11 @@ jobs:
         run: pnpm tauri build
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.2
         with:
           tag_name: v${{ env.APP_VERSION }}
           name: ${{ env.APP_VERSION }}
+          generate_release_notes: true
           files: |
             src-tauri/target/release/singboard.exe
             src-tauri/target/release/bundle/**/*
