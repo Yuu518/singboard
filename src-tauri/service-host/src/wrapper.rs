@@ -11,7 +11,7 @@ use windows_service::service::{
 use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
 use windows_service::service_dispatcher;
 
-use super::scm::{read_service_params, resolve_service_error_log_path};
+use crate::params::{read_service_params, resolve_service_error_log_path};
 
 static SERVICE_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;

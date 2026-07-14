@@ -1,7 +1,11 @@
+[workspace]
+members = ["service-host"]
+
 [package]
 name = "singboard"
 version = "3.0.0"
 edition = "2024"
+default-run = "singboard"
 
 [lib]
 name = "singboard_lib"
@@ -30,6 +34,7 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_JobObjects",
 ] }
 winreg = "0.55"
+singboard-service = { path = "service-host" }
 log = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 flate2 = "1"

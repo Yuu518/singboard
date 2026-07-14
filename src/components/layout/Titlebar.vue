@@ -20,7 +20,7 @@ async function close() {
     class="flex items-center justify-between h-10 bg-base-200 border-b border-base-300 select-none px-3"
   >
     <div class="flex items-center gap-2" data-tauri-drag-region>
-      <span class="text-sm font-semibold">Singboard</span>
+      <span class="text-sm font-semibold">singboard</span>
     </div>
     <div class="flex items-center gap-1">
       <button

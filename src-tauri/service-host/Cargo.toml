@@ -1,0 +1,11 @@
+[package]
+name = "singboard-service"
+version = "1.0.0"
+edition = "2024"
+
+[lib]
+name = "singboard_service"
+
+[dependencies]
+windows-service = "0.7"
+winreg = "0.55"

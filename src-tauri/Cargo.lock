@@ -3739,6 +3739,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "singboard-service",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -3747,6 +3748,14 @@ dependencies = [
  "tokio",
  "windows-service",
  "windows-sys 0.59.0",
+ "winreg",
+]
+
+[[package]]
+name = "singboard-service"
+version = "1.0.0"
+dependencies = [
+ "windows-service",
  "winreg",
 ]
 

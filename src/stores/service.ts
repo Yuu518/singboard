@@ -1,11 +1,12 @@
 import { ref, computed, onUnmounted } from 'vue'
-import { queryServiceStatus } from '@/bridge/service'
+import { queryServiceStatus, syncServiceComponent } from '@/bridge/service'
 import { useConfigStore } from './config'
 import type { ServiceStatus } from '@/types'
 
 const serviceStatus = ref<ServiceStatus>({ state: 'unknown' })
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let refCount = 0
+let componentSynced = false
 
 let firstPollResolve: (() => void) | null = null
 const firstPollReady = new Promise<void>((resolve) => { firstPollResolve = resolve })
@@ -25,6 +26,18 @@ async function poll() {
 
 export function useServiceStore() {
   if (refCount === 0) {
+    if (!componentSynced) {
+      componentSynced = true
+      const { serviceName } = useConfigStore()
+      // 静默同步服务宿主组件,必要时迁移/热换(会短暂重启服务)
+      syncServiceComponent(serviceName.value)
+        .then((result) => {
+          if (result === 'migrated' || result === 'updated') {
+            console.info(`[service] 服务组件已同步: ${result}`)
+          }
+        })
+        .catch((e) => console.warn('[service] 服务组件同步失败:', e))
+    }
     poll()
     pollTimer = setInterval(poll, 1000)
   }

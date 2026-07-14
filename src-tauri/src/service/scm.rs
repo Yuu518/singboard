@@ -1,7 +1,5 @@
 use std::ffi::OsStr;
-use std::fs;
 use std::os::windows::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
 use std::ptr;
 use std::thread;
 use std::time::Duration;
@@ -9,8 +7,12 @@ use std::time::Duration;
 use windows_sys::Win32::Foundation::{ERROR_SERVICE_DOES_NOT_EXIST, GetLastError};
 use windows_sys::Win32::System::Services::*;
 
+// 参数读写与错误日志逻辑已移至独立的 service-host crate,由服务宿主与面板共用
+pub use singboard_service::params::{
+    read_service_error_log, read_service_params, write_service_params,
+};
+
 type ScHandle = *mut std::ffi::c_void;
-pub const SERVICE_ERROR_LOG_NAME: &str = "singbox_last_error.log";
 
 fn to_wide(s: &str) -> Vec<u16> {
     OsStr::new(s)
@@ -21,83 +23,6 @@ fn to_wide(s: &str) -> Vec<u16> {
 
 fn ps_single_quoted(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
-}
-
-fn is_log_dir_name(name: &str) -> bool {
-    name.eq_ignore_ascii_case("log") || name.eq_ignore_ascii_case("logs")
-}
-
-fn find_log_dir(base_dir: &Path) -> Option<PathBuf> {
-    for candidate in ["log", "logs"] {
-        let path = base_dir.join(candidate);
-        if path.is_dir() {
-            return Some(path);
-        }
-    }
-
-    let mut stack = vec![base_dir.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let entries = match fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if is_log_dir_name(name) {
-                    return Some(path);
-                }
-            }
-            stack.push(path);
-        }
-    }
-
-    None
-}
-
-fn resolve_service_base_dir(service_name: &str) -> Option<PathBuf> {
-    let (singbox_path, config_path, working_dir) = read_service_params(service_name).ok()?;
-
-    if !working_dir.trim().is_empty() {
-        let path = PathBuf::from(working_dir.trim());
-        if path.is_dir() {
-            return Some(path);
-        }
-    }
-
-    let config = Path::new(config_path.trim());
-    if let Some(parent) = config.parent() {
-        if parent.is_dir() {
-            return Some(parent.to_path_buf());
-        }
-    }
-
-    let singbox = Path::new(singbox_path.trim());
-    if let Some(parent) = singbox.parent() {
-        if parent.is_dir() {
-            return Some(parent.to_path_buf());
-        }
-    }
-
-    None
-}
-
-pub fn resolve_service_error_log_path(service_name: &str) -> PathBuf {
-    let base_dir = resolve_service_base_dir(service_name)
-        .or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
-        })
-        .unwrap_or_default();
-
-    let log_dir = find_log_dir(&base_dir).unwrap_or(base_dir);
-    log_dir.join(SERVICE_ERROR_LOG_NAME)
 }
 
 fn to_wide_multi(strings: &[&str]) -> Vec<u16> {
@@ -397,6 +322,45 @@ pub fn restart_service(service_name: &str) -> Result<(), String> {
     start_service(service_name)
 }
 
+pub fn update_service_bin_path(service_name: &str, bin_path: &str) -> Result<(), String> {
+    let wide_bin = to_wide(bin_path);
+    unsafe {
+        let scm = open_scm()?;
+        let svc = match open_service_handle(scm, service_name, SERVICE_CHANGE_CONFIG) {
+            Ok(h) => h,
+            Err(e) => {
+                CloseServiceHandle(scm);
+                return Err(e);
+            }
+        };
+
+        let ok = ChangeServiceConfigW(
+            svc,
+            SERVICE_NO_CHANGE,
+            SERVICE_NO_CHANGE,
+            SERVICE_NO_CHANGE,
+            wide_bin.as_ptr(),
+            ptr::null(),
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null(),
+            ptr::null(),
+            ptr::null(),
+        );
+
+        CloseServiceHandle(svc);
+        CloseServiceHandle(scm);
+
+        if ok == 0 {
+            return Err(format!(
+                "ChangeServiceConfig failed: error {}",
+                GetLastError()
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub fn install_service(
     service_name: &str,
     bin_path: &str,
@@ -435,12 +399,13 @@ pub fn install_service(
                 let wide_name2 = to_wide(service_name);
                 let svc2 = OpenServiceW(scm2, wide_name2.as_ptr(), SERVICE_CHANGE_CONFIG);
                 if !svc2.is_null() {
+                    // 服务已存在时同步更新其二进制路径，确保重装能切换到新的宿主程序
                     ChangeServiceConfigW(
                         svc2,
                         SERVICE_NO_CHANGE,
                         SERVICE_DEMAND_START,
                         SERVICE_NO_CHANGE,
-                        ptr::null(),
+                        wide_bin.as_ptr(),
                         ptr::null(),
                         ptr::null_mut(),
                         ptr::null(),
@@ -538,59 +503,6 @@ pub fn uninstall_service(service_name: &str) -> Result<(), String> {
         }
         Ok(())
     }
-}
-
-pub fn write_service_params(
-    service_name: &str,
-    singbox_path: &str,
-    config_path: &str,
-    working_dir: &str,
-) -> Result<(), String> {
-    use winreg::RegKey;
-    use winreg::enums::*;
-
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let key_path = format!(
-        "SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters",
-        service_name
-    );
-    let (key, _) = hklm
-        .create_subkey(&key_path)
-        .map_err(|e| format!("Failed to create registry key: {}", e))?;
-    key.set_value("SingboxPath", &singbox_path)
-        .map_err(|e| format!("Failed to write SingboxPath: {}", e))?;
-    key.set_value("ConfigPath", &config_path)
-        .map_err(|e| format!("Failed to write ConfigPath: {}", e))?;
-    key.set_value("WorkingDir", &working_dir)
-        .map_err(|e| format!("Failed to write WorkingDir: {}", e))?;
-    Ok(())
-}
-
-pub fn read_service_params(service_name: &str) -> Result<(String, String, String), String> {
-    use winreg::RegKey;
-    use winreg::enums::*;
-
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let key_path = format!(
-        "SYSTEM\\CurrentControlSet\\Services\\{}\\Parameters",
-        service_name
-    );
-    let key = hklm
-        .open_subkey(&key_path)
-        .map_err(|e| format!("Failed to open registry key: {}", e))?;
-    let singbox_path: String = key
-        .get_value("SingboxPath")
-        .map_err(|e| format!("Failed to read SingboxPath: {}", e))?;
-    let config_path: String = key
-        .get_value("ConfigPath")
-        .map_err(|e| format!("Failed to read ConfigPath: {}", e))?;
-    let working_dir: String = key.get_value("WorkingDir").unwrap_or_default();
-    Ok((singbox_path, config_path, working_dir))
-}
-
-pub fn read_service_error_log(service_name: &str) -> Result<String, String> {
-    let log_path = resolve_service_error_log_path(service_name);
-    std::fs::read_to_string(&log_path).map_err(|e| format!("Failed to read error log: {}", e))
 }
 
 pub fn create_startup_task(service_name: &str, startup_delay_seconds: u32) -> Result<(), String> {

@@ -10,7 +10,7 @@ static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(false);
 static LAUNCHED_HIDDEN: AtomicBool = AtomicBool::new(false);
 
 const AUTO_LAUNCH_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const AUTO_LAUNCH_NAME: &str = "Singboard";
+const AUTO_LAUNCH_NAME: &str = "singboard";
 
 #[tauri::command]
 fn set_close_to_tray(enabled: bool) {
@@ -66,7 +66,8 @@ fn main() {
             .get(2)
             .cloned()
             .unwrap_or_else(|| "sing-box".to_string());
-        if let Err(e) = singboard_lib::service::wrapper::run_service(&service_name) {
+        // 向后兼容:旧版安装的服务仍以 `singboard.exe service <name>` 方式启动
+        if let Err(e) = singboard_service::wrapper::run_service(&service_name) {
             eprintln!("Service error: {}", e);
             std::process::exit(1);
         }
@@ -140,7 +141,7 @@ fn run_gui() {
 
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().cloned().expect("app icon"))
-                .tooltip("Singboard")
+                .tooltip("singboard")
                 .on_tray_icon_event(move |_tray, event| {
                     if let TrayIconEvent::Click {
                         button,
@@ -196,6 +197,7 @@ fn run_gui() {
             singboard_lib::commands::service::service_restart,
             singboard_lib::commands::service::service_install,
             singboard_lib::commands::service::service_uninstall,
+            singboard_lib::commands::service::service_component_sync,
             singboard_lib::commands::service::service_error_log,
             singboard_lib::commands::service::service_startup_task_exists,
             singboard_lib::commands::service::service_create_startup_task,

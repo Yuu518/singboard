@@ -89,6 +89,13 @@ Build desktop app:
 pnpm tauri build
 ```
 
+This produces two executables in `src-tauri/target/release/` that must be distributed together:
+
+- `singboard.exe` — the panel (GUI)
+- `singboard-service.exe` — the Windows service host that supervises sing-box
+
+The service host is a standalone crate (`src-tauri/service-host/`). On startup the panel copies it to `%APPDATA%\singboard\` and registers the Windows service against that copy, so the panel's own files are never locked while the service runs — upgrading is just overwriting the exes. The deployed copy is refreshed automatically (brief service restart) only when its SHA-256 differs from the bundled one; it is built with `/Brepro` for reproducible bytes, so panel-only releases never touch the running service. Always build it via `cargo build --release -p singboard-service` **run from `src-tauri/`** (the `tauri build` hook does this) — a `--workspace` build unifies dependency features differently, and running cargo from another directory misses `src-tauri/.cargo/config.toml` (static CRT); both yield a different hash.
+
 ## Project Structure
 
 ```text
