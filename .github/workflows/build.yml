@@ -10,6 +10,9 @@ jobs:
   build-windows:
     name: Build Windows app
     runs-on: windows-latest
+    env:
+      WINDOWS_CERT_PFX_B64: ${{ secrets.WINDOWS_CERT_PFX_B64 }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -54,8 +57,55 @@ jobs:
 
           "APP_VERSION=$($app.version)" >> $env:GITHUB_ENV
 
+      - name: Import code signing certificate
+        if: env.WINDOWS_CERT_PFX_B64 != ''
+        shell: pwsh
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP "code-sign.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_B64))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERT_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfxPath
+
+          # Trust the self-signed cert on this ephemeral runner so that
+          # "signtool verify /pa" can validate the certificate chain.
+          $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new("Root", "LocalMachine")
+          $rootStore.Open("ReadWrite")
+          $rootStore.Add($cert)
+          $rootStore.Close()
+
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match '\\x64\\' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found in Windows SDK" }
+
+          "SIGNTOOL=$($signtool.FullName)" >> $env:GITHUB_ENV
+          "CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+
+      - name: Build and sign service host
+        if: env.CERT_THUMBPRINT != ''
+        shell: pwsh
+        run: |
+          cargo build --release -p singboard-service --manifest-path src-tauri/Cargo.toml
+          & $env:SIGNTOOL sign /sha1 $env:CERT_THUMBPRINT /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com src-tauri/target/release/singboard-service.exe
+          if ($LASTEXITCODE -ne 0) { throw "signing singboard-service.exe failed" }
+
       - name: Build Tauri app
         run: pnpm tauri build
+
+      - name: Sign application
+        if: env.CERT_THUMBPRINT != ''
+        shell: pwsh
+        run: |
+          $files = @(Get-Item src-tauri/target/release/singboard.exe)
+          $files += Get-ChildItem src-tauri/target/release/bundle -Recurse -File -Include *.exe, *.msi -ErrorAction SilentlyContinue
+          foreach ($f in $files) {
+            & $env:SIGNTOOL sign /sha1 $env:CERT_THUMBPRINT /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com $f.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signing $($f.Name) failed" }
+            & $env:SIGNTOOL verify /pa $f.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signature verification failed for $($f.Name)" }
+          }
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3.0.2
