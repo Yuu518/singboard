@@ -86,9 +86,13 @@ jobs:
       - name: Build and sign service host
         if: env.CERT_THUMBPRINT != ''
         shell: pwsh
+        # Must run inside src-tauri so src-tauri/.cargo/config.toml (rustflags)
+        # applies; otherwise beforeBuildCommand rebuilds with different flags
+        # and overwrites the signed exe with an unsigned one.
+        working-directory: src-tauri
         run: |
-          cargo build --release -p singboard-service --manifest-path src-tauri/Cargo.toml
-          & $env:SIGNTOOL sign /sha1 $env:CERT_THUMBPRINT /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com src-tauri/target/release/singboard-service.exe
+          cargo build --release -p singboard-service
+          & $env:SIGNTOOL sign /sha1 $env:CERT_THUMBPRINT /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com target/release/singboard-service.exe
           if ($LASTEXITCODE -ne 0) { throw "signing singboard-service.exe failed" }
 
       - name: Build Tauri app
@@ -98,6 +102,11 @@ jobs:
         if: env.CERT_THUMBPRINT != ''
         shell: pwsh
         run: |
+          # The service host was signed before being embedded; fail loudly if
+          # the Tauri build relinked it and wiped the signature.
+          & $env:SIGNTOOL verify /pa src-tauri/target/release/singboard-service.exe
+          if ($LASTEXITCODE -ne 0) { throw "singboard-service.exe lost its signature during the Tauri build" }
+
           $files = @(Get-Item src-tauri/target/release/singboard.exe)
           $files += Get-ChildItem src-tauri/target/release/bundle -Recurse -File -Include *.exe, *.msi -ErrorAction SilentlyContinue
           foreach ($f in $files) {
@@ -107,12 +116,20 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "signature verification failed for $($f.Name)" }
           }
 
+      - name: Set build time
+        shell: pwsh
+        run: |
+          $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("Taipei Standard Time")
+          $now = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tz)
+          "DATE=$($now.ToString('yyyy-MM-dd HH:mm:ss')) UTC+8" >> $env:GITHUB_ENV
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3.0.2
         with:
           tag_name: v${{ env.APP_VERSION }}
           name: ${{ env.APP_VERSION }}
-          generate_release_notes: true
+          body: |
+            Build time: ${{ env.DATE }}
           files: |
             src-tauri/target/release/singboard.exe
             src-tauri/target/release/bundle/**/*
