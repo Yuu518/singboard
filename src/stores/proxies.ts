@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { fetchProxies, fetchProxy, fetchProxyProviders, selectProxy, testLatency } from '@/api'
 import { useConfigStore } from '@/stores/config'
+import { getCoreStartTimestamp } from '@/stores/service'
 import type { LatencyHistory, Proxy, ProxyGroup, ProxyProvider } from '@/types'
 
 const proxyMap = ref<Record<string, Proxy>>({})
@@ -41,6 +42,17 @@ function isTimeAfter(left: string, right: string): boolean {
   const rightValid = Number.isFinite(rightTs)
   if (leftValid && rightValid) return leftTs > rightTs
   return left > right
+}
+
+const CORE_START_TOLERANCE_MS = 10_000
+
+// 核心测速失败时会删除节点的 history,与"核心重启后 history 被清空"在数据上无法区分。
+// 若本地记录产生于核心本轮运行期间,核心侧的空 history 只能是测速失败删除所致,
+// 此时本地旧值已失效,不应再回填展示。
+function isDeletedByCore(localHistory: LatencyHistory[], coreStartTs: number | null): boolean {
+  if (coreStartTs === null) return false
+  const lastTs = Date.parse(getLastHistoryTime(localHistory))
+  return Number.isFinite(lastTs) && lastTs > coreStartTs + CORE_START_TOLERANCE_MS
 }
 
 function pickNewerHistory(a?: LatencyHistory[], b?: LatencyHistory[]): LatencyHistory[] {
@@ -232,12 +244,14 @@ export function useProxiesStore() {
       }
 
       if (!fresh) {
+        const coreStartTs = getCoreStartTimestamp()
         for (const [name, proxy] of Object.entries(merged)) {
           const previous = previousMap[name]
           const storedHistory = storedLatencyHistoryMap[name]
           if (!previous && !storedHistory) continue
 
           const localHistory = pickNewerHistory(previous?.history, storedHistory)
+          if (!proxy.history?.length && isDeletedByCore(localHistory, coreStartTs)) continue
           merged[name] = {
             ...proxy,
             history: pickNewerHistory(proxy.history, localHistory),

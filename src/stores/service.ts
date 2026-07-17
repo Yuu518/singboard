@@ -24,6 +24,13 @@ async function poll() {
   }
 }
 
+// 估算核心本轮启动时间(毫秒时间戳);未在运行或无 uptime 信息时返回 null
+export function getCoreStartTimestamp(): number | null {
+  const status = serviceStatus.value
+  if (status.state !== 'running' || typeof status.uptimeSeconds !== 'number') return null
+  return Date.now() - status.uptimeSeconds * 1000
+}
+
 export function useServiceStore() {
   if (refCount === 0) {
     if (!componentSynced) {
