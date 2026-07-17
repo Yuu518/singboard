@@ -231,32 +231,45 @@ async fn download_asset(
     Ok(())
 }
 
-/// 从 zip 中找出 sing-box.exe（按文件名匹配，不依赖目录结构）并写到 dest
-fn extract_singbox_exe(zip_path: &Path, dest: &Path) -> Result<(), String> {
+/// 从 zip 中解出 sing-box.exe（必需）与随附的 dll 依赖（如 naive 需要的
+/// libcronet.dll）。按文件名匹配、平铺写入 staging，不依赖目录结构。
+/// 返回解出的 dll 文件名列表。
+fn extract_core_files(zip_path: &Path, staging: &Path) -> Result<Vec<String>, String> {
     let file = std::fs::File::open(zip_path).map_err(|e| format!("打开压缩包失败: {}", e))?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| format!("读取压缩包失败: {}", e))?;
 
-    let index = (0..archive.len()).find(|&i| {
-        archive.by_index(i).is_ok_and(|entry| {
-            !entry.is_dir()
-                && entry
-                    .name()
-                    .rsplit(['/', '\\'])
-                    .next()
-                    .is_some_and(|name| name.eq_ignore_ascii_case(CORE_EXE_NAME))
-        })
-    });
-    let Some(index) = index else {
-        return Err(format!("压缩包内未找到 {}", CORE_EXE_NAME));
-    };
+    let mut found_exe = false;
+    let mut dlls: Vec<String> = Vec::new();
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("读取压缩包失败: {}", e))?;
+        if entry.is_dir() {
+            continue;
+        }
+        // 只取文件名部分，天然免疫 zip 路径穿越
+        let Some(name) = entry.name().rsplit(['/', '\\']).next().map(str::to_string) else {
+            continue;
+        };
+        let dest = if name.eq_ignore_ascii_case(CORE_EXE_NAME) {
+            found_exe = true;
+            staging.join(CORE_EXE_NAME)
+        } else if name.to_ascii_lowercase().ends_with(".dll") {
+            dlls.push(name.clone());
+            staging.join(&name)
+        } else {
+            continue;
+        };
+        let mut out =
+            std::fs::File::create(&dest).map_err(|e| format!("写入临时文件失败: {}", e))?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| format!("解压失败: {}", e))?;
+    }
 
-    let mut entry = archive
-        .by_index(index)
-        .map_err(|e| format!("读取压缩包失败: {}", e))?;
-    let mut out = std::fs::File::create(dest).map_err(|e| format!("写入临时文件失败: {}", e))?;
-    std::io::copy(&mut entry, &mut out).map_err(|e| format!("解压失败: {}", e))?;
-    Ok(())
+    if !found_exe {
+        return Err(format!("压缩包内未找到 {}", CORE_EXE_NAME));
+    }
+    Ok(dlls)
 }
 
 /// 对下载的核心跑一次 `version`，确认能运行并取版本串
@@ -289,18 +302,22 @@ fn retry_io<F: FnMut() -> std::io::Result<()>>(mut f: F) -> std::io::Result<()> 
     Err(last_err.unwrap())
 }
 
-/// 停服务 → 备份旧核心（只留一份 .bak）→ 替换 → 重启，失败自动回滚
+/// 停服务 → 备份旧核心（只留一份 .bak）→ 替换 exe 并覆盖随附 dll → 重启，
+/// 失败自动回滚（dll 按需求不备份，直接覆盖）
 fn swap_and_restart(
     app: &tauri::AppHandle,
-    staged_exe: &Path,
+    staging: &Path,
+    dlls: &[String],
     target: &Path,
     service_name: &str,
 ) -> Result<bool, String> {
+    let staged_exe = staging.join(CORE_EXE_NAME);
+    let target_dir = target.parent().ok_or("sing-box 路径无效")?;
     let new_path = target.with_extension("exe.new");
     let bak_path = target.with_extension("exe.bak");
 
     // 先落到目标同卷，后续 rename 才是原子操作
-    std::fs::copy(staged_exe, &new_path).map_err(|e| format!("复制新核心失败: {}", e))?;
+    std::fs::copy(&staged_exe, &new_path).map_err(|e| format!("复制新核心失败: {}", e))?;
     let cleanup_new = || {
         let _ = std::fs::remove_file(&new_path);
     };
@@ -344,6 +361,24 @@ fn swap_and_restart(
             let _ = scm::start_service(service_name);
         }
         return Err(format!("替换核心失败: {}", e));
+    }
+
+    // 覆盖随附 dll（如 naive 依赖的 libcronet.dll）：不备份，直接覆盖。
+    // 失败则回滚 exe，避免 exe 与 dll 版本不一致
+    for dll in dlls {
+        let dll_dest = target_dir.join(dll);
+        if let Err(e) = retry_io(|| std::fs::copy(staging.join(dll), &dll_dest).map(|_| ())) {
+            if had_old {
+                let _ = retry_io(|| {
+                    std::fs::remove_file(target)?;
+                    std::fs::rename(&bak_path, target)
+                });
+            }
+            if was_running {
+                let _ = scm::start_service(service_name);
+            }
+            return Err(format!("更新 {} 失败: {}", dll, e));
+        }
     }
 
     if was_running {
@@ -418,30 +453,30 @@ pub async fn perform_core_update(
         .await
         .map_err(cleanup)?;
 
-    // 步骤 2：解压
+    // 步骤 2：解压（exe + 随附 dll 依赖）
     emit_progress(&app, "extract", 0, 0);
     let staged_exe = staging.join(CORE_EXE_NAME);
-    {
+    let dlls = {
         let zip_path = zip_path.clone();
-        let staged_exe = staged_exe.clone();
-        tokio::task::spawn_blocking(move || extract_singbox_exe(&zip_path, &staged_exe))
+        let staging = staging.clone();
+        tokio::task::spawn_blocking(move || extract_core_files(&zip_path, &staging))
             .await
             .map_err(|e| format!("任务执行失败: {}", e))
             .and_then(|r| r)
-            .map_err(cleanup)?;
-    }
+            .map_err(cleanup)?
+    };
 
-    // 步骤 3：健全性检查
+    // 步骤 3：健全性检查（staging 里 dll 就在 exe 旁边，加载依赖不受影响）
     let version = probe_core_version(&staged_exe).await.map_err(cleanup)?;
 
-    // 步骤 4-9：停服 → 备份 → 替换 → 重启（阻塞的 SCM 调用）
+    // 步骤 4-9：停服 → 备份 → 替换 exe/覆盖 dll → 重启（阻塞的 SCM 调用）
     let restarted = {
         let app = app.clone();
-        let staged_exe = staged_exe.clone();
+        let staging = staging.clone();
         let target = target.clone();
         let service_name = service_name.clone();
         tokio::task::spawn_blocking(move || {
-            swap_and_restart(&app, &staged_exe, &target, &service_name)
+            swap_and_restart(&app, &staging, &dlls, &target, &service_name)
         })
         .await
         .map_err(|e| format!("任务执行失败: {}", e))
