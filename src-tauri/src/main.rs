@@ -220,6 +220,8 @@ fn run_gui() {
             singboard_lib::commands::network::fetch_url,
             singboard_lib::commands::network::http_ping,
             singboard_lib::commands::network::dns_query,
+            singboard_lib::commands::update::check_core_update,
+            singboard_lib::commands::update::perform_core_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

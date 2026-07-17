@@ -46,7 +46,7 @@ fn get_system_proxy() -> Option<String> {
     }
 }
 
-fn build_client(timeout: Option<Duration>) -> Result<reqwest::Client, reqwest::Error> {
+pub(crate) fn build_client(timeout: Option<Duration>) -> Result<reqwest::Client, reqwest::Error> {
     let mut builder = reqwest::Client::builder();
 
     if let Some(t) = timeout {

@@ -20,6 +20,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { patchConfig, fetchConfig } from '@/api'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import DnsQueryTool from '@/components/settings/DnsQueryTool.vue'
+import CoreUpdateCard from '@/components/settings/CoreUpdateCard.vue'
 
 const {
   config,
@@ -851,5 +852,7 @@ watch(
         </div>
       </div>
     </div>
+
+    <CoreUpdateCard />
   </div>
 </template>

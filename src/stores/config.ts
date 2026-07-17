@@ -112,6 +112,12 @@ function normalizeConfig(raw: any): AppConfig {
     configProfiles,
     activeConfigProfileId,
     closeToTray: typeof raw?.closeToTray === 'boolean' ? raw.closeToTray : false,
+    coreUpdateSource: raw?.coreUpdateSource === 'ref1nd' || raw?.coreUpdateSource === 'custom'
+      ? raw.coreUpdateSource
+      : 'official',
+    coreUpdateCustomRepo: typeof raw?.coreUpdateCustomRepo === 'string' ? raw.coreUpdateCustomRepo.trim() : '',
+    coreUpdateChannel: raw?.coreUpdateChannel === 'testing' ? 'testing' : 'stable',
+    coreUpdateMirror: typeof raw?.coreUpdateMirror === 'string' ? raw.coreUpdateMirror.trim() : '',
   }
 }
 
