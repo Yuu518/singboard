@@ -17,7 +17,7 @@ let myChart: echarts.ECharts | null = null
 let resizeOb: ResizeObserver | null = null
 
 const layerColors = ['#6a6fc5', '#a8d4a0', '#fddb8a', '#f2a0a0']
-const darkThemes = new Set(['dark', 'dracula'])
+const darkThemes = new Set(['dark'])
 const labelColor = computed(() => (darkThemes.has(resolvedTheme.value) ? '#ffffff' : '#000000'))
 
 const sankeyData = computed(() => {

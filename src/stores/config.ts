@@ -99,7 +99,7 @@ function normalizeConfig(raw: any): AppConfig {
     workingDir: normalizeWindowsPath(raw?.workingDir),
     serviceName: typeof raw?.serviceName === 'string' && raw.serviceName ? raw.serviceName : 'sing-box',
     startupDelaySeconds: normalizeStartupDelay(raw?.startupDelaySeconds),
-    theme: typeof raw?.theme === 'string' && raw.theme ? raw.theme : 'light',
+    theme: ['auto', 'light', 'dark'].includes(raw?.theme) ? raw.theme : 'light',
     latencyTestUrl: typeof raw?.latencyTestUrl === 'string' && raw.latencyTestUrl
       ? raw.latencyTestUrl
       : 'https://www.gstatic.com/generate_204',

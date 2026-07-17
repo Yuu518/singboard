@@ -36,7 +36,7 @@
   - Multi Clash API profiles (add/edit/switch/remove)
   - Clash mode switching from core-reported mode list
   - `sing-box` path, config path, working directory, and service name settings
-  - Theme switching (`light`/`dark`/`dracula`/`nord`)
+  - Theme switching (`light`/`dark`)
 - First-run Setup Wizard
   - Guided working directory and Clash API setup
   - Auto-scan for `sing-box` executable and `config.json` under the selected directory
