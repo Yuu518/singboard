@@ -5,7 +5,27 @@ import { useConfigStore } from '@/stores/config'
 import { useSingboxVersionStore } from '@/stores/singboxVersion'
 import { useToastStore } from '@/stores/toast'
 import { checkCoreUpdate, performCoreUpdate, type CoreUpdateInfo, type CoreUpdateProgress } from '@/bridge/coreUpdate'
+import { getFileHash } from '@/bridge/config'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+
+// 面板每次成功更新核心后记录 { 资产 digest, 安装后 exe 哈希 }，
+// 用于识别"版本号相同但上游重新构建"的情况
+const INSTALL_RECORD_KEY = 'singboard-core-install-record'
+
+interface InstallRecord {
+  assetDigest: string
+  exeHash: string
+}
+
+function loadInstallRecord(): InstallRecord | null {
+  try {
+    const record = JSON.parse(localStorage.getItem(INSTALL_RECORD_KEY) ?? '')
+    if (typeof record?.assetDigest === 'string' && typeof record?.exeHash === 'string') {
+      return record
+    }
+  } catch { }
+  return null
+}
 
 const { config } = useConfigStore()
 const { singboxVersion, detectVersion } = useSingboxVersionStore()
@@ -64,6 +84,20 @@ const phaseText = computed(() => {
   }
 })
 
+// 版本号相同时判断上游是否重新构建：本地核心必须仍是面板安装的那一份
+// （exe 哈希与记录一致），且上游资产 digest 与安装时不同
+async function isUpstreamRebuilt(info: CoreUpdateInfo): Promise<boolean> {
+  const record = loadInstallRecord()
+  const path = config.value.singboxPath.trim()
+  if (!record || !info.assetDigest || !path) return false
+  if (info.assetDigest === record.assetDigest) return false
+  try {
+    return await getFileHash(path) === record.exeHash
+  } catch {
+    return false
+  }
+}
+
 async function handleCheck() {
   if (checking.value || updating.value) return
   if (!repo.value || !/^[\w.-]+\/[\w.-]+$/.test(repo.value)) {
@@ -78,7 +112,8 @@ async function handleCheck() {
       detectVersion(),
     ])
     latest.value = info
-    if (!hasUpdate.value) {
+    const rebuilt = hasUpdate.value ? false : await isUpstreamRebuilt(info)
+    if (!hasUpdate.value && !rebuilt) {
       pushToast({ message: `当前已是最新版本（${latestDisplay.value}）`, type: 'info' })
       return
     }
@@ -86,10 +121,13 @@ async function handleCheck() {
     const publishedAt = latest.value.publishedAt
       ? new Date(latest.value.publishedAt).toLocaleString()
       : '未知'
+    const message = rebuilt
+      ? `当前版本：${singboxVersion.value || '未检测到'}\n最新版本：${latest.value.version}（${channelLabel}）\n发布时间：${publishedAt}\n\n版本号相同，但上游已重新构建该版本（资产指纹变化）。\n重新安装将自动停止并重启核心服务，是否继续？`
+      : `当前版本：${singboxVersion.value || '未检测到'}\n最新版本：${latest.value.version}（${channelLabel}）\n发布时间：${publishedAt}\n\n更新将自动停止并重启核心服务，是否立即更新？`
     const confirmed = await dialogRef.value?.show({
-      title: '发现新核心版本',
-      message: `当前版本：${singboxVersion.value || '未检测到'}\n最新版本：${latest.value.version}（${channelLabel}）\n发布时间：${publishedAt}\n\n更新将自动停止并重启核心服务，是否立即更新？`,
-      confirmText: '立即更新',
+      title: rebuilt ? '上游已重新构建当前版本' : '发现新核心版本',
+      message,
+      confirmText: rebuilt ? '重新安装' : '立即更新',
       cancelText: '取消',
     })
     if (confirmed) {
@@ -110,6 +148,7 @@ async function handleUpdate() {
   }
   updating.value = true
   progress.value = null
+  const assetDigest = latest.value.assetDigest
   try {
     const result = await performCoreUpdate({
       assetUrl: latest.value.assetUrl,
@@ -123,6 +162,15 @@ async function handleUpdate() {
       type: 'info',
     })
     latest.value = null
+    // 记录安装来源指纹，供后续识别"同版本上游重新构建"
+    try {
+      if (assetDigest) {
+        const exeHash = await getFileHash(config.value.singboxPath)
+        localStorage.setItem(INSTALL_RECORD_KEY, JSON.stringify({ assetDigest, exeHash } satisfies InstallRecord))
+      } else {
+        localStorage.removeItem(INSTALL_RECORD_KEY)
+      }
+    } catch { }
     await detectVersion()
   } catch (e) {
     pushToast({ message: `更新失败: ${e}`, type: 'error' })

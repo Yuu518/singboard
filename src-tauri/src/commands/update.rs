@@ -21,6 +21,8 @@ pub struct CoreUpdateInfo {
     asset_name: String,
     asset_url: String,
     asset_size: u64,
+    /// GitHub 资产的 SHA-256（形如 "sha256:..."），个别源可能缺失则为空串
+    asset_digest: String,
 }
 
 #[derive(Serialize)]
@@ -43,6 +45,8 @@ struct GhAsset {
     name: String,
     browser_download_url: String,
     size: u64,
+    #[serde(default)]
+    digest: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -139,6 +143,7 @@ fn pick_windows_asset(release: &GhRelease, suffix: &str) -> Result<CoreUpdateInf
         asset_name: asset.name.clone(),
         asset_url: asset.browser_download_url.clone(),
         asset_size: asset.size,
+        asset_digest: asset.digest.clone().unwrap_or_default(),
     })
 }
 

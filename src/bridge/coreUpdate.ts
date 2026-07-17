@@ -7,6 +7,8 @@ export interface CoreUpdateInfo {
   assetName: string
   assetUrl: string
   assetSize: number
+  /** GitHub 资产 SHA-256（"sha256:..."），个别源缺失时为空串 */
+  assetDigest: string
 }
 
 export interface CoreUpdateResult {
