@@ -300,10 +300,10 @@ export function useProxiesStore() {
     try {
       const { data } = await testLatency(name, getTestUrl(groupName), LATENCY_TIMEOUT)
       const delay = data.delay
-      appendProxyHistory(name, delay)
+      appendProxyHistory(resolveNowNodeName(name), delay)
       return delay
     } catch {
-      appendProxyHistory(name, 0)
+      appendProxyHistory(resolveNowNodeName(name), 0)
       return 0
     }
   }
@@ -322,9 +322,9 @@ export function useProxiesStore() {
         const now = new Date().toISOString()
         try {
           const { data } = await testLatency(name, url, LATENCY_TIMEOUT)
-          appendProxyHistory(name, data.delay, now)
+          appendProxyHistory(resolveNowNodeName(name), data.delay, now)
         } catch {
-          appendProxyHistory(name, 0, now)
+          appendProxyHistory(resolveNowNodeName(name), 0, now)
         }
         if (config.value.ipv6TestEnabled) {
           try {
