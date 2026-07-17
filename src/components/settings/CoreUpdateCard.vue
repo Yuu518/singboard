@@ -72,7 +72,12 @@ async function handleCheck() {
   }
   checking.value = true
   try {
-    latest.value = await checkCoreUpdate(repo.value, config.value.coreUpdateChannel)
+    // 核心文件可能在面板运行期间被替换过，先重新检测当前版本再比较
+    const [info] = await Promise.all([
+      checkCoreUpdate(repo.value, config.value.coreUpdateChannel),
+      detectVersion(),
+    ])
+    latest.value = info
     if (!hasUpdate.value) {
       pushToast({ message: `当前已是最新版本（${latestDisplay.value}）`, type: 'info' })
       return
