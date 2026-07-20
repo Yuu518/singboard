@@ -581,7 +581,7 @@ watch(
     <div class="bg-base-200 rounded-lg p-4 space-y-3">
       <div class="flex items-center gap-2">
         <h2 class="font-semibold text-sm">后端</h2>
-        <span v-if="singboxVersion" class="text-xs text-base-content/60">{{ singboxVersion }}</span>
+        <span v-if="singboxVersion && serviceStatus.state === 'running'" class="text-xs text-base-content/60">{{ singboxVersion }}</span>
       </div>
       <div class="space-y-2">
         <label class="label py-0"><span class="label-text text-xs">当前后端</span></label>

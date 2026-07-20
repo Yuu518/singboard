@@ -145,6 +145,8 @@ if (!isTrayWindow) {
           sessionStorage.removeItem(NETWORK_CACHE_KEY)
         }
         coreStartedOnce = true
+        // 核心可能在停止期间被手动替换，启动后重新检测版本
+        void detectVersion()
         setTimeout(runNetworkAutoTest, 3000)
       } else if (coreStartedOnce) {
         resetOverviewHistory()
