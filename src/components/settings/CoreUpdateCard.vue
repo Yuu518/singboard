@@ -4,17 +4,21 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useConfigStore } from '@/stores/config'
 import { useSingboxVersionStore } from '@/stores/singboxVersion'
 import { useToastStore } from '@/stores/toast'
-import { checkCoreUpdate, performCoreUpdate, type CoreUpdateInfo, type CoreUpdateProgress } from '@/bridge/coreUpdate'
+import { checkCoreUpdate, performCoreUpdate, probeAssetExeHash, type CoreUpdateInfo, type CoreUpdateProgress } from '@/bridge/coreUpdate'
 import { getFileHash } from '@/bridge/config'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
-// 面板每次成功更新核心后记录 { 资产 digest, 安装后 exe 哈希 }，
-// 用于识别"版本号相同但上游重新构建"的情况
+// "资产 digest → 资产内 sing-box.exe 哈希"的缓存（只留最近一条），
+// 版本号相同时用本地 exe 哈希与之比对，识别上游重建或本地被手动替换
 const INSTALL_RECORD_KEY = 'singboard-core-install-record'
 
 interface InstallRecord {
   assetDigest: string
   exeHash: string
+}
+
+function saveInstallRecord(record: InstallRecord) {
+  localStorage.setItem(INSTALL_RECORD_KEY, JSON.stringify(record))
 }
 
 function loadInstallRecord(): InstallRecord | null {
@@ -38,6 +42,7 @@ const REPOS: Record<string, string> = {
 
 const dialogRef = ref<InstanceType<typeof ConfirmDialog> | null>(null)
 const checking = ref(false)
+const verifying = ref(false)
 const updating = ref(false)
 const latest = ref<CoreUpdateInfo | null>(null)
 const progress = ref<CoreUpdateProgress | null>(null)
@@ -69,32 +74,50 @@ watch(
 
 const phaseText = computed(() => {
   const p = progress.value
-  if (!p) return '准备中…'
+  const prefix = verifying.value ? '正在校验与上游一致性，' : ''
+  if (!p) return verifying.value ? '正在校验与上游一致性…' : '准备中…'
   switch (p.phase) {
     case 'download': {
       const mb = (n: number) => (n / 1048576).toFixed(1)
       return p.total > 0
-        ? `下载中… ${mb(p.downloaded)} MB / ${mb(p.total)} MB`
-        : `下载中… ${mb(p.downloaded)} MB`
+        ? `${prefix}下载中… ${mb(p.downloaded)} MB / ${mb(p.total)} MB`
+        : `${prefix}下载中… ${mb(p.downloaded)} MB`
     }
-    case 'extract': return '正在解压…'
+    case 'extract': return `${prefix}正在解压…`
     case 'replace': return '正在替换核心…'
     case 'restart': return '正在重启服务…'
     default: return '更新中…'
   }
 })
 
-// 版本号相同时判断上游是否重新构建：本地核心必须仍是面板安装的那一份
-// （exe 哈希与记录一致），且上游资产 digest 与安装时不同
-async function isUpstreamRebuilt(info: CoreUpdateInfo): Promise<boolean> {
-  const record = loadInstallRecord()
+// 版本号相同时判断本地核心与上游最新资产是否不一致（上游重建或本地被手动替换）。
+// 缓存命中直接比对；未命中则下载资产解压计算 exe 哈希（每个 digest 只下载一次）
+async function isLocalOutOfSync(info: CoreUpdateInfo): Promise<boolean> {
   const path = config.value.singboxPath.trim()
-  if (!record || !info.assetDigest || !path) return false
-  if (info.assetDigest === record.assetDigest) return false
+  // 源未提供资产 digest 时无法缓存校验结果，跳过检测避免每次检查都下载
+  if (!info.assetDigest || !path) return false
+  let localHash: string
   try {
-    return await getFileHash(path) === record.exeHash
+    localHash = await getFileHash(path)
   } catch {
     return false
+  }
+  const record = loadInstallRecord()
+  if (record && record.assetDigest === info.assetDigest) {
+    return localHash !== record.exeHash
+  }
+  verifying.value = true
+  try {
+    const exeHash = await probeAssetExeHash({
+      assetUrl: info.assetUrl,
+      assetSize: info.assetSize,
+      mirror: config.value.coreUpdateMirror,
+    })
+    saveInstallRecord({ assetDigest: info.assetDigest, exeHash })
+    return localHash !== exeHash
+  } finally {
+    verifying.value = false
+    progress.value = null
   }
 }
 
@@ -112,8 +135,8 @@ async function handleCheck() {
       detectVersion(),
     ])
     latest.value = info
-    const rebuilt = hasUpdate.value ? false : await isUpstreamRebuilt(info)
-    if (!hasUpdate.value && !rebuilt) {
+    const outOfSync = hasUpdate.value ? false : await isLocalOutOfSync(info)
+    if (!hasUpdate.value && !outOfSync) {
       pushToast({ message: `当前已是最新版本（${latestDisplay.value}）`, type: 'info' })
       return
     }
@@ -121,13 +144,13 @@ async function handleCheck() {
     const publishedAt = latest.value.publishedAt
       ? new Date(latest.value.publishedAt).toLocaleString()
       : '未知'
-    const message = rebuilt
-      ? `当前版本：${singboxVersion.value || '未检测到'}\n最新版本：${latest.value.version}（${channelLabel}）\n发布时间：${publishedAt}\n\n版本号相同，但上游已重新构建该版本（资产指纹变化）。\n重新安装将自动停止并重启核心服务，是否继续？`
+    const message = outOfSync
+      ? `当前版本：${singboxVersion.value || '未检测到'}\n最新版本：${latest.value.version}（${channelLabel}）\n发布时间：${publishedAt}\n\n版本号相同，但本地核心与上游最新资产不一致（可能上游重新构建或本地被手动替换）。\n重新安装将覆盖本地核心，自动停止并重启核心服务，是否继续？`
       : `当前版本：${singboxVersion.value || '未检测到'}\n最新版本：${latest.value.version}（${channelLabel}）\n发布时间：${publishedAt}\n\n更新将自动停止并重启核心服务，是否立即更新？`
     const confirmed = await dialogRef.value?.show({
-      title: rebuilt ? '上游已重新构建当前版本' : '发现新核心版本',
+      title: outOfSync ? '本地核心与上游不一致' : '发现新核心版本',
       message,
-      confirmText: rebuilt ? '重新安装' : '立即更新',
+      confirmText: outOfSync ? '重新安装' : '立即更新',
       cancelText: '取消',
     })
     if (confirmed) {
@@ -162,11 +185,11 @@ async function handleUpdate() {
       type: 'info',
     })
     latest.value = null
-    // 记录安装来源指纹，供后续识别"同版本上游重新构建"
+    // 安装后本地 exe 即该资产内的 exe，直接记录哈希作为校验缓存
     try {
       if (assetDigest) {
         const exeHash = await getFileHash(config.value.singboxPath)
-        localStorage.setItem(INSTALL_RECORD_KEY, JSON.stringify({ assetDigest, exeHash } satisfies InstallRecord))
+        saveInstallRecord({ assetDigest, exeHash })
       } else {
         localStorage.removeItem(INSTALL_RECORD_KEY)
       }
@@ -254,7 +277,7 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <div v-if="updating" class="space-y-1">
+    <div v-if="updating || verifying" class="space-y-1">
       <div class="text-xs text-base-content/70">{{ phaseText }}</div>
       <progress
         v-if="progress?.phase === 'download' && progress.total > 0"

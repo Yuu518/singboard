@@ -411,6 +411,54 @@ fn swap_and_restart(
     Ok(was_running)
 }
 
+/// 下载资产并解压，返回其中 sing-box.exe 的 SHA-256。
+/// 用于版本号相同时比对本地核心与上游资产是否一致（缓存未命中时调用）
+#[tauri::command]
+pub async fn probe_asset_exe_hash(
+    app: tauri::AppHandle,
+    asset_url: String,
+    asset_size: u64,
+    mirror: Option<String>,
+) -> Result<String, String> {
+    let _guard = UPDATE_LOCK
+        .try_lock()
+        .map_err(|_| "更新正在进行中".to_string())?;
+
+    let staging = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("获取数据目录失败: {}", e))?
+        .join("core-verify");
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|e| format!("创建临时目录失败: {}", e))?;
+    let cleanup = |msg: String| {
+        let _ = std::fs::remove_dir_all(&staging);
+        msg
+    };
+
+    let download_url = apply_mirror(&mirror, &asset_url);
+    let zip_path = staging.join("core.zip");
+    download_asset(&app, &download_url, asset_size, &zip_path)
+        .await
+        .map_err(cleanup)?;
+
+    emit_progress(&app, "extract", 0, 0);
+    let hash = {
+        let staging = staging.clone();
+        tokio::task::spawn_blocking(move || {
+            extract_core_files(&zip_path, &staging)?;
+            crate::service::helper::sha256_file(&staging.join(CORE_EXE_NAME))
+        })
+        .await
+        .map_err(|e| format!("任务执行失败: {}", e))
+        .and_then(|r| r)
+        .map_err(cleanup)?
+    };
+
+    let _ = std::fs::remove_dir_all(&staging);
+    Ok(hash)
+}
+
 #[tauri::command]
 pub async fn perform_core_update(
     app: tauri::AppHandle,

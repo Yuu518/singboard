@@ -26,6 +26,15 @@ export async function checkCoreUpdate(repo: string, channel: string): Promise<Co
   return invoke<CoreUpdateInfo>('check_core_update', { repo, channel })
 }
 
+/** 下载资产并解压，返回其中 sing-box.exe 的 SHA-256（用于同版本一致性校验） */
+export async function probeAssetExeHash(args: {
+  assetUrl: string
+  assetSize: number
+  mirror: string
+}): Promise<string> {
+  return invoke<string>('probe_asset_exe_hash', args)
+}
+
 export async function performCoreUpdate(args: {
   assetUrl: string
   assetSize: number
