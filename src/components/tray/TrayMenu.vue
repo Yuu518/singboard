@@ -3,7 +3,8 @@ import { computed, ref } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useServiceStore } from '@/stores/service'
 import { useConfigStore } from '@/stores/config'
-import { startService, stopService, restartService } from '@/bridge/service'
+import { stopService } from '@/bridge/service'
+import { startCore, restartCore } from '@/utils/coreControl'
 import { showMainWindow, quitApp } from '@/bridge/app'
 
 const { serviceStatus, refresh } = useServiceStore()
@@ -11,17 +12,22 @@ const { serviceName } = useConfigStore()
 
 const isRunning = computed(() => serviceStatus.value.state === 'running')
 const busy = ref<'' | 'toggle' | 'restart'>('')
+// 托盘窗口没有 Toast，失败信息就近显示一行
+const errorText = ref('')
 
 async function handleToggle() {
   if (busy.value) return
   busy.value = 'toggle'
+  errorText.value = ''
   try {
     if (isRunning.value) {
       await stopService(serviceName.value)
     } else {
-      await startService(serviceName.value)
+      await startCore(serviceName.value)
     }
-  } catch { }
+  } catch (e: any) {
+    errorText.value = e?.message || String(e)
+  }
   await refresh()
   busy.value = ''
 }
@@ -29,9 +35,12 @@ async function handleToggle() {
 async function handleRestart() {
   if (busy.value) return
   busy.value = 'restart'
+  errorText.value = ''
   try {
-    await restartService(serviceName.value)
-  } catch { }
+    await restartCore(serviceName.value)
+  } catch (e: any) {
+    errorText.value = e?.message || String(e)
+  }
   await refresh()
   busy.value = ''
 }
@@ -73,6 +82,9 @@ function handleQuit() {
             <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
           </svg>
         </button>
+      </div>
+      <div v-if="errorText" class="px-2 pb-1 text-[10px] leading-tight text-error truncate" :title="errorText">
+        {{ errorText }}
       </div>
       <div class="border-t border-base-300"></div>
       <button class="text-xs py-1.5 hover:bg-base-300 transition-colors" @click="openPanel">打开面板</button>

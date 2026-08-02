@@ -5,7 +5,6 @@ import { useServiceStore } from '@/stores/service'
 import { useToastStore } from '@/stores/toast'
 import { useProxiesStore } from '@/stores/proxies'
 import {
-  startService,
   stopService,
   installService,
   uninstallService,
@@ -13,7 +12,8 @@ import {
   startupTaskExists,
   createStartupTask,
 } from '@/bridge/service'
-import { validateSingboxConfig, getRunningConfigPath, getRemoteConfigPath, copyToRunningConfig } from '@/bridge/config'
+import { startCore, restartCore } from '@/utils/coreControl'
+import { getRunningConfigPath } from '@/bridge/config'
 import { useSingboxVersionStore } from '@/stores/singboxVersion'
 import { getAutoLaunch, setAutoLaunch } from '@/bridge/app'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -28,7 +28,6 @@ const {
   clashApis,
   activeClashApi,
   activeClashApiId,
-  configProfiles,
   setActiveClashApi,
   addClashApi,
   updateActiveClashApi,
@@ -264,41 +263,6 @@ async function changeMode(mode: string) {
   } catch {}
 }
 
-async function validateBeforeStart(): Promise<boolean> {
-  const { singboxPath, workingDir } = config.value
-  if (!singboxPath) {
-    pushToast({ message: '请先配置 sing-box 路径', type: 'error' })
-    return false
-  }
-
-  async function resolveActiveConfigPath(): Promise<string | null> {
-    const activeId = config.value.activeConfigProfileId
-    if (!activeId) return null
-    const profile = configProfiles.value.find((p) => p.id === activeId)
-    if (!profile) return null
-
-    if (profile.type === 'local') return profile.source
-
-    return await getRemoteConfigPath(profile.id)
-  }
-
-  try {
-    const activeConfigPath = await resolveActiveConfigPath()
-
-    if (activeConfigPath) {
-      await validateSingboxConfig(singboxPath, activeConfigPath, workingDir)
-      await copyToRunningConfig(activeConfigPath)
-    } else {
-      const runningConfigPath = await getRunningConfigPath()
-      await validateSingboxConfig(singboxPath, runningConfigPath, workingDir)
-    }
-    return true
-  } catch (e: any) {
-    pushToast({ message: '配置文件校验或同步失败:\n' + (e?.message || e), type: 'error' }, 8000)
-    return false
-  }
-}
-
 async function checkServiceAfterStart() {
   await new Promise((r) => setTimeout(r, 3000))
   await refresh()
@@ -331,15 +295,11 @@ async function handleServiceAction(action: string) {
     const name = config.value.serviceName
     switch (action) {
       case 'start':
-        if (!(await validateBeforeStart())) return
-        await startService(name)
+        await startCore(name)
         checkServiceAfterStart()
         break
       case 'restart':
-        if (!(await validateBeforeStart())) return
-        await stopService(name)
-        await new Promise((r) => setTimeout(r, 500))
-        await startService(name)
+        await restartCore(name)
         checkServiceAfterStart()
         break
       case 'stop': await stopService(name); break

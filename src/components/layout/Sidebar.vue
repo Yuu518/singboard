@@ -4,7 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useServiceStore } from '@/stores/service'
 import { useConfigStore } from '@/stores/config'
 import { useToastStore } from '@/stores/toast'
-import { startService, stopService } from '@/bridge/service'
+import { stopService } from '@/bridge/service'
+import { startCore } from '@/utils/coreControl'
 import { formatUptime } from '@/utils/format'
 
 const route = useRoute()
@@ -52,7 +53,7 @@ async function toggleService() {
     if (serviceStatus.value.state === 'running') {
       await stopService(name)
     } else {
-      await startService(name)
+      await startCore(name)
     }
   } catch (e: any) {
     pushToast({ message: '服务操作失败: ' + (e?.message || e), type: 'error' }, 6000)

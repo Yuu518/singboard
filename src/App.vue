@@ -9,7 +9,7 @@ import { useServiceStore } from '@/stores/service'
 import { useProxiesStore } from '@/stores/proxies'
 import { useOverviewStore } from '@/stores/overview'
 import { useConnectionsStore } from '@/stores/connections'
-import { copyToRunningConfig, getRemoteConfigPath } from '@/bridge/config'
+import { syncActiveConfigToRunning } from '@/utils/coreControl'
 import { isLaunchedHidden } from '@/bridge/app'
 import { appVisible } from '@/stores/appVisible'
 import TrayMenu from '@/components/tray/TrayMenu.vue'
@@ -27,7 +27,7 @@ import {
 
 const isTrayWindow = getCurrentWindow().label === 'tray'
 
-const { config, configProfiles } = useConfigStore()
+const { config } = useConfigStore()
 const { serviceStatus, ready: serviceReady } = useServiceStore()
 const { start: startAutoUpdate } = useConfigAutoUpdate()
 const { loadProxies, resumePendingTests } = useProxiesStore()
@@ -90,24 +90,6 @@ function runNetworkAutoTest() {
   }
 }
 
-async function syncActiveConfigToRunning() {
-  const activeId = config.value.activeConfigProfileId
-  if (!activeId) return
-  const profile = configProfiles.value.find((p) => p.id === activeId)
-  if (!profile) return
-  try {
-    let sourcePath: string
-    if (profile.type === 'local') {
-      sourcePath = profile.source
-    } else {
-      sourcePath = await getRemoteConfigPath(profile.id)
-    }
-    await copyToRunningConfig(sourcePath)
-  } catch (e) {
-    console.error('Failed to sync active config on startup:', e)
-  }
-}
-
 onMounted(async () => {
   if (isTrayWindow) return
   await serviceReady
@@ -118,7 +100,9 @@ onMounted(async () => {
     getCurrentWindow().show()
   }
   setupWizardRef.value?.checkAndOpen()
-  await syncActiveConfigToRunning()
+  await syncActiveConfigToRunning().catch((e) => {
+    console.error('Failed to sync active config on startup:', e)
+  })
   await loadProxies()
   resumePendingTests()
   startAutoUpdate()
