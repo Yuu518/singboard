@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use tokio::io::AsyncWriteExt;
 
 use crate::service::scm;
@@ -11,6 +11,8 @@ use crate::service::scm;
 static UPDATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 const CORE_EXE_NAME: &str = "sing-box.exe";
+/// 一致性校验阶段解压结果的清单，供随后的安装复用（同一资产不下载两次）
+const STAGED_MANIFEST: &str = "staged.json";
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +40,15 @@ struct CoreUpdateProgress {
     phase: &'static str,
     downloaded: u64,
     total: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StagedCore {
+    asset_url: String,
+    asset_size: u64,
+    exe_hash: String,
+    dlls: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -81,6 +92,29 @@ fn windows_arch_suffix() -> Result<String, String> {
         "aarch64" => Ok("windows-arm64.zip".into()),
         other => Err(format!("不支持的 CPU 架构: {}", other)),
     }
+}
+
+/// 下载与解压产物放在 %TEMP%\singboard（整个目录由核心更新独占，会被清空重建）。
+/// 校验与安装共用它，安装才能复用校验解压出来的文件
+fn staging_dir() -> PathBuf {
+    std::env::temp_dir().join("singboard")
+}
+
+/// 暂存目录里的解压结果能否直接安装：清单指向同一资产，exe 与随附 dll 都在，
+/// 且 exe 哈希与清单一致（残留被改动或上次写坏时退回重新下载）
+fn take_staged(staging: &Path, asset_url: &str, asset_size: u64) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(staging.join(STAGED_MANIFEST)).ok()?;
+    let staged: StagedCore = serde_json::from_str(&text).ok()?;
+    if staged.asset_url != asset_url || staged.asset_size != asset_size {
+        return None;
+    }
+    if crate::service::helper::sha256_file(&staging.join(CORE_EXE_NAME)).ok()? != staged.exe_hash {
+        return None;
+    }
+    if !staged.dlls.iter().all(|d| staging.join(d).is_file()) {
+        return None;
+    }
+    Some(staged.dlls)
 }
 
 fn emit_progress(app: &tauri::AppHandle, phase: &'static str, downloaded: u64, total: u64) {
@@ -424,11 +458,7 @@ pub async fn probe_asset_exe_hash(
         .try_lock()
         .map_err(|_| "更新正在进行中".to_string())?;
 
-    let staging = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("获取数据目录失败: {}", e))?
-        .join("core-verify");
+    let staging = staging_dir();
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| format!("创建临时目录失败: {}", e))?;
     let cleanup = |msg: String| {
@@ -443,11 +473,24 @@ pub async fn probe_asset_exe_hash(
         .map_err(cleanup)?;
 
     emit_progress(&app, "extract", 0, 0);
+    // 解压结果与清单留在 staging：用户确认重新安装时直接取用，不再下载一遍
     let hash = {
         let staging = staging.clone();
+        let asset_url = asset_url.clone();
         tokio::task::spawn_blocking(move || {
-            extract_core_files(&zip_path, &staging)?;
-            crate::service::helper::sha256_file(&staging.join(CORE_EXE_NAME))
+            let dlls = extract_core_files(&zip_path, &staging)?;
+            let exe_hash = crate::service::helper::sha256_file(&staging.join(CORE_EXE_NAME))?;
+            let _ = std::fs::remove_file(&zip_path);
+            let manifest = serde_json::to_string(&StagedCore {
+                asset_url,
+                asset_size,
+                exe_hash: exe_hash.clone(),
+                dlls,
+            })
+            .map_err(|e| format!("写入清单失败: {}", e))?;
+            std::fs::write(staging.join(STAGED_MANIFEST), manifest)
+                .map_err(|e| format!("写入清单失败: {}", e))?;
+            Ok::<String, String>(exe_hash)
         })
         .await
         .map_err(|e| format!("任务执行失败: {}", e))
@@ -455,7 +498,6 @@ pub async fn probe_asset_exe_hash(
         .map_err(cleanup)?
     };
 
-    let _ = std::fs::remove_dir_all(&staging);
     Ok(hash)
 }
 
@@ -482,36 +524,41 @@ pub async fn perform_core_update(
     }
 
     // 临时目录
-    let staging = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("获取数据目录失败: {}", e))?
-        .join("core-update");
-    let _ = std::fs::remove_dir_all(&staging);
-    std::fs::create_dir_all(&staging).map_err(|e| format!("创建临时目录失败: {}", e))?;
+    let staging = staging_dir();
     let cleanup = |msg: String| {
         let _ = std::fs::remove_dir_all(&staging);
         msg
     };
 
-    // 步骤 1：下载
-    let download_url = apply_mirror(&mirror, &asset_url);
-    let zip_path = staging.join("core.zip");
-    download_asset(&app, &download_url, asset_size, &zip_path)
-        .await
-        .map_err(cleanup)?;
-
-    // 步骤 2：解压（exe + 随附 dll 依赖）
-    emit_progress(&app, "extract", 0, 0);
+    // 步骤 1-2：一致性校验刚下过同一个资产就直接复用其解压结果，否则下载并解压
     let staged_exe = staging.join(CORE_EXE_NAME);
-    let dlls = {
-        let zip_path = zip_path.clone();
+    let reusable = {
         let staging = staging.clone();
-        tokio::task::spawn_blocking(move || extract_core_files(&zip_path, &staging))
+        let asset_url = asset_url.clone();
+        tokio::task::spawn_blocking(move || take_staged(&staging, &asset_url, asset_size))
             .await
-            .map_err(|e| format!("任务执行失败: {}", e))
-            .and_then(|r| r)
-            .map_err(cleanup)?
+            .map_err(|e| format!("任务执行失败: {}", e))?
+    };
+    let dlls = match reusable {
+        Some(dlls) => dlls,
+        None => {
+            let _ = std::fs::remove_dir_all(&staging);
+            std::fs::create_dir_all(&staging).map_err(|e| format!("创建临时目录失败: {}", e))?;
+
+            let download_url = apply_mirror(&mirror, &asset_url);
+            let zip_path = staging.join("core.zip");
+            download_asset(&app, &download_url, asset_size, &zip_path)
+                .await
+                .map_err(cleanup)?;
+
+            emit_progress(&app, "extract", 0, 0);
+            let staging = staging.clone();
+            tokio::task::spawn_blocking(move || extract_core_files(&zip_path, &staging))
+                .await
+                .map_err(|e| format!("任务执行失败: {}", e))
+                .and_then(|r| r)
+                .map_err(cleanup)?
+        }
     };
 
     // 步骤 3：健全性检查（staging 里 dll 就在 exe 旁边，加载依赖不受影响）
