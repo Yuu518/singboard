@@ -70,6 +70,9 @@ pub async fn service_uninstall(app: tauri::AppHandle, service_name: String) -> R
         if let Ok(deployed) = helper::deployed_helper_path(&app) {
             let _ = std::fs::remove_file(deployed);
         }
+        if let Ok(marker) = helper::deployed_version_path(&app) {
+            let _ = std::fs::remove_file(marker);
+        }
         Ok(())
     })
     .await

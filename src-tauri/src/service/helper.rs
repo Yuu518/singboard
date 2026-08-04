@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use tauri::Manager;
 
 const HELPER_EXE_NAME: &str = "singboard-service.exe";
+const HELPER_VERSION_FILE: &str = "singboard-service.version";
 
 // The release helper is built before the panel by the Tauri build hooks.
 // Development embeds the same payload so opening a dev panel cannot replace
@@ -21,13 +22,24 @@ pub fn deployed_helper_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir.join(HELPER_EXE_NAME))
 }
 
+/// 记录已部署副本版本的标记文件位置
+pub fn deployed_version_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    Ok(data_dir.join(HELPER_VERSION_FILE))
+}
+
 pub fn sha256_file(path: &Path) -> Result<String, String> {
     let content = std::fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
     Ok(format!("{:x}", Sha256::digest(&content)))
 }
 
-fn embedded_helper_sha256() -> String {
-    format!("{:x}", Sha256::digest(EMBEDDED_HELPER))
+fn deployed_version(app: &tauri::AppHandle) -> Option<String> {
+    let path = deployed_version_path(app).ok()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    Some(text.trim().to_string())
 }
 
 /// 把内嵌的 helper 释放到部署位置。调用方负责先停止服务。
@@ -38,6 +50,11 @@ pub fn deploy_helper(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             .map_err(|e| format!("Failed to create app data dir: {}", e))?;
     }
 
+    // 版本标记先失效，避免释放中途失败后标记与实际副本不符
+    if let Ok(marker) = deployed_version_path(app) {
+        let _ = std::fs::remove_file(marker);
+    }
+
     // 服务刚停止时旧文件可能仍被短暂占用，重试几次
     let mut last_err = String::new();
     for attempt in 0..3 {
@@ -45,7 +62,13 @@ pub fn deploy_helper(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             thread::sleep(Duration::from_millis(500));
         }
         match std::fs::write(&dest, EMBEDDED_HELPER) {
-            Ok(()) => return Ok(dest),
+            Ok(()) => {
+                // 标记写失败只会让下次启动多热换一次，不值得让服务停在半路
+                if let Ok(marker) = deployed_version_path(app) {
+                    let _ = std::fs::write(marker, singboard_service::HELPER_VERSION);
+                }
+                return Ok(dest);
+            }
             Err(e) => last_err = e.to_string(),
         }
     }
@@ -58,7 +81,7 @@ pub enum SyncNeed {
     UpToDate,
     /// 服务仍指向旧的面板 exe，需要改指向
     Migrate,
-    /// 部署副本缺失或与内嵌 helper 哈希不一致
+    /// 部署副本缺失或版本与内嵌 helper 不一致
     Update,
 }
 
@@ -89,7 +112,9 @@ pub fn sync_needed(app: &tauri::AppHandle, service_name: &str) -> Result<SyncNee
     if !deployed.is_file() {
         return Ok(SyncNeed::Update);
     }
-    if embedded_helper_sha256() != sha256_file(&deployed)? {
+    // 按版本而非哈希比对：发布流程会给 helper 签名，带时间戳的签名块使得
+    // 每次构建的字节都不同，用哈希会让每个新版本首次启动都白白热换一次服务
+    if deployed_version(app).as_deref() != Some(singboard_service::HELPER_VERSION) {
         return Ok(SyncNeed::Update);
     }
     Ok(SyncNeed::UpToDate)
