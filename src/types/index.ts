@@ -175,4 +175,5 @@ export interface AppConfig {
   coreUpdateCustomRepo: string
   coreUpdateChannel: 'stable' | 'testing'
   coreUpdateMirror: string
+  panelAutoCheckUpdate: boolean
 }

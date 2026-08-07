@@ -4,6 +4,7 @@ import Titlebar from '@/components/layout/Titlebar.vue'
 import Sidebar from '@/components/layout/Sidebar.vue'
 import ToastHost from '@/components/common/ToastHost.vue'
 import SetupWizard from '@/components/common/SetupWizard.vue'
+import PanelUpdateDialog from '@/components/common/PanelUpdateDialog.vue'
 import { useConfigStore } from '@/stores/config'
 import { useServiceStore } from '@/stores/service'
 import { useProxiesStore } from '@/stores/proxies'
@@ -15,6 +16,7 @@ import { appVisible } from '@/stores/appVisible'
 import TrayMenu from '@/components/tray/TrayMenu.vue'
 import { useConfigAutoUpdate } from '@/composables/useConfigAutoUpdate'
 import { useSingboxVersionStore } from '@/stores/singboxVersion'
+import { usePanelUpdateStore } from '@/stores/panelUpdate'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getIPFromIpipnet, getIPFromIpsb } from '@/api/geoip'
 import {
@@ -34,6 +36,7 @@ const { loadProxies, resumePendingTests } = useProxiesStore()
 const { resetHistory: resetOverviewHistory } = useOverviewStore()
 const { resetOnRestart: resetConnections } = useConnectionsStore()
 const { detectVersion } = useSingboxVersionStore()
+const { checkOnStartup: checkPanelUpdateOnStartup } = usePanelUpdateStore()
 
 const setupWizardVisible = ref(false)
 const setupWizardRef = ref<InstanceType<typeof SetupWizard> | null>(null)
@@ -107,6 +110,19 @@ onMounted(async () => {
   resumePendingTests()
   startAutoUpdate()
   void detectVersion()
+
+  if (config.value.panelAutoCheckUpdate) {
+    if (launchedHidden) {
+      // A confirm dialog on a hidden window is invisible, so defer it.
+      const stopVisibleWatch = watch(appVisible, (visible) => {
+        if (!visible) return
+        stopVisibleWatch()
+        void checkPanelUpdateOnStartup()
+      })
+    } else {
+      void checkPanelUpdateOnStartup()
+    }
+  }
 })
 
 watch(
@@ -154,5 +170,6 @@ if (!isTrayWindow) {
     </div>
     <ToastHost />
     <SetupWizard ref="setupWizardRef" v-model:visible="setupWizardVisible" />
+    <PanelUpdateDialog />
   </div>
 </template>

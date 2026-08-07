@@ -66,9 +66,25 @@ fn main() {
             .get(2)
             .cloned()
             .unwrap_or_else(|| "sing-box".to_string());
-        // 向后兼容:旧版安装的服务仍以 `singboard.exe service <name>` 方式启动
         if let Err(e) = singboard_service::wrapper::run_service(&service_name) {
             eprintln!("Service error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // Must return before run_gui(): single-instance would kill this process.
+    if args.len() > 1 && args[1] == singboard_lib::commands::self_update::APPLY_UPDATE_FLAG {
+        let Some(target) = args.get(2).map(std::path::PathBuf::from) else {
+            eprintln!("--apply-update requires <target> <pid>");
+            std::process::exit(1);
+        };
+        let pid: u32 = args.get(3).and_then(|p| p.parse().ok()).unwrap_or(0);
+
+        let result = singboard_lib::commands::self_update::run_apply_update(&target, pid);
+        let launched = singboard_lib::commands::self_update::launch_panel(&target);
+        if let Err(e) = result.and(launched) {
+            eprintln!("Update error: {}", e);
             std::process::exit(1);
         }
         return;
@@ -77,6 +93,8 @@ fn main() {
     if args.iter().any(|a| a == "--hidden") {
         LAUNCHED_HIDDEN.store(true, Ordering::Relaxed);
     }
+
+    singboard_lib::commands::self_update::cleanup_staging();
 
     run_gui();
 }
@@ -90,7 +108,6 @@ fn show_window(app: &tauri::AppHandle) {
     }
 }
 
-// 以鼠标为锚点弹出托盘菜单窗口：默认向右上方展开，越界时翻转到左侧/下方
 fn show_tray_menu(app: &tauri::AppHandle, position: tauri::PhysicalPosition<f64>) {
     if let Some(window) = app.get_webview_window("tray") {
         let size = window
@@ -175,7 +192,6 @@ fn run_gui() {
                         }
                     }
                 }
-                // 托盘菜单窗口失去焦点时自动隐藏
                 tauri::WindowEvent::Focused(false) => {
                     if window.label() == "tray" {
                         let _ = window.hide();
@@ -223,6 +239,8 @@ fn run_gui() {
             singboard_lib::commands::update::check_core_update,
             singboard_lib::commands::update::probe_asset_exe_hash,
             singboard_lib::commands::update::perform_core_update,
+            singboard_lib::commands::self_update::check_panel_update,
+            singboard_lib::commands::self_update::perform_panel_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
