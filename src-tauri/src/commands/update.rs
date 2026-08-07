@@ -8,7 +8,9 @@ use tokio::io::AsyncWriteExt;
 use crate::service::scm;
 
 /// 防止并发执行更新
-static UPDATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static UPDATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+pub(crate) const CORE_PROGRESS_EVENT: &str = "core-update-progress";
 
 const CORE_EXE_NAME: &str = "sing-box.exe";
 /// 一致性校验阶段解压结果的清单，供随后的安装复用（同一资产不下载两次）
@@ -36,7 +38,7 @@ pub struct CoreUpdateResult {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct CoreUpdateProgress {
+pub(crate) struct UpdateProgress {
     phase: &'static str,
     downloaded: u64,
     total: u64,
@@ -52,23 +54,23 @@ struct StagedCore {
 }
 
 #[derive(Deserialize)]
-struct GhAsset {
-    name: String,
-    browser_download_url: String,
-    size: u64,
+pub(crate) struct GhAsset {
+    pub(crate) name: String,
+    pub(crate) browser_download_url: String,
+    pub(crate) size: u64,
     #[serde(default)]
-    digest: Option<String>,
+    pub(crate) digest: Option<String>,
 }
 
 #[derive(Deserialize)]
-struct GhRelease {
-    tag_name: String,
-    prerelease: bool,
+pub(crate) struct GhRelease {
+    pub(crate) tag_name: String,
+    pub(crate) prerelease: bool,
     #[serde(default)]
-    draft: bool,
+    pub(crate) draft: bool,
     #[serde(default)]
-    published_at: Option<String>,
-    assets: Vec<GhAsset>,
+    pub(crate) published_at: Option<String>,
+    pub(crate) assets: Vec<GhAsset>,
 }
 
 fn validate_repo(repo: &str) -> Result<(), String> {
@@ -117,10 +119,16 @@ fn take_staged(staging: &Path, asset_url: &str, asset_size: u64) -> Option<Vec<S
     Some(staged.dlls)
 }
 
-fn emit_progress(app: &tauri::AppHandle, phase: &'static str, downloaded: u64, total: u64) {
+pub(crate) fn emit_progress(
+    app: &tauri::AppHandle,
+    event: &str,
+    phase: &'static str,
+    downloaded: u64,
+    total: u64,
+) {
     let _ = app.emit(
-        "core-update-progress",
-        CoreUpdateProgress {
+        event,
+        UpdateProgress {
             phase,
             downloaded,
             total,
@@ -129,14 +137,14 @@ fn emit_progress(app: &tauri::AppHandle, phase: &'static str, downloaded: u64, t
 }
 
 /// ghproxy 风格镜像：前缀 + 完整原始 URL
-fn apply_mirror(mirror: &Option<String>, url: &str) -> String {
+pub(crate) fn apply_mirror(mirror: &Option<String>, url: &str) -> String {
     match mirror.as_deref().map(str::trim) {
         Some(m) if !m.is_empty() => format!("{}/{}", m.trim_end_matches('/'), url),
         _ => url.to_string(),
     }
 }
 
-async fn github_get(url: &str) -> Result<reqwest::Response, String> {
+pub(crate) async fn github_get(url: &str) -> Result<reqwest::Response, String> {
     let client = super::network::build_client(Some(Duration::from_secs(30)))
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
     let resp = client
@@ -210,8 +218,9 @@ pub async fn check_core_update(repo: String, channel: String) -> Result<CoreUpda
     pick_windows_asset(&release, &suffix)
 }
 
-async fn download_asset(
+pub(crate) async fn download_asset(
     app: &tauri::AppHandle,
+    event: &str,
     url: &str,
     expected_size: u64,
     dest: &Path,
@@ -236,7 +245,7 @@ async fn download_asset(
 
     let mut downloaded: u64 = 0;
     let mut last_emit = Instant::now();
-    emit_progress(app, "download", 0, total);
+    emit_progress(app, event, "download", 0, total);
     while let Some(chunk) = resp
         .chunk()
         .await
@@ -247,14 +256,14 @@ async fn download_asset(
             .map_err(|e| format!("写入临时文件失败: {}", e))?;
         downloaded += chunk.len() as u64;
         if last_emit.elapsed() >= Duration::from_millis(200) {
-            emit_progress(app, "download", downloaded, total);
+            emit_progress(app, event, "download", downloaded, total);
             last_emit = Instant::now();
         }
     }
     file.flush()
         .await
         .map_err(|e| format!("写入临时文件失败: {}", e))?;
-    emit_progress(app, "download", downloaded, total);
+    emit_progress(app, event, "download", downloaded, total);
 
     if expected_size > 0 && downloaded != expected_size {
         return Err(format!(
@@ -322,9 +331,12 @@ async fn probe_core_version(exe: &Path) -> Result<String, String> {
 }
 
 /// 服务刚停止时文件锁释放有延迟，重试几次（同 helper::deploy_helper）
-fn retry_io<F: FnMut() -> std::io::Result<()>>(mut f: F) -> std::io::Result<()> {
+pub(crate) fn retry_io<F: FnMut() -> std::io::Result<()>>(
+    attempts: u32,
+    mut f: F,
+) -> std::io::Result<()> {
     let mut last_err = None;
-    for attempt in 0..3 {
+    for attempt in 0..attempts.max(1) {
         if attempt > 0 {
             std::thread::sleep(Duration::from_millis(500));
         }
@@ -363,20 +375,20 @@ fn swap_and_restart(
     };
 
     if was_running {
-        emit_progress(app, "replace", 0, 0);
+        emit_progress(app, CORE_PROGRESS_EVENT, "replace", 0, 0);
         if let Err(e) = scm::stop_service(service_name) {
             cleanup_new();
             return Err(format!("停止服务失败: {}", e));
         }
     } else {
-        emit_progress(app, "replace", 0, 0);
+        emit_progress(app, CORE_PROGRESS_EVENT, "replace", 0, 0);
     }
 
     // 备份：旧核心存在才做；只保留一份备份
     let had_old = target.exists();
     if had_old {
         let _ = std::fs::remove_file(&bak_path);
-        if let Err(e) = retry_io(|| std::fs::rename(target, &bak_path)) {
+        if let Err(e) = retry_io(3, || std::fs::rename(target, &bak_path)) {
             cleanup_new();
             if was_running {
                 let _ = scm::start_service(service_name);
@@ -401,9 +413,9 @@ fn swap_and_restart(
     // 失败则回滚 exe，避免 exe 与 dll 版本不一致
     for dll in dlls {
         let dll_dest = target_dir.join(dll);
-        if let Err(e) = retry_io(|| std::fs::copy(staging.join(dll), &dll_dest).map(|_| ())) {
+        if let Err(e) = retry_io(3, || std::fs::copy(staging.join(dll), &dll_dest).map(|_| ())) {
             if had_old {
-                let _ = retry_io(|| {
+                let _ = retry_io(3, || {
                     std::fs::remove_file(target)?;
                     std::fs::rename(&bak_path, target)
                 });
@@ -416,7 +428,7 @@ fn swap_and_restart(
     }
 
     if was_running {
-        emit_progress(app, "restart", 0, 0);
+        emit_progress(app, CORE_PROGRESS_EVENT, "restart", 0, 0);
         let start_result = scm::start_service(service_name).and_then(|_| {
             std::thread::sleep(Duration::from_secs(2));
             match scm::query_service_status(service_name) {
@@ -429,7 +441,7 @@ fn swap_and_restart(
             // 回滚到旧核心（copy 保留 .bak）
             let _ = scm::stop_service(service_name);
             let rollback = if had_old {
-                retry_io(|| std::fs::copy(&bak_path, target).map(|_| ()))
+                retry_io(3, || std::fs::copy(&bak_path, target).map(|_| ()))
                     .map_err(|e| e.to_string())
                     .and_then(|_| scm::start_service(service_name))
             } else {
@@ -468,11 +480,11 @@ pub async fn probe_asset_exe_hash(
 
     let download_url = apply_mirror(&mirror, &asset_url);
     let zip_path = staging.join("core.zip");
-    download_asset(&app, &download_url, asset_size, &zip_path)
+    download_asset(&app, CORE_PROGRESS_EVENT, &download_url, asset_size, &zip_path)
         .await
         .map_err(cleanup)?;
 
-    emit_progress(&app, "extract", 0, 0);
+    emit_progress(&app, CORE_PROGRESS_EVENT, "extract", 0, 0);
     // 解压结果与清单留在 staging：用户确认重新安装时直接取用，不再下载一遍
     let hash = {
         let staging = staging.clone();
@@ -547,11 +559,11 @@ pub async fn perform_core_update(
 
             let download_url = apply_mirror(&mirror, &asset_url);
             let zip_path = staging.join("core.zip");
-            download_asset(&app, &download_url, asset_size, &zip_path)
+            download_asset(&app, CORE_PROGRESS_EVENT, &download_url, asset_size, &zip_path)
                 .await
                 .map_err(cleanup)?;
 
-            emit_progress(&app, "extract", 0, 0);
+            emit_progress(&app, CORE_PROGRESS_EVENT, "extract", 0, 0);
             let staging = staging.clone();
             tokio::task::spawn_blocking(move || extract_core_files(&zip_path, &staging))
                 .await

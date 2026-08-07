@@ -118,6 +118,7 @@ function normalizeConfig(raw: any): AppConfig {
     coreUpdateCustomRepo: typeof raw?.coreUpdateCustomRepo === 'string' ? raw.coreUpdateCustomRepo.trim() : '',
     coreUpdateChannel: raw?.coreUpdateChannel === 'testing' ? 'testing' : 'stable',
     coreUpdateMirror: typeof raw?.coreUpdateMirror === 'string' ? raw.coreUpdateMirror.trim() : '',
+    panelAutoCheckUpdate: typeof raw?.panelAutoCheckUpdate === 'boolean' ? raw.panelAutoCheckUpdate : true,
   }
 }
 

@@ -21,6 +21,7 @@ import { patchConfig, fetchConfig } from '@/api'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import DnsQueryTool from '@/components/settings/DnsQueryTool.vue'
 import CoreUpdateCard from '@/components/settings/CoreUpdateCard.vue'
+import PanelUpdateCard from '@/components/settings/PanelUpdateCard.vue'
 
 const {
   config,
@@ -814,5 +815,7 @@ watch(
     </div>
 
     <CoreUpdateCard />
+
+    <PanelUpdateCard />
   </div>
 </template>
