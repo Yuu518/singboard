@@ -385,6 +385,31 @@ impl IpSet {
             }
         }
     }
+
+    /// True when `[from, to]` shares at least one address with the set.
+    fn overlaps(&self, from: &IpAddr, to: &IpAddr) -> bool {
+        match (from, to) {
+            (IpAddr::V4(a), IpAddr::V4(b)) => {
+                let lo = u32::from_be_bytes(a.octets());
+                let hi = u32::from_be_bytes(b.octets());
+                self.ranges_v4.iter().any(|&(f, t)| lo <= t && hi >= f)
+            }
+            (IpAddr::V6(a), IpAddr::V6(b)) => {
+                let lo = u128::from_be_bytes(a.octets());
+                let hi = u128::from_be_bytes(b.octets());
+                self.ranges_v6.iter().any(|&(f, t)| lo <= t && hi >= f)
+            }
+            _ => false,
+        }
+    }
+
+    fn matches(&self, query: &Query) -> bool {
+        match query {
+            Query::Ip(ip) => self.contains(ip),
+            Query::IpRange(from, to) => self.overlaps(from, to),
+            Query::Domain(_) => false,
+        }
+    }
 }
 
 // ---- rule item type constants ----
@@ -419,14 +444,96 @@ const ITEM_FINAL: u8 = 0xFF;
 enum Query {
     Domain(String),
     Ip(IpAddr),
+    /// Inclusive address range, both bounds of the same family.
+    IpRange(IpAddr, IpAddr),
+}
+
+fn prefix_range_v4(addr: Ipv4Addr, prefix: u32) -> (IpAddr, IpAddr) {
+    let n = u32::from_be_bytes(addr.octets());
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    };
+    let network = n & mask;
+    (
+        IpAddr::V4(Ipv4Addr::from(network)),
+        IpAddr::V4(Ipv4Addr::from(network | !mask)),
+    )
+}
+
+fn prefix_range_v6(addr: Ipv6Addr, prefix: u32) -> (IpAddr, IpAddr) {
+    let n = u128::from_be_bytes(addr.octets());
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u128::MAX << (128 - prefix)
+    };
+    let network = n & mask;
+    (
+        IpAddr::V6(Ipv6Addr::from(network)),
+        IpAddr::V6(Ipv6Addr::from(network | !mask)),
+    )
+}
+
+/// Parse `1.0.1.240/29` or `240e:e1:a800::/36` into its address range.
+fn parse_cidr(s: &str) -> Option<(IpAddr, IpAddr)> {
+    let (addr_str, prefix_str) = s.split_once('/')?;
+    let prefix: u32 = prefix_str.trim().parse().ok()?;
+    match IpAddr::from_str(addr_str.trim()).ok()? {
+        IpAddr::V4(v4) if prefix <= 32 => Some(prefix_range_v4(v4, prefix)),
+        IpAddr::V6(v6) if prefix <= 128 => Some(prefix_range_v6(v6, prefix)),
+        _ => None,
+    }
+}
+
+/// Parse a truncated address as the prefix it implies:
+/// `1.0.1` -> `1.0.1.0/24`, `240e:e1:a800` -> `240e:e1:a800::/48`.
+fn parse_partial_ip(s: &str) -> Option<(IpAddr, IpAddr)> {
+    if s.contains(':') {
+        let body = s.strip_suffix(':').unwrap_or(s);
+        if body.contains("::") {
+            return None;
+        }
+        let groups: Vec<&str> = body.split(':').collect();
+        if groups.len() < 2 || groups.len() >= 8 {
+            return None;
+        }
+        let mut segments = [0u16; 8];
+        for (i, g) in groups.iter().enumerate() {
+            if g.is_empty() || g.len() > 4 || !g.chars().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+            segments[i] = u16::from_str_radix(g, 16).ok()?;
+        }
+        let addr = Ipv6Addr::from(segments);
+        Some(prefix_range_v6(addr, groups.len() as u32 * 16))
+    } else {
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() < 2 || parts.len() >= 4 {
+            return None;
+        }
+        let mut octets = [0u8; 4];
+        for (i, p) in parts.iter().enumerate() {
+            if p.is_empty() || p.len() > 3 || !p.chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            octets[i] = p.parse().ok()?;
+        }
+        let addr = Ipv4Addr::from(octets);
+        Some(prefix_range_v4(addr, parts.len() as u32 * 8))
+    }
 }
 
 fn parse_query(q: &str) -> Query {
+    let q = q.trim();
     if let Ok(ip) = IpAddr::from_str(q) {
-        Query::Ip(ip)
-    } else {
-        Query::Domain(q.to_lowercase())
+        return Query::Ip(ip);
     }
+    if let Some((from, to)) = parse_cidr(q).or_else(|| parse_partial_ip(q)) {
+        return Query::IpRange(from, to);
+    }
+    Query::Domain(q.to_lowercase())
 }
 
 // ---- rule matching ----
@@ -445,7 +552,7 @@ fn match_default_rule<R: Read>(r: &mut R, query: &Query) -> io::Result<bool> {
                 let invert = read_u8(r)? != 0;
                 let result = match query {
                     Query::Domain(_) => domain_seen && domain_matched,
-                    Query::Ip(_) => ip_seen && ip_matched,
+                    Query::Ip(_) | Query::IpRange(..) => ip_seen && ip_matched,
                 };
                 return Ok(if invert { !result } else { result });
             }
@@ -477,11 +584,7 @@ fn match_default_rule<R: Read>(r: &mut R, query: &Query) -> io::Result<bool> {
             }
             ITEM_IP_CIDR => {
                 let set = read_ip_set(r)?;
-                let m = if let Query::Ip(ip) = query {
-                    set.contains(ip)
-                } else {
-                    false
-                };
+                let m = set.matches(query);
                 ip_seen = true;
                 ip_matched = ip_matched || m;
             }
@@ -1181,86 +1284,62 @@ impl AdGuardMatcher {
     }
 }
 
+fn block_end_v4(start: u32, prefix_len: u32) -> u32 {
+    if prefix_len == 0 {
+        u32::MAX
+    } else {
+        start | ((1u32 << (32 - prefix_len)) - 1)
+    }
+}
+
 fn range_to_cidrs_v4(from: u32, to: u32) -> Vec<String> {
     let mut results = Vec::new();
+    if from > to {
+        return results;
+    }
     let mut start = from;
-    while start <= to {
-        let mut prefix_len = 32u32;
-        while prefix_len > 0 {
-            let mask = !((1u64 << (32 - prefix_len + 1)) - 1) as u32;
-            let network = start & mask;
-            let broadcast = network | !mask;
-            if network == start && broadcast <= to {
-                prefix_len -= 1;
-            } else {
-                break;
-            }
+    loop {
+        // Largest block that starts at `start` is bounded by its alignment,
+        // then shrunk until it no longer runs past `to`.
+        let mut prefix_len = 32 - if start == 0 { 32 } else { start.trailing_zeros() };
+        while prefix_len < 32 && block_end_v4(start, prefix_len) > to {
+            prefix_len += 1;
         }
-        prefix_len += if prefix_len < 32 { 1 } else { 0 };
-        // Clamp
-        if prefix_len > 32 {
-            prefix_len = 32;
-        }
-        let mask = if prefix_len == 0 {
-            0
-        } else {
-            !((1u64 << (32 - prefix_len)) - 1) as u32
-        };
-        let broadcast = start | !mask;
-        let ip = Ipv4Addr::from(start);
-        results.push(format!("{}/{}", ip, prefix_len));
-        if broadcast == u32::MAX {
+        results.push(format!("{}/{}", Ipv4Addr::from(start), prefix_len));
+        let end = block_end_v4(start, prefix_len);
+        if end >= to || end == u32::MAX {
             break;
         }
-        start = broadcast + 1;
+        start = end + 1;
     }
     results
 }
 
+fn block_end_v6(start: u128, prefix_len: u32) -> u128 {
+    if prefix_len == 0 {
+        u128::MAX
+    } else {
+        start | ((1u128 << (128 - prefix_len)) - 1)
+    }
+}
+
 fn range_to_cidrs_v6(from: u128, to: u128) -> Vec<String> {
     let mut results = Vec::new();
+    if from > to {
+        return results;
+    }
     let mut start = from;
-    while start <= to {
-        let mut prefix_len = 128u32;
-        while prefix_len > 0 {
-            let shift = 128 - prefix_len + 1;
-            if shift >= 128 {
-                let network = 0u128;
-                let broadcast = u128::MAX;
-                if network == start && broadcast <= to {
-                    prefix_len -= 1;
-                } else {
-                    break;
-                }
-            } else {
-                let mask = !(((1u128) << shift) - 1);
-                let network = start & mask;
-                let broadcast = network | !mask;
-                if network == start && broadcast <= to {
-                    prefix_len -= 1;
-                } else {
-                    break;
-                }
-            }
+    loop {
+        let mut prefix_len = 128 - if start == 0 { 128 } else { start.trailing_zeros() };
+        while prefix_len < 128 && block_end_v6(start, prefix_len) > to {
+            prefix_len += 1;
         }
-        prefix_len += if prefix_len < 128 { 1 } else { 0 };
-        if prefix_len > 128 {
-            prefix_len = 128;
-        }
-        let mask = if prefix_len == 0 {
-            0u128
-        } else if prefix_len >= 128 {
-            u128::MAX
-        } else {
-            !((1u128 << (128 - prefix_len)) - 1)
-        };
-        let broadcast = start | !mask;
-        let ip = Ipv6Addr::from(start);
-        results.push(format!("{}/{}", ip, prefix_len));
-        if broadcast == u128::MAX {
+        results.push(format!("{}/{}", Ipv6Addr::from(start), prefix_len));
+        let end = block_end_v6(start, prefix_len);
+        if end >= to || end == u128::MAX {
             break;
         }
-        start = broadcast + 1;
+        start = end + 1;
     }
     results
 }
@@ -1676,3 +1755,146 @@ pub fn srs_match_provider(
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v4(s: &str) -> u32 {
+        u32::from_be_bytes(Ipv4Addr::from_str(s).unwrap().octets())
+    }
+
+    fn v6(s: &str) -> u128 {
+        u128::from_be_bytes(Ipv6Addr::from_str(s).unwrap().octets())
+    }
+
+    fn range(q: &str) -> (String, String) {
+        match parse_query(q) {
+            Query::IpRange(f, t) => (f.to_string(), t.to_string()),
+            other => panic!(
+                "expected range, got {}",
+                match other {
+                    Query::Domain(d) => format!("domain({})", d),
+                    Query::Ip(ip) => format!("ip({})", ip),
+                    Query::IpRange(..) => unreachable!(),
+                }
+            ),
+        }
+    }
+
+    #[test]
+    fn v4_range_uses_largest_aligned_blocks() {
+        assert_eq!(
+            range_to_cidrs_v4(v4("1.0.1.240"), v4("1.0.1.255")),
+            vec!["1.0.1.240/28"]
+        );
+        assert_eq!(
+            range_to_cidrs_v4(v4("1.0.1.0"), v4("1.0.3.255")),
+            vec!["1.0.1.0/24", "1.0.2.0/23"]
+        );
+        assert_eq!(
+            range_to_cidrs_v4(v4("8.8.8.8"), v4("8.8.8.8")),
+            vec!["8.8.8.8/32"]
+        );
+        assert_eq!(
+            range_to_cidrs_v4(v4("0.0.0.0"), v4("0.0.0.1")),
+            vec!["0.0.0.0/31"]
+        );
+        assert_eq!(
+            range_to_cidrs_v4(0, u32::MAX),
+            vec!["0.0.0.0/0"]
+        );
+    }
+
+    #[test]
+    fn v6_range_uses_largest_aligned_blocks() {
+        assert_eq!(
+            range_to_cidrs_v6(v6("240e:e1:a800::"), v6("240e:e1:a8ff:ffff:ffff:ffff:ffff:ffff")),
+            vec!["240e:e1:a800::/40"]
+        );
+        assert_eq!(
+            range_to_cidrs_v6(v6("2001:250::"), v6("2001:256:ffff:ffff:ffff:ffff:ffff:ffff")),
+            vec!["2001:250::/30", "2001:254::/31", "2001:256::/32"]
+        );
+        assert_eq!(range_to_cidrs_v6(0, u128::MAX), vec!["::/0"]);
+    }
+
+    #[test]
+    fn enumerated_cidrs_cover_the_original_range() {
+        let (from, to) = (v4("1.0.1.13"), v4("1.0.7.200"));
+        let mut cursor = from;
+        for cidr in range_to_cidrs_v4(from, to) {
+            let (net, plen) = cidr.split_once('/').unwrap();
+            let net = v4(net);
+            let plen: u32 = plen.parse().unwrap();
+            assert_eq!(net, cursor, "block {} does not continue the range", cidr);
+            cursor = block_end_v4(net, plen).wrapping_add(1);
+        }
+        assert_eq!(cursor, to + 1, "blocks do not cover the whole range");
+    }
+
+    #[test]
+    fn query_accepts_plain_addresses() {
+        assert!(matches!(parse_query("1.0.1.240"), Query::Ip(_)));
+        assert!(matches!(parse_query("240e:e1:a800::1"), Query::Ip(_)));
+        assert!(matches!(parse_query("example.com"), Query::Domain(_)));
+        assert!(matches!(parse_query("163.com"), Query::Domain(_)));
+    }
+
+    #[test]
+    fn query_accepts_cidr_notation() {
+        assert_eq!(
+            range("1.0.1.240/29"),
+            ("1.0.1.240".into(), "1.0.1.247".into())
+        );
+        // Host bits outside the prefix are masked off.
+        assert_eq!(range("1.0.1.245/29"), ("1.0.1.240".into(), "1.0.1.247".into()));
+        assert_eq!(range("0.0.0.0/0"), ("0.0.0.0".into(), "255.255.255.255".into()));
+        assert_eq!(
+            range("240e:e1:a800::/40"),
+            ("240e:e1:a800::".into(), "240e:e1:a8ff:ffff:ffff:ffff:ffff:ffff".into())
+        );
+    }
+
+    #[test]
+    fn query_accepts_truncated_addresses() {
+        assert_eq!(
+            range("240e:e1:a800"),
+            ("240e:e1:a800::".into(), "240e:e1:a800:ffff:ffff:ffff:ffff:ffff".into())
+        );
+        assert_eq!(
+            range("240e:e1:a800:"),
+            ("240e:e1:a800::".into(), "240e:e1:a800:ffff:ffff:ffff:ffff:ffff".into())
+        );
+        assert_eq!(range("1.0.1"), ("1.0.1.0".into(), "1.0.1.255".into()));
+        assert_eq!(range("1.0"), ("1.0.0.0".into(), "1.0.255.255".into()));
+    }
+
+    #[test]
+    fn query_rejects_malformed_ip_like_input() {
+        for bad in ["1.0.1.256", "1.0.1.240/33", "240e::e1::a800", "240e:zzzz", "1.0.1.240/x"] {
+            assert!(
+                matches!(parse_query(bad), Query::Domain(_)),
+                "{} should fall back to a domain query",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn ip_set_overlap() {
+        let set = IpSet {
+            ranges_v4: vec![(v4("1.0.1.0"), v4("1.0.1.255"))],
+            ranges_v6: vec![(v6("240e::"), v6("240e:ffff::"))],
+        };
+        assert!(set.matches(&parse_query("1.0.1.240/29")));
+        assert!(set.matches(&parse_query("1.0.1.7")));
+        assert!(set.matches(&parse_query("1.0.0.0/8")));
+        assert!(!set.matches(&parse_query("1.0.2.0/24")));
+        assert!(set.matches(&parse_query("240e:0:1::")));
+        // An IPv6 query must never be answered from the IPv4 ranges.
+        assert!(!set.matches(&parse_query("2001:250::")));
+        assert!(!set.matches(&parse_query("example.com")));
+    }
+}
+

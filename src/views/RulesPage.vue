@@ -161,16 +161,111 @@ let detailSearchTimer: ReturnType<typeof setTimeout> | null = null
 const filteredDetailRules = ref<Array<{ type: string; value: string }>>([])
 let filterTimer: ReturnType<typeof setTimeout> | null = null
 
-function parseIPv4(ip: string): number | null {
+// 地址区间（闭区间），v 标识地址族
+type IpRange = { v: 4 | 6; from: bigint; to: bigint }
+
+function parseIPv4(ip: string): bigint | null {
   const parts = ip.split('.')
   if (parts.length !== 4) return null
-  let n = 0
+  let n = 0n
   for (const p of parts) {
+    if (!/^\d{1,3}$/.test(p)) return null
     const v = Number(p)
-    if (!Number.isInteger(v) || v < 0 || v > 255) return null
-    n = (n << 8) | v
+    if (v > 255) return null
+    n = (n << 8n) | BigInt(v)
   }
-  return n >>> 0
+  return n
+}
+
+function parseIPv6(ip: string): bigint | null {
+  if (!ip.includes(':')) return null
+  const double = ip.indexOf('::')
+  if (double !== ip.lastIndexOf('::')) return null
+  const headText = double < 0 ? ip : ip.slice(0, double)
+  const tailText = double < 0 ? '' : ip.slice(double + 2)
+
+  const expand = (text: string): bigint[] | null => {
+    if (!text) return []
+    const out: bigint[] = []
+    const groups = text.split(':')
+    for (let i = 0; i < groups.length; i++) {
+      const g = groups[i]
+      if (g.includes('.')) {
+        // 内嵌 IPv4 只能出现在末尾
+        if (i !== groups.length - 1) return null
+        const v4 = parseIPv4(g)
+        if (v4 === null) return null
+        out.push(v4 >> 16n, v4 & 0xffffn)
+        continue
+      }
+      if (!/^[0-9a-f]{1,4}$/i.test(g)) return null
+      out.push(BigInt('0x' + g))
+    }
+    return out
+  }
+
+  const head = expand(headText)
+  const tail = expand(tailText)
+  if (!head || !tail) return null
+  const total = head.length + tail.length
+  if (double < 0 ? total !== 8 : total > 7) return null
+  const groups = [...head, ...Array<bigint>(8 - total).fill(0n), ...tail]
+  return groups.reduce((acc, g) => (acc << 16n) | g, 0n)
+}
+
+function maskRange(n: bigint, bits: 32 | 128, prefix: number): IpRange {
+  const host = BigInt(bits - prefix)
+  const from = (n >> host) << host
+  return { v: bits === 32 ? 4 : 6, from, to: from | ((1n << host) - 1n) }
+}
+
+// `240e:e1:a800` -> 240e:e1:a800::/48，`1.0.1` -> 1.0.1.0/24
+function parsePartialIp(text: string): IpRange | null {
+  if (text.includes(':')) {
+    const body = text.endsWith(':') && !text.endsWith('::') ? text.slice(0, -1) : text
+    if (body.includes('::')) return null
+    const groups = body.split(':')
+    if (groups.length < 2 || groups.length >= 8) return null
+    let n = 0n
+    for (const g of groups) {
+      if (!/^[0-9a-f]{1,4}$/i.test(g)) return null
+      n = (n << 16n) | BigInt('0x' + g)
+    }
+    return maskRange(n << BigInt(16 * (8 - groups.length)), 128, 16 * groups.length)
+  }
+  const parts = text.split('.')
+  if (parts.length < 2 || parts.length >= 4) return null
+  let n = 0n
+  for (const p of parts) {
+    if (!/^\d{1,3}$/.test(p)) return null
+    const v = Number(p)
+    if (v > 255) return null
+    n = (n << 8n) | BigInt(v)
+  }
+  return maskRange(n << BigInt(8 * (4 - parts.length)), 32, 8 * parts.length)
+}
+
+// 支持单个地址、CIDR，以及截断的前缀写法
+function parseIpRange(text: string): IpRange | null {
+  const s = text.trim()
+  if (!s) return null
+  const slash = s.indexOf('/')
+  if (slash >= 0) {
+    const addr = s.slice(0, slash).trim()
+    const prefixText = s.slice(slash + 1).trim()
+    if (!/^\d{1,3}$/.test(prefixText)) return null
+    const prefix = Number(prefixText)
+    const v4 = parseIPv4(addr)
+    if (v4 !== null) return prefix <= 32 ? maskRange(v4, 32, prefix) : null
+    const v6 = parseIPv6(addr)
+    if (v6 !== null) return prefix <= 128 ? maskRange(v6, 128, prefix) : null
+    return null
+  }
+  const v4 = parseIPv4(s)
+  if (v4 !== null) return maskRange(v4, 32, 32)
+  const v6 = parseIPv6(s)
+  if (v6 !== null) return maskRange(v6, 128, 128)
+  return parsePartialIp(s)
 }
 
 function runDetailFilter() {
@@ -179,22 +274,18 @@ function runDetailFilter() {
     filteredDetailRules.value = detailRules.value
     return
   }
-  const qIPv4 = parseIPv4(q)
+  const qRange = parseIpRange(q)
   filteredDetailRules.value = detailRules.value.filter((r) => {
     // 文本包含
     if (r.value.toLowerCase().includes(q) || r.type.toLowerCase().includes(q)) return true
-    // IP CIDR 语义匹配
-    if (qIPv4 !== null && (r.type === 'ip_cidr' || r.type === 'source_ip_cidr')) {
-      const [network, prefixStr] = r.value.split('/')
-      if (!prefixStr) return false
-      const prefix = Number(prefixStr)
-      const netNum = parseIPv4(network)
-      if (netNum === null || prefix < 0 || prefix > 32) return false
-      const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0
-      return (qIPv4 & mask) === (netNum & mask)
+    // IP CIDR 语义匹配：查询区间与规则区间有交集即命中
+    if (qRange && (r.type === 'ip_cidr' || r.type === 'source_ip_cidr')) {
+      const ruleRange = parseIpRange(r.value)
+      if (!ruleRange || ruleRange.v !== qRange.v) return false
+      return qRange.from <= ruleRange.to && qRange.to >= ruleRange.from
     }
     // 域名语义匹配
-    if (qIPv4 === null) {
+    if (!qRange) {
       const val = r.value.toLowerCase()
       if (r.type === 'domain') return q === val
       if (r.type === 'domain_suffix') return q.endsWith(val) || q.endsWith('.' + val.replace(/^\./, ''))
