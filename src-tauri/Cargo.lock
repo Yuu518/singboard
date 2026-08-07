@@ -3751,7 +3751,7 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "singboard"
-version = "3.2.4"
+version = "3.2.5"
 dependencies = [
  "flate2",
  "hickory-resolver",
