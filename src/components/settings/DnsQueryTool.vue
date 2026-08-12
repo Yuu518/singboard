@@ -191,15 +191,29 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="rootEl" class="bg-base-200 rounded-lg p-4 space-y-3" @pointerdown="handleRootPointerDown">
-    <h2 class="font-semibold text-sm">DNS 查询</h2>
+  <div ref="rootEl" class="settings-card settings-dns-card" @pointerdown="handleRootPointerDown">
+    <header class="settings-tool-header">
+      <div>
+        <div class="settings-tool-title-row">
+          <h3>DNS 查询</h3>
+          <span>即时工具</span>
+        </div>
+        <p>通过指定解析器查询记录，并查看结果来源与 IP 地理信息。</p>
+      </div>
+      <svg class="settings-tool-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="8" />
+        <path d="M4 12h16M12 4a13 13 0 0 1 0 16M12 4a13 13 0 0 0 0 16" />
+      </svg>
+    </header>
 
-    <div class="grid grid-cols-[minmax(11rem,1fr)_6rem_minmax(10rem,0.85fr)_auto] gap-2">
-      <div class="relative" data-dns-history-area>
+    <div class="settings-dns-grid">
+      <div class="settings-dns-field settings-dns-domain" data-dns-history-area>
+        <label for="settings-dns-domain">域名</label>
         <input
+          id="settings-dns-domain"
           v-model="domain"
           type="text"
-          class="input input-sm input-bordered w-full"
+          class="input input-sm input-bordered w-full settings-mono"
           placeholder="www.google.com"
           @focus="historyOpen = history.length > 0"
           @keyup.enter="handleQuery"
@@ -228,11 +242,13 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="relative" data-dns-type-area>
+      <div class="settings-dns-field settings-dns-type" data-dns-type-area>
+        <label for="settings-dns-type">记录</label>
         <input
+          id="settings-dns-type"
           v-model="recordType"
           type="text"
-          class="input input-sm input-bordered w-full pr-8 uppercase"
+          class="input input-sm input-bordered w-full pr-8 uppercase settings-mono"
           placeholder="A"
           @focus="closeHistory"
           @input="recordType = recordType.toUpperCase()"
@@ -241,8 +257,11 @@ onBeforeUnmount(() => {
         />
         <button
           type="button"
-          class="absolute right-0 top-0 flex h-full w-8 items-center justify-center text-base-content/70 focus:outline-none"
+          class="settings-dns-menu-button absolute right-0 flex w-8 items-center justify-center text-base-content/70 focus:outline-none"
           title="选择记录类型"
+          aria-label="选择记录类型"
+          aria-haspopup="listbox"
+          :aria-expanded="typeMenuOpen"
           @click="toggleTypeMenu"
         >
           <svg class="w-3.5 h-3.5" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
@@ -252,24 +271,30 @@ onBeforeUnmount(() => {
         <div
           v-if="typeMenuOpen"
           class="absolute z-20 mt-1 w-full rounded-md bg-base-100 border border-base-300 shadow-lg py-1"
+          role="listbox"
+          aria-label="记录类型"
         >
           <button
             v-for="type in recordTypes"
             :key="type"
             type="button"
+            role="option"
+            :aria-selected="recordType === type"
             class="block w-full px-3 py-2 text-left text-sm hover:bg-base-200"
-            @mousedown.prevent="applyRecordType(type)"
+            @click="applyRecordType(type)"
           >
             {{ type }}
           </button>
         </div>
       </div>
 
-      <div class="relative" data-dns-menu-area>
+      <div class="settings-dns-field settings-dns-server" data-dns-menu-area>
+        <label for="settings-dns-server">解析器</label>
         <input
+          id="settings-dns-server"
           v-model="server"
           type="text"
-          class="input input-sm input-bordered w-full pr-9"
+          class="input input-sm input-bordered w-full pr-9 settings-mono"
           placeholder="本机 DNS"
           @focus="closeHistory"
           @keyup.enter="handleQuery"
@@ -277,8 +302,11 @@ onBeforeUnmount(() => {
         />
         <button
           type="button"
-          class="absolute right-0 top-0 flex h-full w-9 items-center justify-center text-base-content/70 focus:outline-none"
+          class="settings-dns-menu-button absolute right-0 flex w-9 items-center justify-center text-base-content/70 focus:outline-none"
           title="选择 DNS"
+          aria-label="选择 DNS 解析器"
+          aria-haspopup="listbox"
+          :aria-expanded="dnsMenuOpen"
           @click="toggleDnsMenu"
         >
           <svg class="w-3.5 h-3.5" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
@@ -288,25 +316,29 @@ onBeforeUnmount(() => {
         <div
           v-if="dnsMenuOpen"
           class="absolute z-20 mt-1 w-full rounded-md bg-base-100 border border-base-300 shadow-lg py-1"
+          role="listbox"
+          aria-label="DNS 解析器"
         >
           <button
             v-for="preset in presetServers"
             :key="preset.label"
             type="button"
+            role="option"
+            :aria-selected="server === serverLabelFromValue(preset.value)"
             class="block w-full px-3 py-2 text-left text-sm hover:bg-base-200"
-            @mousedown.prevent="applyDnsPreset(preset.value)"
+            @click="applyDnsPreset(preset.value)"
           >
             <span class="block">{{ preset.label }}</span>
             <span v-if="preset.value" class="block text-xs text-base-content/50">{{ preset.value }}</span>
           </button>
         </div>
       </div>
-      <button class="btn btn-sm btn-primary" :class="{ loading }" :disabled="loading" @click="handleQuery">
+      <button class="btn btn-sm btn-route settings-dns-submit" :class="{ loading }" :disabled="loading" @click="handleQuery">
         DNS 查询
       </button>
     </div>
 
-    <div v-if="result" class="rounded-md bg-base-100 border border-base-300 overflow-hidden">
+    <div v-if="result" class="settings-dns-results">
       <div
         v-if="records.length === 0"
         class="px-3 py-6 text-center text-sm text-base-content/50"
@@ -316,7 +348,7 @@ onBeforeUnmount(() => {
       <div
         v-for="item in records"
         :key="item.name + item.record_type + item.value"
-        class="flex items-start gap-3 px-3 py-2.5 border-b border-base-300 last:border-b-0"
+        class="settings-dns-record"
       >
         <div class="badge badge-sm badge-ghost shrink-0 mt-0.5">{{ item.record_type }}</div>
         <div class="min-w-0 flex-1">
@@ -326,7 +358,7 @@ onBeforeUnmount(() => {
             {{ [item.geo.country, item.geo.asnOrganization || item.geo.organization].filter(Boolean).join(' / ') }}
           </div>
         </div>
-        <div class="font-mono text-sm text-right break-all max-w-[45%]">{{ item.value }}</div>
+        <div class="settings-dns-value settings-mono">{{ item.value }}</div>
       </div>
       <div class="px-3 py-2 text-xs text-base-content/50 border-t border-base-300">
         {{ sourceLabel }}

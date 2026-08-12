@@ -216,76 +216,86 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="bg-base-200 rounded-lg p-4 space-y-3">
-    <h2 class="font-semibold text-sm">核心更新</h2>
+  <div class="settings-card settings-update-card">
+    <header class="settings-update-header">
+      <span class="settings-update-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M8 3h8l4 4v10l-4 4H8l-4-4V7l4-4Z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      </span>
+      <div>
+        <h3>sing-box 核心</h3>
+        <p>选择上游来源和版本通道，检查或替换核心。</p>
+      </div>
+      <span class="settings-update-version settings-mono">{{ singboxVersion || '未检测' }}</span>
+    </header>
 
-    <div class="flex gap-2">
-      <div class="form-control flex-1">
-        <label class="label"><span class="label-text text-xs">更新源</span></label>
+    <div class="settings-update-body">
+      <div class="settings-update-source-grid">
+        <label class="settings-field">
+          <span>更新源</span>
         <select v-model="config.coreUpdateSource" class="select select-sm select-bordered">
           <option value="official">官方核心 (SagerNet/sing-box)</option>
           <option value="ref1nd">reF1nd 核心</option>
           <option value="custom">自定义仓库</option>
         </select>
-      </div>
-      <div class="form-control w-28 shrink-0">
-        <label class="label"><span class="label-text text-xs">版本通道</span></label>
+        </label>
+        <label class="settings-field">
+          <span>版本通道</span>
         <select v-model="config.coreUpdateChannel" class="select select-sm select-bordered">
           <option value="stable">稳定版</option>
           <option value="testing">测试版</option>
         </select>
+        </label>
       </div>
-    </div>
 
-    <div v-if="config.coreUpdateSource === 'custom'" class="form-control">
-      <label class="label"><span class="label-text text-xs">GitHub 仓库</span></label>
-      <input
-        v-model="config.coreUpdateCustomRepo"
-        type="text"
-        class="input input-sm input-bordered"
-        placeholder="owner/repo"
-      />
-    </div>
+      <label v-if="config.coreUpdateSource === 'custom'" class="settings-field">
+        <span>GitHub 仓库</span>
+        <input
+          v-model="config.coreUpdateCustomRepo"
+          type="text"
+          class="input input-sm input-bordered settings-mono"
+          placeholder="owner/repo"
+        />
+      </label>
 
-    <div class="form-control">
-      <label class="label"><span class="label-text text-xs">下载镜像前缀（可选）</span></label>
-      <input
-        v-model="config.coreUpdateMirror"
-        type="text"
-        class="input input-sm input-bordered"
-        placeholder="https://ghproxy.com/（留空直连，仅用于下载）"
-      />
-    </div>
+      <label class="settings-field">
+        <span>下载镜像前缀 <small>可选</small></span>
+        <input
+          v-model="config.coreUpdateMirror"
+          type="text"
+          class="input input-sm input-bordered settings-mono"
+          placeholder="https://ghproxy.com/（留空直连，仅用于下载）"
+        />
+      </label>
 
-    <div class="flex items-center gap-2 text-xs text-base-content/70">
-      <span>当前版本: {{ singboxVersion || '未检测到' }}</span>
-      <template v-if="latest">
-        <span>→</span>
-        <span>最新版本: {{ latestDisplay }}</span>
-        <span v-if="latest.prerelease" class="badge badge-warning badge-xs">预发布</span>
-      </template>
-    </div>
+      <div class="settings-update-footer">
+        <div class="settings-update-status">
+          <span v-if="latest">可用版本 <strong class="settings-mono">{{ latestDisplay }}</strong></span>
+          <span v-else>尚未检查上游版本</span>
+          <span v-if="latest?.prerelease" class="badge badge-warning badge-xs">预发布</span>
+        </div>
+        <button
+          class="btn btn-sm btn-route"
+          :class="{ loading: checking }"
+          :disabled="checking || updating"
+          @click="handleCheck"
+        >
+          检查更新
+        </button>
+      </div>
 
-    <div class="flex items-center gap-2">
-      <button
-        class="btn btn-sm btn-primary"
-        :class="{ loading: checking }"
-        :disabled="checking || updating"
-        @click="handleCheck"
-      >
-        检查更新
-      </button>
-    </div>
-
-    <div v-if="updating || verifying" class="space-y-1">
-      <div class="text-xs text-base-content/70">{{ phaseText }}</div>
-      <progress
-        v-if="progress?.phase === 'download' && progress.total > 0"
-        class="progress progress-primary w-full"
-        :value="progress.downloaded"
-        :max="progress.total"
-      />
-      <progress v-else class="progress progress-primary w-full" />
+      <div v-if="updating || verifying" class="settings-update-progress">
+        <div>{{ phaseText }}</div>
+        <progress
+          v-if="progress?.phase === 'download' && progress.total > 0"
+          class="progress progress-primary w-full"
+          :value="progress.downloaded"
+          :max="progress.total"
+        />
+        <progress v-else class="progress progress-primary w-full" />
+      </div>
     </div>
 
     <ConfirmDialog ref="dialogRef" />

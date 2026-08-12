@@ -12,38 +12,45 @@ const latestDisplay = computed(() =>
 </script>
 
 <template>
-  <div class="bg-base-200 rounded-lg p-4 space-y-3">
-    <h2 class="font-semibold text-sm">面板更新</h2>
-
-    <div class="form-control">
-      <div class="label justify-start gap-2">
-        <input
-          type="checkbox"
-          class="toggle toggle-sm toggle-primary"
-          v-model="config.panelAutoCheckUpdate"
-        />
-        <span class="label-text text-xs">启动时自动检查更新</span>
+  <div class="settings-card settings-update-card settings-panel-update-card">
+    <header class="settings-update-header">
+      <span class="settings-update-mark settings-update-mark-panel" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <rect x="4" y="4" width="16" height="13" rx="2" />
+          <path d="M9 21h6m-3-4v4M8 9h8m-8 4h5" />
+        </svg>
+      </span>
+      <div>
+        <h3>singboard 面板</h3>
+        <p>获取界面与桌面集成的最新版本。</p>
       </div>
-    </div>
+      <span class="settings-update-version settings-mono">{{ currentVersion || '未知' }}</span>
+    </header>
 
-    <div class="flex items-center gap-2 text-xs text-base-content/70">
-      <span>当前版本: {{ currentVersion || '未知' }}</span>
-      <template v-if="latestDisplay">
-        <span>→</span>
-        <span>最新版本: {{ latestDisplay }}</span>
-      </template>
-      <span v-else-if="latest?.outOfSync" class="badge badge-warning badge-xs">与上游不一致</span>
-    </div>
+    <div class="settings-update-body settings-panel-update-body">
+      <label class="settings-toggle-row settings-update-toggle">
+        <span class="settings-row-copy">
+          <strong>启动时自动检查</strong>
+          <span>打开面板后静默检查是否有新版本。</span>
+        </span>
+        <input v-model="config.panelAutoCheckUpdate" type="checkbox" class="toggle toggle-sm toggle-primary" />
+      </label>
 
-    <div class="flex items-center gap-2">
-      <button
-        class="btn btn-sm btn-primary"
-        :class="{ loading: checking }"
-        :disabled="checking || updating"
-        @click="check(false)"
-      >
-        检查更新
-      </button>
+      <div class="settings-update-footer">
+        <div class="settings-update-status">
+          <span v-if="latestDisplay">可用版本 <strong class="settings-mono">{{ latestDisplay }}</strong></span>
+          <span v-else-if="latest?.outOfSync" class="badge badge-warning badge-sm">与上游不一致</span>
+          <span v-else>尚未检查上游版本</span>
+        </div>
+        <button
+          class="btn btn-sm btn-route"
+          :class="{ loading: checking }"
+          :disabled="checking || updating"
+          @click="check(false)"
+        >
+          检查更新
+        </button>
+      </div>
     </div>
   </div>
 </template>
