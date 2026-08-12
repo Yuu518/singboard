@@ -19,6 +19,7 @@ import { getAutoLaunch, setAutoLaunch } from '@/bridge/app'
 import { open } from '@tauri-apps/plugin-dialog'
 import { patchConfig, fetchConfig } from '@/api'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import OverflowingText from '@/components/common/OverflowingText.vue'
 import DnsQueryTool from '@/components/settings/DnsQueryTool.vue'
 import CoreUpdateCard from '@/components/settings/CoreUpdateCard.vue'
 import PanelUpdateCard from '@/components/settings/PanelUpdateCard.vue'
@@ -514,7 +515,9 @@ watch(
       </div>
       <div class="settings-status-fact">
         <span>核心版本</span>
-        <strong class="settings-mono">{{ singboxVersion || '未检测' }}</strong>
+        <strong class="settings-mono settings-status-version">
+          <OverflowingText :text="singboxVersion || '未检测'" />
+        </strong>
       </div>
       <div class="settings-status-fact">
         <span>控制端点</span>

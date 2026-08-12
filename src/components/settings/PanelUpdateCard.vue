@@ -7,7 +7,7 @@ const { config } = useConfigStore()
 const { currentVersion, latest, checking, updating, check } = usePanelUpdateStore()
 
 const latestDisplay = computed(() =>
-  latest.value?.hasUpdate ? latest.value.latestVersion : '',
+  latest.value?.latestVersion ?? '',
 )
 </script>
 
@@ -37,18 +37,22 @@ const latestDisplay = computed(() =>
       </label>
 
       <div class="settings-update-footer">
-        <div class="settings-update-status">
-          <span v-if="latestDisplay">可用版本 <strong class="settings-mono">{{ latestDisplay }}</strong></span>
+        <div class="settings-update-status" role="status" aria-live="polite" aria-atomic="true">
+          <span v-if="checking">正在检查上游版本…</span>
+          <span v-else-if="latest?.hasUpdate">可用版本 <strong class="settings-mono">{{ latestDisplay }}</strong></span>
           <span v-else-if="latest?.outOfSync" class="badge badge-warning badge-sm">与上游不一致</span>
+          <span v-else-if="latest">已是最新版本 <strong class="settings-mono">{{ latestDisplay }}</strong></span>
           <span v-else>尚未检查上游版本</span>
         </div>
         <button
+          type="button"
           class="btn btn-sm btn-route"
-          :class="{ loading: checking }"
           :disabled="checking || updating"
+          :aria-busy="checking"
           @click="check(false)"
         >
-          检查更新
+          <span v-if="checking" class="loading loading-spinner loading-xs settings-update-spinner" aria-hidden="true"></span>
+          <span>{{ checking ? '检查中' : '检查更新' }}</span>
         </button>
       </div>
     </div>

@@ -177,6 +177,13 @@
   white-space: nowrap;
 }
 
+.settings-status-fact .settings-status-version {
+  display: block;
+  min-width: 0;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .settings-status-fact + .settings-status-fact {
   border-left: 1px solid oklch(var(--b3));
 }
@@ -1039,6 +1046,12 @@
 .settings-update-status strong {
   color: oklch(var(--bc));
   font-weight: 650;
+}
+
+.settings-update-spinner {
+  flex: none;
+  box-shadow: none;
+  filter: none;
 }
 
 .settings-update-progress {

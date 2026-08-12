@@ -45,6 +45,7 @@ const checking = ref(false)
 const verifying = ref(false)
 const updating = ref(false)
 const latest = ref<CoreUpdateInfo | null>(null)
+const outOfSync = ref(false)
 const progress = ref<CoreUpdateProgress | null>(null)
 
 const repo = computed(() =>
@@ -69,7 +70,10 @@ const hasUpdate = computed(() =>
 // 换源/换通道后旧的检查结果失效（只清除，不自动重新检查）
 watch(
   () => [config.value.coreUpdateSource, config.value.coreUpdateCustomRepo, config.value.coreUpdateChannel],
-  () => { latest.value = null },
+  () => {
+    latest.value = null
+    outOfSync.value = false
+  },
 )
 
 const phaseText = computed(() => {
@@ -134,23 +138,26 @@ async function handleCheck() {
       checkCoreUpdate(repo.value, config.value.coreUpdateChannel),
       detectVersion(),
     ])
+    const checkedVersion = info.version.replace(/^v/, '')
+    const updateAvailable = checkedVersion !== currentVersionNumber.value
+    const checkedOutOfSync = updateAvailable ? false : await isLocalOutOfSync(info)
     latest.value = info
-    const outOfSync = hasUpdate.value ? false : await isLocalOutOfSync(info)
-    if (!hasUpdate.value && !outOfSync) {
-      pushToast({ message: `当前已是最新版本（${latestDisplay.value}）`, type: 'info' })
+    outOfSync.value = checkedOutOfSync
+    if (!updateAvailable && !checkedOutOfSync) {
+      pushToast({ message: `当前已是最新版本（${checkedVersion}）`, type: 'info' })
       return
     }
     const channelLabel = config.value.coreUpdateChannel === 'testing' ? '测试版' : '稳定版'
     const publishedAt = latest.value.publishedAt
       ? new Date(latest.value.publishedAt).toLocaleString()
       : '未知'
-    const message = outOfSync
+    const message = outOfSync.value
       ? `当前版本：${singboxVersion.value || '未检测到'}\n最新版本：${latest.value.version}（${channelLabel}）\n发布时间：${publishedAt}\n\n版本号相同，但本地核心与上游最新资产不一致（可能上游重新构建或本地被手动替换）。\n重新安装将覆盖本地核心，自动停止并重启核心服务，是否继续？`
       : `当前版本：${singboxVersion.value || '未检测到'}\n最新版本：${latest.value.version}（${channelLabel}）\n发布时间：${publishedAt}\n\n更新将自动停止并重启核心服务，是否立即更新？`
     const confirmed = await dialogRef.value?.show({
-      title: outOfSync ? '本地核心与上游不一致' : '发现新核心版本',
+      title: outOfSync.value ? '本地核心与上游不一致' : '发现新核心版本',
       message,
-      confirmText: outOfSync ? '重新安装' : '立即更新',
+      confirmText: outOfSync.value ? '重新安装' : '立即更新',
       cancelText: '取消',
     })
     if (confirmed) {
@@ -185,6 +192,7 @@ async function handleUpdate() {
       type: 'info',
     })
     latest.value = null
+    outOfSync.value = false
     // 安装后本地 exe 即该资产内的 exe，直接记录哈希作为校验缓存
     try {
       if (assetDigest) {
@@ -271,18 +279,24 @@ onUnmounted(() => {
       </label>
 
       <div class="settings-update-footer">
-        <div class="settings-update-status">
-          <span v-if="latest">可用版本 <strong class="settings-mono">{{ latestDisplay }}</strong></span>
+        <div class="settings-update-status" role="status" aria-live="polite" aria-atomic="true">
+          <span v-if="verifying">正在校验上游版本…</span>
+          <span v-else-if="checking">正在检查上游版本…</span>
+          <span v-else-if="hasUpdate">可用版本 <strong class="settings-mono">{{ latestDisplay }}</strong></span>
+          <span v-else-if="outOfSync" class="badge badge-warning badge-sm">与上游不一致</span>
+          <span v-else-if="latest">已是最新版本 <strong class="settings-mono">{{ latestDisplay }}</strong></span>
           <span v-else>尚未检查上游版本</span>
           <span v-if="latest?.prerelease" class="badge badge-warning badge-xs">预发布</span>
         </div>
         <button
+          type="button"
           class="btn btn-sm btn-route"
-          :class="{ loading: checking }"
           :disabled="checking || updating"
+          :aria-busy="checking"
           @click="handleCheck"
         >
-          检查更新
+          <span v-if="checking" class="loading loading-spinner loading-xs settings-update-spinner" aria-hidden="true"></span>
+          <span>{{ checking ? '检查中' : '检查更新' }}</span>
         </button>
       </div>
 

@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "test": "vitest run && pnpm test:browser",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -31,12 +33,18 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.2.0",
     "@vitejs/plugin-vue": "^5.2.1",
+    "@vitest/browser": "^3.2.7",
+    "@vue/test-utils": "^2.4.11",
     "autoprefixer": "^10.4.20",
     "daisyui": "^4.12.22",
+    "happy-dom": "^20.11.2",
+    "playwright": "^1.62.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.7.2",
     "vite": "^6.0.0",
+    "vitest": "^3.2.7",
+    "vitest-browser-vue": "^0.1.0",
     "vue-tsc": "^2.2.0"
   }
 }
