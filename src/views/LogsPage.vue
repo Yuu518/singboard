@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, nextTick, watch } from 'vue'
+import { ref, nextTick, watch } from 'vue'
 import { useLogsStore } from '@/stores/logs'
 
 const {
@@ -7,7 +7,6 @@ const {
   logLevel,
   paused,
   filterText,
-  start,
   clear,
   changeLevel,
 } = useLogsStore()
@@ -44,10 +43,6 @@ function handleScroll() {
   const { scrollTop, scrollHeight, clientHeight } = logContainer.value
   autoScroll.value = scrollHeight - scrollTop - clientHeight < 50
 }
-
-onMounted(() => {
-  start()
-})
 </script>
 
 <template>

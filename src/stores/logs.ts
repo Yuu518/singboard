@@ -14,7 +14,9 @@ const paused = ref(false)
 const filterText = ref('')
 
 let ws: ReconnectingWebSocket | null = null
-let refCount = 0
+let connectionGeneration = 0
+let lifecycleOwners = 0
+let pendingConnect: { generation: number; promise: Promise<void> } | null = null
 
 const filteredLogs = computed(() => {
   if (!filterText.value) return logs.value
@@ -22,76 +24,146 @@ const filteredLogs = computed(() => {
   return logs.value.filter((l) => l.payload.toLowerCase().includes(q))
 })
 
-export function useLogsStore() {
-  const { activeClashApiId } = useConfigStore()
+function shouldConnect(): boolean {
+  return lifecycleOwners > 0 && appVisible.value
+}
 
-  async function start() {
-    if (ws) ws.close()
-    logs.value = []
-    if (!logLevel.value) {
+async function connect(): Promise<void> {
+  if (!shouldConnect() || ws) return
+
+  const generation = connectionGeneration
+  if (pendingConnect?.generation === generation) {
+    return pendingConnect.promise
+  }
+
+  const promise = (async () => {
+    let level = logLevel.value
+    if (!level) {
       try {
         const { data } = await fetchConfig()
-        logLevel.value = data['log-level'] || 'info'
+        level = data['log-level'] || 'info'
       } catch {
-        logLevel.value = 'info'
+        level = 'info'
       }
     }
-    ws = createClashWS('/logs', (data: LogEntry) => {
-      if (paused.value) return
-      data.time = new Date().toLocaleTimeString()
-      logs.value.push(data)
-      if (logs.value.length > MAX_LOGS) {
-        logs.value = logs.value.slice(-MAX_LOGS)
-      }
-    }, { level: logLevel.value })
-  }
 
-  function stop() {
-    ws?.close()
-    ws = null
-  }
-
-  function clear() {
-    logs.value = []
-  }
-
-  function changeLevel(level: string) {
+    if (generation !== connectionGeneration || !shouldConnect()) return
     logLevel.value = level
-    start()
-  }
 
-  refCount++
+    try {
+      let socket: ReconnectingWebSocket
+      socket = createClashWS('/logs', (data: LogEntry) => {
+        if (
+          generation !== connectionGeneration
+          || ws !== socket
+          || !appVisible.value
+          || paused.value
+        ) return
+
+        data.time = new Date().toLocaleTimeString()
+        logs.value.push(data)
+        if (logs.value.length > MAX_LOGS) {
+          logs.value = logs.value.slice(-MAX_LOGS)
+        }
+      }, { level })
+
+      if (generation !== connectionGeneration || !shouldConnect()) {
+        socket.close()
+        return
+      }
+      ws = socket
+    } catch (error) {
+      console.error('Failed to connect to the log stream:', error)
+    }
+  })()
+
+  const pending = { generation, promise }
+  pendingConnect = pending
+  void promise.then(
+    () => {
+      if (pendingConnect === pending) pendingConnect = null
+    },
+    () => {
+      if (pendingConnect === pending) pendingConnect = null
+    },
+  )
+  return promise
+}
+
+function disconnect(): void {
+  connectionGeneration++
+  const socket = ws
+  ws = null
+  socket?.close()
+}
+
+function restart(): void {
+  disconnect()
+  if (shouldConnect()) void connect()
+}
+
+function clear(): void {
+  logs.value = []
+}
+
+function changeLevel(level: string): void {
+  if (logLevel.value === level) return
+  logLevel.value = level
+  clear()
+  restart()
+}
+
+export function useLogsLifecycle() {
+  const { activeClashApiId } = useConfigStore()
+  let active = false
+
   const unwatchApi = watch(
     () => activeClashApiId.value,
     () => {
-      if (ws) {
-        logLevel.value = ''
-        start()
-      }
+      logLevel.value = ''
+      clear()
+      if (active) restart()
     },
   )
   const unwatchVisible = watch(appVisible, (visible) => {
-    if (visible) {
-      if (!ws && refCount > 0) start()
-    } else {
-      if (ws) stop()
+    if (!active) return
+    if (visible) void connect()
+    else {
+      disconnect()
+      clear()
     }
   })
+
+  function start(): void {
+    if (active) return
+    active = true
+    lifecycleOwners++
+    if (appVisible.value) void connect()
+  }
+
+  function stop(): void {
+    if (!active) return
+    active = false
+    lifecycleOwners--
+    if (lifecycleOwners === 0) disconnect()
+  }
+
   onUnmounted(() => {
     unwatchApi()
     unwatchVisible()
-    refCount--
-    if (refCount === 0) stop()
+    stop()
   })
 
+  return { start, stop }
+}
+
+export function useLogsStore() {
   return {
     logs,
     filteredLogs,
     logLevel,
     paused,
     filterText,
-    start,
-    stop,
     clear,
     changeLevel,
   }

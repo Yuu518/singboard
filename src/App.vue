@@ -17,6 +17,7 @@ import TrayMenu from '@/components/tray/TrayMenu.vue'
 import { useConfigAutoUpdate } from '@/composables/useConfigAutoUpdate'
 import { useSingboxVersionStore } from '@/stores/singboxVersion'
 import { usePanelUpdateStore } from '@/stores/panelUpdate'
+import { useLogsLifecycle } from '@/stores/logs'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getIPFromIpipnet, getIPFromIpsb } from '@/api/geoip'
 import {
@@ -27,7 +28,9 @@ import {
   getYoutubeLatency,
 } from '@/api/latency'
 
-const isTrayWindow = getCurrentWindow().label === 'tray'
+const currentWindow = getCurrentWindow()
+const isTrayWindow = currentWindow.label === 'tray'
+const logsLifecycle = isTrayWindow ? null : useLogsLifecycle()
 
 const { config } = useConfigStore()
 const { serviceStatus, ready: serviceReady } = useServiceStore()
@@ -99,9 +102,13 @@ onMounted(async () => {
   const launchedHidden = await isLaunchedHidden().catch(() => false)
   if (launchedHidden) {
     appVisible.value = false
+    // The tray may have restored the window while startup work was still pending.
+    appVisible.value = await currentWindow.isVisible().catch(() => false)
   } else {
-    getCurrentWindow().show()
+    appVisible.value = true
+    await currentWindow.show().catch(() => {})
   }
+  logsLifecycle?.start()
   setupWizardRef.value?.checkAndOpen()
   await syncActiveConfigToRunning().catch((e) => {
     console.error('Failed to sync active config on startup:', e)
