@@ -19,12 +19,14 @@ const levels = ['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'panic']
 function levelColor(type: string): string {
   switch (type.toLowerCase()) {
     case 'error':
-    case 'fatal': return 'text-error'
+    case 'fatal':
+    case 'panic': return 'text-error'
     case 'warning':
     case 'warn': return 'text-warning'
     case 'info': return 'text-info'
-    case 'debug': return 'text-base-content/50'
-    default: return 'text-base-content/30'
+    case 'debug': return 'text-success'
+    case 'trace': return 'text-secondary'
+    default: return 'text-base-content/50'
   }
 }
 
@@ -80,17 +82,31 @@ function handleScroll() {
 
     <div
       ref="logContainer"
-      class="flex-1 overflow-auto bg-base-200 rounded-lg p-3 font-mono text-xs"
+      class="flex-1 min-h-0 overflow-auto rounded-xl bg-base-200 p-2"
       @scroll="handleScroll"
     >
-      <div v-for="(log, i) in filteredLogs" :key="i" class="py-0.5 flex gap-2">
-        <span class="text-base-content/30 shrink-0 w-16">{{ log.time }}</span>
-        <span class="shrink-0 w-12 font-semibold" :class="levelColor(log.type)">
-          {{ log.type }}
-        </span>
-        <span class="break-all">{{ log.payload }}</span>
-      </div>
-      <div v-if="filteredLogs.length === 0" class="text-center text-base-content/40 py-10">
+      <article
+        v-for="(log, i) in filteredLogs"
+        :key="log.seq ?? i"
+        class="mb-2 rounded-xl border border-base-300/50 bg-base-100 px-3 py-2.5 last:mb-0"
+      >
+        <div class="flex items-center gap-2 text-[11px] leading-none">
+          <span class="shrink-0 tabular-nums text-base-content/30">
+            {{ log.seq ?? i + 1 }}
+          </span>
+          <span
+            class="shrink-0 font-semibold uppercase tracking-[0.04em]"
+            :class="levelColor(log.type)"
+          >
+            {{ log.type }}
+          </span>
+          <time class="shrink-0 tabular-nums text-base-content/40">{{ log.time }}</time>
+        </div>
+        <div class="mt-2 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[13px] leading-5 text-base-content/90">
+          {{ log.payload }}
+        </div>
+      </article>
+      <div v-if="filteredLogs.length === 0" class="py-10 text-center text-sm text-base-content/40">
         暂无日志
       </div>
     </div>

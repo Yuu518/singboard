@@ -14,6 +14,7 @@ const paused = ref(false)
 const filterText = ref('')
 
 let ws: ReconnectingWebSocket | null = null
+let nextLogSequence = 1
 let connectionGeneration = 0
 let lifecycleOwners = 0
 let pendingConnect: { generation: number; promise: Promise<void> } | null = null
@@ -60,7 +61,8 @@ async function connect(): Promise<void> {
           || paused.value
         ) return
 
-        data.time = new Date().toLocaleTimeString()
+        data.time = new Date().toTimeString().slice(0, 8)
+        data.seq = nextLogSequence++
         logs.value.push(data)
         if (logs.value.length > MAX_LOGS) {
           logs.value = logs.value.slice(-MAX_LOGS)
@@ -104,6 +106,7 @@ function restart(): void {
 
 function clear(): void {
   logs.value = []
+  nextLogSequence = 1
 }
 
 function changeLevel(level: string): void {

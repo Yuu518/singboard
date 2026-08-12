@@ -92,6 +92,7 @@ export interface LogEntry {
   type: string
   payload: string
   time?: string
+  seq?: number
 }
 
 export interface ClashConfig {
