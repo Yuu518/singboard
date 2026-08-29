@@ -437,6 +437,7 @@ const ITEM_NETWORK_IS_EXPENSIVE: u8 = 0x13;
 const ITEM_NETWORK_IS_CONSTRAINED: u8 = 0x14;
 const ITEM_NETWORK_INTERFACE_ADDRESS: u8 = 0x15;
 const ITEM_DEFAULT_INTERFACE_ADDRESS: u8 = 0x16;
+const ITEM_PACKAGE_NAME_REGEX: u8 = 0x17;
 const ITEM_FINAL: u8 = 0xFF;
 
 // ---- query ----
@@ -607,7 +608,8 @@ fn match_default_rule<R: Read>(r: &mut R, query: &Query) -> io::Result<bool> {
             | ITEM_PACKAGE_NAME
             | ITEM_WIFI_SSID
             | ITEM_WIFI_BSSID
-            | ITEM_PROCESS_PATH_REGEX => {
+            | ITEM_PROCESS_PATH_REGEX
+            | ITEM_PACKAGE_NAME_REGEX => {
                 skip_string_list(r)?;
             }
             ITEM_ADGUARD_DOMAIN => {
@@ -685,10 +687,21 @@ fn match_logical_rule<R: Read>(r: &mut R, query: &Query) -> io::Result<bool> {
 
 // ---- SRS matching core ----
 
-fn srs_match_bytes(data: &[u8], query: &Query) -> Result<bool, String> {
+const SRS_VERSION_CURRENT: u8 = 5;
+
+fn validate_srs_header(data: &[u8]) -> Result<(), String> {
     if data.len() < 4 || &data[0..3] != b"SRS" {
         return Err("invalid SRS magic".into());
     }
+    let version = data[3];
+    if !(1..=SRS_VERSION_CURRENT).contains(&version) {
+        return Err(format!("unsupported SRS version: {}", version));
+    }
+    Ok(())
+}
+
+fn srs_match_bytes(data: &[u8], query: &Query) -> Result<bool, String> {
+    validate_srs_header(data)?;
     let mut decompressed = Vec::new();
     ZlibDecoder::new(&data[4..])
         .read_to_end(&mut decompressed)
@@ -883,12 +896,13 @@ fn bolt_leaf_lookup(page: &[u8], count: usize, key: &[u8]) -> Option<(bool, Vec<
 }
 
 // ---- SavedBinary parser ----
-// Format: u8(1) + uvarint(hash_len) + hash + uvarint(content_len) + content + i64(timestamp) + uvarint(etag_len) + etag
+// v1: version + hash + content + timestamp + etag
+// v2: same prefix, with URL hash appended after etag
 
 fn parse_saved_binary_content(data: &[u8]) -> io::Result<Vec<u8>> {
     let mut cur = Cursor::new(data);
     let ver = read_u8(&mut cur)?;
-    if ver != 1 {
+    if !matches!(ver, 1 | 2) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("unexpected SavedBinary version: {}", ver),
@@ -1516,6 +1530,14 @@ fn list_default_rule<R: Read>(r: &mut R) -> io::Result<Vec<RuleEntry>> {
                     });
                 }
             }
+            ITEM_PACKAGE_NAME_REGEX => {
+                for s in read_string_list(r)? {
+                    entries.push(RuleEntry {
+                        rule_type: "package_name_regex".into(),
+                        value: s,
+                    });
+                }
+            }
             ITEM_ADGUARD_DOMAIN => {
                 let matcher = AdGuardMatcher::read(r)?;
                 for (t, v) in matcher.enumerate() {
@@ -1600,9 +1622,7 @@ fn list_logical_rule<R: Read>(r: &mut R) -> io::Result<Vec<RuleEntry>> {
 }
 
 fn srs_list_bytes(data: &[u8]) -> Result<Vec<RuleEntry>, String> {
-    if data.len() < 4 || &data[0..3] != b"SRS" {
-        return Err("invalid SRS magic".into());
-    }
+    validate_srs_header(data)?;
     let mut decompressed = Vec::new();
     ZlibDecoder::new(&data[4..])
         .read_to_end(&mut decompressed)
@@ -1759,6 +1779,30 @@ pub fn srs_match_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write;
+
+    fn saved_binary_fixture(version: u8, content: &[u8]) -> Vec<u8> {
+        let mut data = vec![version, 16];
+        data.extend_from_slice(&[0xAB; 16]);
+        data.push(content.len() as u8);
+        data.extend_from_slice(content);
+        data.extend_from_slice(&1_700_000_000i64.to_be_bytes());
+        data.extend_from_slice(&[4, b'e', b't', b'a', b'g']);
+        if version >= 2 {
+            data.extend_from_slice(&[3, 0x12, 0x34, 0x56]);
+        }
+        data
+    }
+
+    fn srs_fixture(version: u8, payload: &[u8]) -> Vec<u8> {
+        let mut data = b"SRS".to_vec();
+        data.push(version);
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(payload).unwrap();
+        data.extend_from_slice(&encoder.finish().unwrap());
+        data
+    }
 
     fn v4(s: &str) -> u32 {
         u32::from_be_bytes(Ipv4Addr::from_str(s).unwrap().octets())
@@ -1766,6 +1810,49 @@ mod tests {
 
     fn v6(s: &str) -> u128 {
         u128::from_be_bytes(Ipv6Addr::from_str(s).unwrap().octets())
+    }
+
+    #[test]
+    fn saved_binary_v2_extracts_srs_content() {
+        let content = b"SRS\x02compressed-rule-set";
+
+        assert_eq!(
+            parse_saved_binary_content(&saved_binary_fixture(2, content)).unwrap(),
+            content
+        );
+    }
+
+    #[test]
+    fn srs_v5_lists_package_name_regex() {
+        let pattern = b"^com\\.example\\.";
+        let mut payload = vec![1, 0, 0x17, 1, pattern.len() as u8];
+        payload.extend_from_slice(pattern);
+        payload.extend_from_slice(&[ITEM_FINAL, 0]);
+
+        let entries = srs_list_bytes(&srs_fixture(5, &payload)).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].rule_type, "package_name_regex");
+        assert_eq!(entries[0].value.as_bytes(), pattern);
+    }
+
+    #[test]
+    fn srs_versions_one_through_five_are_supported() {
+        for version in 1..=5 {
+            assert!(
+                srs_list_bytes(&srs_fixture(version, &[0]))
+                    .unwrap()
+                    .is_empty(),
+                "SRS version {} should be supported",
+                version
+            );
+        }
+
+        let error = match srs_list_bytes(&srs_fixture(6, &[0])) {
+            Ok(_) => panic!("SRS version 6 should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error, "unsupported SRS version: 6");
     }
 
     fn range(q: &str) -> (String, String) {
@@ -1897,4 +1984,3 @@ mod tests {
         assert!(!set.matches(&parse_query("example.com")));
     }
 }
-
