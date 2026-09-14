@@ -5,12 +5,14 @@ import { useServiceStore } from '@/stores/service'
 import { useToastStore } from '@/stores/toast'
 import { useProxiesStore } from '@/stores/proxies'
 import {
+  SERVICE_NAME,
   stopService,
   installService,
   uninstallService,
   readServiceErrorLog,
   startupTaskExists,
   createStartupTask,
+  isElevationCancelled,
 } from '@/bridge/service'
 import { startCore, restartCore } from '@/utils/coreControl'
 import { getRunningConfigPath } from '@/bridge/config'
@@ -336,7 +338,7 @@ async function checkServiceAfterStart() {
     // 服务未运行，尝试读取错误日志
     let detail = ''
     try {
-      detail = await readServiceErrorLog(config.value.serviceName)
+      detail = await readServiceErrorLog()
     } catch {}
     const msg = detail
       ? '服务启动失败:\n' + detail
@@ -358,23 +360,21 @@ async function checkServiceAfterStart() {
 async function handleServiceAction(action: string) {
   actionLoading.value = action
   try {
-    const name = config.value.serviceName
     switch (action) {
       case 'start':
-        await startCore(name)
+        await startCore()
         checkServiceAfterStart()
         break
       case 'restart':
-        await restartCore(name)
+        await restartCore()
         checkServiceAfterStart()
         break
-      case 'stop': await stopService(name); break
+      case 'stop': await stopService(); break
       case 'install': {
         const runningConfigPath = await getRunningConfigPath()
         const startupDelaySeconds = normalizeStartupDelayValue(config.value.startupDelaySeconds)
         config.value.startupDelaySeconds = startupDelaySeconds
         await installService(
-          name,
           config.value.singboxPath,
           runningConfigPath,
           config.value.workingDir,
@@ -382,11 +382,11 @@ async function handleServiceAction(action: string) {
         )
         break
       }
-      case 'uninstall': await uninstallService(name); break
+      case 'uninstall': await uninstallService(); break
     }
     setTimeout(refresh, 1000)
   } catch (e: any) {
-    pushToast({ message: '操作失败: ' + (e?.message || e), type: 'error' }, 6000)
+    if (!isElevationCancelled(e)) pushToast({ message: '操作失败: ' + (e?.message || e), type: 'error' }, 6000)
   } finally {
     actionLoading.value = ''
   }
@@ -419,17 +419,16 @@ function updateStartupDelay() {
 }
 
 async function syncStartupDelayToTask() {
-  const serviceName = config.value.serviceName.trim()
-  if (!serviceName || startupTaskSyncing.value) return
+  if (startupTaskSyncing.value) return
 
   startupTaskSyncing.value = true
   try {
-    if (await startupTaskExists(serviceName)) {
-      await createStartupTask(serviceName, config.value.startupDelaySeconds)
+    if (await startupTaskExists()) {
+      await createStartupTask(config.value.startupDelaySeconds)
       pushToast({ message: `自启延迟已同步为 ${config.value.startupDelaySeconds} 秒`, type: 'info' })
     }
   } catch (e: any) {
-    pushToast({ message: '同步自启延迟失败: ' + (e?.message || e), type: 'error' }, 6000)
+    if (!isElevationCancelled(e)) pushToast({ message: '同步自启延迟失败: ' + (e?.message || e), type: 'error' }, 6000)
   } finally {
     startupTaskSyncing.value = false
   }
@@ -569,7 +568,7 @@ watch(
               <div class="settings-service-title">
                 <span class="settings-service-pulse" aria-hidden="true"></span>
                 <strong>{{ statusText }}</strong>
-                <span class="badge badge-sm" :class="statusColor">{{ config.serviceName }}</span>
+                <span class="badge badge-sm" :class="statusColor">{{ SERVICE_NAME }}</span>
               </div>
               <p>{{ serviceStateDescription }}</p>
             </div>
@@ -629,7 +628,7 @@ watch(
               >
                 <span class="settings-row-copy">
                   <strong>服务参数</strong>
-                  <span>服务名称、核心路径、工作目录与启动延迟。</span>
+                  <span>核心路径、工作目录与启动延迟。</span>
                 </span>
                 <svg viewBox="0 0 20 20" fill="none" :class="{ 'rotate-180': showServiceConfigPanel }" aria-hidden="true">
                   <path d="m5 8 5 5 5-5" />
@@ -639,10 +638,6 @@ watch(
               <Transition name="settings-reveal">
                 <div v-if="showServiceConfigPanel" class="settings-inline-panel">
                   <div class="settings-field-grid">
-                    <label class="settings-field">
-                      <span>服务名称</span>
-                      <input v-model="config.serviceName" type="text" class="input input-sm input-bordered" placeholder="sing-box" />
-                    </label>
                     <label class="settings-field settings-field-compact">
                       <span>延迟启动</span>
                       <div class="settings-input-unit">

@@ -101,8 +101,8 @@ jobs:
         run: |
           # The service host was signed before being embedded; fail loudly if
           # the Tauri build relinked it and wiped the signature.
-          & $env:SIGNTOOL verify /pa src-tauri/target/release/singboard-service.exe
-          if ($LASTEXITCODE -ne 0) { throw "singboard-service.exe lost its signature during the Tauri build" }
+          & $env:SIGNTOOL verify /pa src-tauri/target/release/singboard.service
+          if ($LASTEXITCODE -ne 0) { throw "singboard.service lost its signature during the Tauri build" }
 
           $files = @(Get-Item src-tauri/target/release/singboard.exe)
           $files += Get-ChildItem src-tauri/target/release/bundle -Recurse -File -Include *.exe, *.msi -ErrorAction SilentlyContinue

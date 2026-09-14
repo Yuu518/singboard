@@ -2,16 +2,14 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useServiceStore } from '@/stores/service'
-import { useConfigStore } from '@/stores/config'
 import { useToastStore } from '@/stores/toast'
-import { stopService } from '@/bridge/service'
+import { stopService, isElevationCancelled } from '@/bridge/service'
 import { startCore } from '@/utils/coreControl'
 import { formatUptime } from '@/utils/format'
 
 const route = useRoute()
 const router = useRouter()
 const { serviceStatus, statusText, refresh } = useServiceStore()
-const { config } = useConfigStore()
 const { pushToast } = useToastStore()
 
 const navItems = [
@@ -48,15 +46,14 @@ async function toggleService() {
   const state = serviceStatus.value.state
   if (state !== 'running' && state !== 'stopped') return
   togglingService.value = true
-  const name = config.value.serviceName.trim()
   try {
     if (serviceStatus.value.state === 'running') {
-      await stopService(name)
+      await stopService()
     } else {
-      await startCore(name)
+      await startCore()
     }
   } catch (e: any) {
-    pushToast({ message: '服务操作失败: ' + (e?.message || e), type: 'error' }, 6000)
+    if (!isElevationCancelled(e)) pushToast({ message: '服务操作失败: ' + (e?.message || e), type: 'error' }, 6000)
   }
   await refresh()
   togglingService.value = false

@@ -94,6 +94,11 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
         })
         .map_err(|e| format!("Failed to set status: {:?}", e))?;
 
+    // Keep telemetry alive for this host instance, including its startup retries.
+    // A telemetry failure must not prevent an otherwise healthy proxy from running.
+    let _telemetry = crate::params::read_panel_sid(svc_name)
+        .and_then(|sid| crate::telemetry::Server::start(svc_name, &sid).map_err(|e| e.to_string()));
+
     let (singbox_path, config_path, working_dir) = match read_service_params(svc_name) {
         Ok(v) => v,
         Err(e) => {

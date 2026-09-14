@@ -3,32 +3,23 @@ use std::thread;
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
-use tauri::Manager;
 
-const HELPER_EXE_NAME: &str = "singboard-service.exe";
-const HELPER_VERSION_FILE: &str = "singboard-service.version";
+const HELPER_EXE_NAME: &str = "singboard.service";
+const HELPER_VERSION_FILE: &str = "singboard.service.version";
 
 // The release helper is built before the panel by the Tauri build hooks.
 // Development embeds the same payload so opening a dev panel cannot replace
 // an installed release service with a debug build.
-const EMBEDDED_HELPER: &[u8] = include_bytes!("../../target/release/singboard-service.exe");
+const EMBEDDED_HELPER: &[u8] = include_bytes!("../../target/release/singboard.service");
 
 /// 服务实际注册使用的 helper 副本位置（用户数据目录根下）
-pub fn deployed_helper_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    Ok(data_dir.join(HELPER_EXE_NAME))
+pub fn deployed_helper_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(HELPER_EXE_NAME)
 }
 
 /// 记录已部署副本版本的标记文件位置
-pub fn deployed_version_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    Ok(data_dir.join(HELPER_VERSION_FILE))
+pub fn deployed_version_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(HELPER_VERSION_FILE)
 }
 
 pub fn sha256_file(path: &Path) -> Result<String, String> {
@@ -36,43 +27,65 @@ pub fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", Sha256::digest(&content)))
 }
 
-fn deployed_version(app: &tauri::AppHandle) -> Option<String> {
-    let path = deployed_version_path(app).ok()?;
+fn deployed_version(data_dir: &Path) -> Option<String> {
+    let path = deployed_version_path(data_dir);
     let text = std::fs::read_to_string(path).ok()?;
     Some(text.trim().to_string())
 }
 
 /// 把内嵌的 helper 释放到部署位置。调用方负责先停止服务。
-pub fn deploy_helper(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let dest = deployed_helper_path(app)?;
+pub fn deploy_helper(data_dir: &Path) -> Result<PathBuf, String> {
+    let dest = deployed_helper_path(data_dir);
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create app data dir: {}", e))?;
     }
 
-    // 版本标记先失效，避免释放中途失败后标记与实际副本不符
-    if let Ok(marker) = deployed_version_path(app) {
-        let _ = std::fs::remove_file(marker);
-    }
-
-    // 服务刚停止时旧文件可能仍被短暂占用，重试几次
-    let mut last_err = String::new();
-    for attempt in 0..3 {
-        if attempt > 0 {
-            thread::sleep(Duration::from_millis(500));
-        }
-        match std::fs::write(&dest, EMBEDDED_HELPER) {
-            Ok(()) => {
-                // 标记写失败只会让下次启动多热换一次，不值得让服务停在半路
-                if let Ok(marker) = deployed_version_path(app) {
-                    let _ = std::fs::write(marker, singboard_service::HELPER_VERSION);
-                }
-                return Ok(dest);
+    let staged = dest.with_extension("service.new");
+    let backup = dest.with_extension("service.bak");
+    std::fs::write(&staged, EMBEDDED_HELPER).map_err(|e| format!("暂存服务组件失败: {e}"))?;
+    let had_old = dest.is_file();
+    let result = (|| {
+        if had_old {
+            if backup.exists() {
+                std::fs::remove_file(&backup).map_err(|e| e.to_string())?;
             }
-            Err(e) => last_err = e.to_string(),
+            let mut moved = false;
+            for attempt in 0..3 {
+                if attempt > 0 {
+                    thread::sleep(Duration::from_millis(500));
+                }
+                match std::fs::rename(&dest, &backup) {
+                    Ok(()) => {
+                        moved = true;
+                        break;
+                    }
+                    Err(e) if attempt == 2 => return Err(format!("备份服务组件失败: {e}")),
+                    Err(_) => {}
+                }
+            }
+            if !moved {
+                return Err("无法备份服务组件".into());
+            }
         }
-    }
-    Err(format!("释放服务组件失败: {}", last_err))
+        if let Err(e) = std::fs::rename(&staged, &dest) {
+            if had_old {
+                std::fs::rename(&backup, &dest)
+                    .map_err(|restore| format!("安装服务组件失败: {e}; 恢复失败: {restore}"))?;
+            }
+            return Err(format!("安装服务组件失败: {e}"));
+        }
+        let _ = std::fs::write(
+            deployed_version_path(data_dir),
+            singboard_service::HELPER_VERSION,
+        );
+        if had_old {
+            let _ = std::fs::remove_file(&backup);
+        }
+        Ok(dest.clone())
+    })();
+    let _ = std::fs::remove_file(staged);
+    result
 }
 
 #[derive(PartialEq)]
@@ -85,7 +98,7 @@ pub enum SyncNeed {
     Update,
 }
 
-fn service_image_path(service_name: &str) -> Option<String> {
+pub fn service_image_path(service_name: &str) -> Option<String> {
     use winreg::RegKey;
     use winreg::enums::*;
 
@@ -99,12 +112,10 @@ fn service_image_path(service_name: &str) -> Option<String> {
     key.get_value("ImagePath").ok()
 }
 
-pub fn sync_needed(app: &tauri::AppHandle, service_name: &str) -> Result<SyncNeed, String> {
-    let deployed = deployed_helper_path(app)?;
+pub fn sync_needed(data_dir: &Path, service_name: &str) -> Result<SyncNeed, String> {
+    let deployed = deployed_helper_path(data_dir);
     let image_path = service_image_path(service_name).unwrap_or_default();
-    let points_at_deployed = image_path
-        .to_lowercase()
-        .contains(&deployed.to_string_lossy().to_lowercase());
+    let points_at_deployed = image_points_to(&image_path, &deployed);
     if !points_at_deployed {
         return Ok(SyncNeed::Migrate);
     }
@@ -112,10 +123,72 @@ pub fn sync_needed(app: &tauri::AppHandle, service_name: &str) -> Result<SyncNee
     if !deployed.is_file() {
         return Ok(SyncNeed::Update);
     }
-    // 按版本而非哈希比对：发布流程会给 helper 签名，带时间戳的签名块使得
-    // 每次构建的字节都不同，用哈希会让每个新版本首次启动都白白热换一次服务
-    if deployed_version(app).as_deref() != Some(singboard_service::HELPER_VERSION) {
+    let sid = singboard_service::ipc::current_user_sid().map_err(|e| e.to_string())?;
+    if singboard_service::params::read_panel_sid(service_name)
+        .ok()
+        .as_deref()
+        != Some(&sid)
+    {
+        return Ok(SyncNeed::Update);
+    }
+    if deployed_version(data_dir).as_deref() != Some(singboard_service::HELPER_VERSION) {
+        return Ok(SyncNeed::Update);
+    }
+    if sha256_file(&deployed)? != format!("{:x}", Sha256::digest(EMBEDDED_HELPER)) {
         return Ok(SyncNeed::Update);
     }
     Ok(SyncNeed::UpToDate)
+}
+
+pub fn image_points_to(image: &str, path: &Path) -> bool {
+    let image = image.trim();
+    let executable = if let Some(quoted) = image.strip_prefix('"') {
+        quoted.split('"').next().unwrap_or_default()
+    } else {
+        image.split_whitespace().next().unwrap_or_default()
+    };
+    executable.eq_ignore_ascii_case(&path.to_string_lossy())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
+    #[test]
+    fn locked_host_is_preserved_when_component_deployment_fails() {
+        let dir =
+            std::env::temp_dir().join(format!("singboard-helper-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = deployed_helper_path(&dir);
+        std::fs::write(&dest, b"original host").unwrap();
+        std::fs::write(deployed_version_path(&dir), "old-version").unwrap();
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&dest)
+            .unwrap();
+        assert!(deploy_helper(&dir).is_err());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"original host");
+        assert_eq!(deployed_version(&dir).as_deref(), Some("old-version"));
+        assert!(!dest.with_extension("service.new").exists());
+        drop(locked);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn service_image_matching_uses_the_executable_not_arguments_or_prefixes() {
+        let path = Path::new(r"C:\App Data\singboard.service");
+        assert!(image_points_to(
+            r#""c:\app data\singboard.service" service "singboard.service""#,
+            path
+        ));
+        assert!(!image_points_to(
+            r#""C:\App Data\singboard.service.old""#,
+            path
+        ));
+        assert!(!image_points_to(
+            r#""C:\other.exe" "C:\App Data\singboard.service""#,
+            path
+        ));
+    }
 }

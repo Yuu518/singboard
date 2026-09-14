@@ -35,9 +35,9 @@ fn to_wide_multi(strings: &[&str]) -> Vec<u16> {
     result
 }
 
-fn open_scm() -> Result<ScHandle, String> {
+fn open_scm(access: u32) -> Result<ScHandle, String> {
     unsafe {
-        let handle = OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_ALL_ACCESS);
+        let handle = OpenSCManagerW(ptr::null(), ptr::null(), access);
         if handle.is_null() {
             Err(format!("Failed to open SCM: error {}", GetLastError()))
         } else {
@@ -71,42 +71,9 @@ pub struct ServiceStatus {
     pub uptime_seconds: Option<u64>,
 }
 
-// 通过进程创建时间计算运行时长（秒）
-fn process_uptime_seconds(pid: u32) -> Option<u64> {
-    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
-    use windows_sys::Win32::System::Threading::{
-        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-
-    unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return None;
-        }
-        let mut creation: FILETIME = std::mem::zeroed();
-        let mut exit: FILETIME = std::mem::zeroed();
-        let mut kernel: FILETIME = std::mem::zeroed();
-        let mut user: FILETIME = std::mem::zeroed();
-        let ok = GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user);
-        CloseHandle(handle);
-        if ok == 0 {
-            return None;
-        }
-        // FILETIME（1601-01-01 起 100ns）转 Unix 秒
-        let created_100ns =
-            ((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64;
-        let created_unix = (created_100ns / 10_000_000).checked_sub(11_644_473_600)?;
-        let now_unix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_secs();
-        Some(now_unix.saturating_sub(created_unix))
-    }
-}
-
 pub fn query_service_status(service_name: &str) -> Result<ServiceStatus, String> {
     unsafe {
-        let scm = open_scm()?;
+        let scm = open_scm(SC_MANAGER_CONNECT)?;
         let svc = match open_service_handle(scm, service_name, SERVICE_QUERY_STATUS) {
             Ok(h) => h,
             Err(e) if e == "service_not_found" => {
@@ -133,14 +100,11 @@ pub fn query_service_status(service_name: &str) -> Result<ServiceStatus, String>
             &mut bytes_needed,
         );
 
+        let error = GetLastError();
         CloseServiceHandle(svc);
         CloseServiceHandle(scm);
-
         if ok == 0 {
-            return Err(format!(
-                "QueryServiceStatusEx failed: error {}",
-                GetLastError()
-            ));
+            return Err(format!("QueryServiceStatusEx failed: error {error}"));
         }
 
         let state = match status.dwCurrentState {
@@ -163,18 +127,14 @@ pub fn query_service_status(service_name: &str) -> Result<ServiceStatus, String>
         Ok(ServiceStatus {
             state: state.into(),
             pid,
-            uptime_seconds: if state == "running" {
-                pid.and_then(process_uptime_seconds)
-            } else {
-                None
-            },
+            uptime_seconds: None,
         })
     }
 }
 
 pub fn start_service(service_name: &str) -> Result<(), String> {
     unsafe {
-        let scm = open_scm()?;
+        let scm = open_scm(SC_MANAGER_CONNECT)?;
         let svc = open_service_handle(
             scm,
             service_name,
@@ -235,7 +195,7 @@ pub fn start_service(service_name: &str) -> Result<(), String> {
             return Err(format!("StartService failed: error {}", err));
         }
 
-        for _ in 0..20 {
+        for _ in 0..120 {
             thread::sleep(Duration::from_millis(250));
             let mut status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
             let mut bytes_needed: u32 = 0;
@@ -272,13 +232,13 @@ pub fn start_service(service_name: &str) -> Result<(), String> {
 
         CloseServiceHandle(svc);
         CloseServiceHandle(scm);
-        Ok(())
+        Err("等待服务启动超时，请刷新服务状态".into())
     }
 }
 
 pub fn stop_service(service_name: &str) -> Result<(), String> {
     unsafe {
-        let scm = open_scm()?;
+        let scm = open_scm(SC_MANAGER_CONNECT)?;
         let svc = open_service_handle(scm, service_name, SERVICE_STOP | SERVICE_QUERY_STATUS)?;
 
         let mut status: SERVICE_STATUS = std::mem::zeroed();
@@ -294,6 +254,7 @@ pub fn stop_service(service_name: &str) -> Result<(), String> {
             return Err(format!("ControlService(STOP) failed: error {}", err));
         }
 
+        let mut stopped = false;
         for _ in 0..30 {
             thread::sleep(Duration::from_millis(500));
             let mut bytes_needed: u32 = 0;
@@ -306,13 +267,18 @@ pub fn stop_service(service_name: &str) -> Result<(), String> {
                 &mut bytes_needed,
             );
             if proc_status.dwCurrentState == SERVICE_STOPPED {
+                stopped = true;
                 break;
             }
         }
 
         CloseServiceHandle(svc);
         CloseServiceHandle(scm);
-        Ok(())
+        if stopped {
+            Ok(())
+        } else {
+            Err("等待服务停止超时，已取消后续操作".into())
+        }
     }
 }
 
@@ -325,7 +291,7 @@ pub fn restart_service(service_name: &str) -> Result<(), String> {
 pub fn update_service_bin_path(service_name: &str, bin_path: &str) -> Result<(), String> {
     let wide_bin = to_wide(bin_path);
     unsafe {
-        let scm = open_scm()?;
+        let scm = open_scm(SC_MANAGER_CONNECT)?;
         let svc = match open_service_handle(scm, service_name, SERVICE_CHANGE_CONFIG) {
             Ok(h) => h,
             Err(e) => {
@@ -372,7 +338,7 @@ pub fn install_service(
     let dependency_multi = to_wide_multi(&["Tcpip", "NlaSvc"]);
 
     unsafe {
-        let scm = open_scm()?;
+        let scm = open_scm(SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE)?;
 
         let svc = CreateServiceW(
             scm,
@@ -395,12 +361,12 @@ pub fn install_service(
         if svc.is_null() {
             let err = GetLastError();
             if err == 1073 {
-                let scm2 = open_scm()?;
+                let scm2 = open_scm(SC_MANAGER_CONNECT)?;
                 let wide_name2 = to_wide(service_name);
                 let svc2 = OpenServiceW(scm2, wide_name2.as_ptr(), SERVICE_CHANGE_CONFIG);
-                if !svc2.is_null() {
+                let updated = if !svc2.is_null() {
                     // 服务已存在时同步更新其二进制路径，确保重装能切换到新的宿主程序
-                    ChangeServiceConfigW(
+                    let ok = ChangeServiceConfigW(
                         svc2,
                         SERVICE_NO_CHANGE,
                         SERVICE_DEMAND_START,
@@ -413,16 +379,23 @@ pub fn install_service(
                         ptr::null(),
                         ptr::null(),
                     );
+                    let error = GetLastError();
                     CloseServiceHandle(svc2);
-                }
+                    if ok == 0 {
+                        Err(format!("ChangeServiceConfig failed: error {error}"))
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    Err(format!("OpenService failed: error {}", GetLastError()))
+                };
                 CloseServiceHandle(scm2);
-                return Ok(());
+                return updated;
             }
             if err == 1072 {
-                CloseServiceHandle(scm);
                 for _ in 0..10 {
                     thread::sleep(Duration::from_millis(500));
-                    let scm2 = open_scm()?;
+                    let scm2 = open_scm(SC_MANAGER_CONNECT)?;
                     let wide_name2 = to_wide(service_name);
                     let test = OpenServiceW(scm2, wide_name2.as_ptr(), SERVICE_QUERY_STATUS);
                     if test.is_null() && GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST {
@@ -483,10 +456,10 @@ pub fn install_service(
 }
 
 pub fn uninstall_service(service_name: &str) -> Result<(), String> {
-    let _ = stop_service(service_name);
+    stop_service(service_name)?;
 
     unsafe {
-        let scm = open_scm()?;
+        let scm = open_scm(SC_MANAGER_CONNECT)?;
         let svc = open_service_handle(scm, service_name, SERVICE_ALL_ACCESS)?;
 
         let ok = DeleteService(svc);
@@ -505,23 +478,27 @@ pub fn uninstall_service(service_name: &str) -> Result<(), String> {
     }
 }
 
-pub fn create_startup_task(service_name: &str, startup_delay_seconds: u32) -> Result<(), String> {
+pub fn create_startup_task(
+    service_name: &str,
+    startup_delay_seconds: u32,
+    user_sid: &str,
+) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
 
     let task_name = format!("singboard-autostart-{}", service_name);
-    let action_args = format!("start {}", service_name);
+    let action_args = format!("start {}", super::elevation::quote_arg(service_name));
     let delay = startup_delay_seconds.min(3600);
     let delay_duration = format!("PT{}S", delay);
     let script = format!(
-        "$u=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name;\
+        "$u={user};\
          $a=New-ScheduledTaskAction -Execute 'sc.exe' -Argument {args};\
-         $t=New-ScheduledTaskTrigger -AtLogOn;\
+         $t=New-ScheduledTaskTrigger -AtLogOn -User $u;\
          $t.Delay={delay};\
          $s=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit 0 -Compatibility Vista;\
          $s.Hidden=$true;\
          $s.DisallowStartIfOnBatteries=$false;\
          $s.StopIfGoingOnBatteries=$false;\
-         $p=New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Highest;\
+         $p=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount;\
          Register-ScheduledTask -TaskName {name} -Action $a -Trigger $t -Settings $s -Principal $p -Force | Out-Null;\
          $created=Get-ScheduledTask -TaskName {name};\
          $actual=[string]$created.Triggers[0].Delay;\
@@ -530,6 +507,7 @@ pub fn create_startup_task(service_name: &str, startup_delay_seconds: u32) -> Re
         name = ps_single_quoted(&task_name),
         delay = ps_single_quoted(&delay_duration),
         delay_text = delay_duration,
+        user = ps_single_quoted(user_sid),
     );
 
     let output = std::process::Command::new("powershell")
@@ -553,14 +531,57 @@ pub fn create_startup_task(service_name: &str, startup_delay_seconds: u32) -> Re
     Ok(())
 }
 
-pub fn delete_startup_task(service_name: &str) {
+// Preserve the old trigger, delay, enabled state and principal when renaming.
+pub fn copy_startup_task(old_name: &str, new_name: &str) -> Result<bool, String> {
+    use std::os::windows::process::CommandExt;
+    let old_task = format!("singboard-autostart-{old_name}");
+    let new_task = format!("singboard-autostart-{new_name}");
+    let script = format!(
+        "$ErrorActionPreference='Stop';\
+         $task=Get-ScheduledTask -TaskName {old} -ErrorAction SilentlyContinue;\
+         if ($null -eq $task) {{ Write-Output 'absent'; exit 0 }};\
+         [xml]$xml=Export-ScheduledTask -TaskName {old};\
+         if (@($xml.Task.Actions.Exec).Count -ne 1 -or [IO.Path]::GetFileName([string]$xml.Task.Actions.Exec.Command) -ne 'sc.exe') {{ throw 'Unexpected service startup task action' }};\
+         $xml.Task.Actions.Exec.Arguments={args};\
+         Register-ScheduledTask -TaskName {new} -Xml $xml.OuterXml -Force | Out-Null;\
+         Write-Output 'copied'",
+        old = ps_single_quoted(&old_task),
+        new = ps_single_quoted(&new_task),
+        args = ps_single_quoted(&format!("start {}", super::elevation::quote_arg(new_name))),
+    );
+    let output = std::process::Command::new("powershell")
+        .args(["-NonInteractive", "-NoProfile", "-Command", &script])
+        .creation_flags(0x08000000)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(format!(
+            "迁移自启任务失败: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim() == "copied")
+}
+
+pub fn delete_startup_task(service_name: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
 
     let task_name = format!("singboard-autostart-{}", service_name);
-    let _ = std::process::Command::new("schtasks")
+    if !startup_task_exists(service_name) {
+        return Ok(());
+    }
+    let output = std::process::Command::new("schtasks")
         .args(["/Delete", "/TN", &task_name, "/F"])
         .creation_flags(0x08000000)
-        .status();
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(format!(
+            "删除自启任务失败: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
 }
 
 pub fn startup_task_exists(service_name: &str) -> bool {
@@ -573,4 +594,19 @@ pub fn startup_task_exists(service_name: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn queries_windows_service_without_manager_write_access() {
+        let status = query_service_status("EventLog").unwrap();
+        assert_ne!(status.state, "not_installed");
+        assert_ne!(status.state, "unknown");
+        println!(
+            "SCM read succeeded; elevated={}",
+            singboard_service::ipc::is_elevated().unwrap()
+        );
+    }
 }

@@ -24,14 +24,18 @@ tauri-plugin-window-state = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["process", "rt-multi-thread", "time", "sync", "fs", "io-util"] }
+tokio = { version = "1", features = ["process", "rt-multi-thread", "time", "sync", "fs", "io-util", "net"] }
 windows-service = "0.7"
 windows-sys = { version = "0.59", features = [
   "Win32_Security",
   "Win32_System_Services",
   "Win32_System_Threading",
   "Win32_Foundation",
-  "Win32_System_JobObjects",
+    "Win32_System_JobObjects",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Registry",
+    "Win32_System_Environment",
 ] }
 winreg = "0.55"
 singboard-service = { path = "service-host" }

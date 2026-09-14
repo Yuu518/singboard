@@ -163,7 +163,6 @@ export interface AppConfig {
   activeClashApiId: string
   singboxPath: string
   workingDir: string
-  serviceName: string
   startupDelaySeconds: number
   theme: string
   latencyTestUrl: string

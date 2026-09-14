@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Serialize;
+use tauri::Manager;
 
 use super::update::{
     GhRelease, UPDATE_LOCK, apply_mirror, download_asset, emit_progress, github_get, retry_io,
@@ -75,7 +76,10 @@ fn local_out_of_sync(asset_digest: &str) -> bool {
 
 #[tauri::command]
 pub async fn check_panel_update() -> Result<PanelUpdateInfo, String> {
-    let url = format!("https://api.github.com/repos/{}/releases/latest", PANEL_REPO);
+    let url = format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        PANEL_REPO
+    );
     let release: GhRelease = github_get(&url)
         .await?
         .json()
@@ -116,7 +120,10 @@ pub async fn check_panel_update() -> Result<PanelUpdateInfo, String> {
 
 fn verify_digest(file: &Path, asset_digest: &str, mirror: &Option<String>) -> Result<(), String> {
     let Some(expected) = digest_hash(asset_digest) else {
-        let mirrored = mirror.as_deref().map(str::trim).is_some_and(|m| !m.is_empty());
+        let mirrored = mirror
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|m| !m.is_empty());
         if mirrored {
             return Err("该版本缺少校验信息，已中止更新".into());
         }
@@ -155,15 +162,9 @@ pub async fn perform_panel_update(
 
     let staged_exe = staging.join(PANEL_ASSET);
     let download_url = apply_mirror(&mirror, &asset_url);
-    download_asset(
-        &app,
-        PROGRESS_EVENT,
-        &download_url,
-        asset_size,
-        &staged_exe,
-    )
-    .await
-    .map_err(cleanup)?;
+    download_asset(&app, PROGRESS_EVENT, &download_url, asset_size, &staged_exe)
+        .await
+        .map_err(cleanup)?;
 
     emit_progress(&app, PROGRESS_EVENT, "verify", 0, 0);
     {
@@ -176,10 +177,25 @@ pub async fn perform_panel_update(
     }
 
     emit_progress(&app, PROGRESS_EVENT, "replace", 0, 0);
-    std::process::Command::new(&staged_exe)
+    // Run our known coordinator, not code from the downloaded release. It stays
+    // at the caller's privilege level and relaunches the GUI after any elevated copy.
+    let coordinator = staging.join("singboard-updater.exe");
+    std::fs::copy(&target, &coordinator).map_err(|e| cleanup(e.to_string()))?;
+    // GNU builds use a dynamic WebView2 loader; official MSVC builds embed it.
+    if let Some(parent) = target.parent() {
+        let loader = parent.join("WebView2Loader.dll");
+        if loader.is_file() {
+            std::fs::copy(loader, staging.join("WebView2Loader.dll"))
+                .map_err(|e| cleanup(e.to_string()))?;
+        }
+    }
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::process::Command::new(&coordinator)
         .arg(APPLY_UPDATE_FLAG)
         .arg(&target)
         .arg(std::process::id().to_string())
+        .arg(&staged_exe)
+        .arg(&data_dir)
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
         .spawn()
         .map_err(|e| cleanup(format!("启动更新程序失败: {}", e)))?;
@@ -210,17 +226,63 @@ fn wait_for_pid_exit(pid: u32, timeout: Duration) {
     }
 }
 
-pub fn run_apply_update(target: &Path, pid: u32) -> Result<(), String> {
+pub fn run_apply_update(
+    target: &Path,
+    pid: u32,
+    source: &Path,
+    data_dir: &Path,
+) -> Result<(), String> {
     wait_for_pid_exit(pid, Duration::from_secs(10));
-    let source = std::env::current_exe().map_err(|e| format!("获取更新程序路径失败: {}", e))?;
-    overwrite_with_backup(&source, target)
+    let result = overwrite_with_backup(source, target);
+    match result {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {}
+        Err(e) => {
+            let message = format!("覆盖面板失败: {e}");
+            let _ = std::fs::create_dir_all(data_dir);
+            let _ = std::fs::write(data_dir.join("panel-update-error.txt"), &message);
+            return Err(message);
+        }
+    }
+    // Retry protected-directory replacement with a single elevated child. The
+    // coordinator remains unelevated, including when the user cancels UAC.
+    let hash = crate::service::helper::sha256_file(source)?;
+    let sid = singboard_service::ipc::current_user_sid().map_err(|e| e.to_string())?;
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?
+        .block_on(crate::service::elevation::request_with_context(
+            crate::service::elevation::Operation::ReplacePanel {
+                source: source.to_path_buf(),
+                target: target.to_path_buf(),
+                hash,
+            },
+            data_dir.to_path_buf(),
+            sid,
+            None,
+        ))
+        .map(|_| ());
+    if let Err(error) = &result {
+        let _ = std::fs::create_dir_all(data_dir);
+        let _ = std::fs::write(data_dir.join("panel-update-error.txt"), error);
+    }
+    result
 }
 
-fn overwrite_with_backup(source: &Path, target: &Path) -> Result<(), String> {
-    let bak_path = target.with_extension("exe.bak");
-    let had_backup = target.is_file() && std::fs::copy(target, &bak_path).is_ok();
+fn overwrite_with_backup(source: &Path, target: &Path) -> std::io::Result<()> {
+    let bytes = std::fs::read(source)?;
+    overwrite_bytes_with_backup(&bytes, target)
+}
 
-    match retry_io(5, || std::fs::copy(source, target).map(|_| ())) {
+pub(crate) fn overwrite_bytes_with_backup(bytes: &[u8], target: &Path) -> std::io::Result<()> {
+    let bak_path = target.with_extension("exe.bak");
+    let had_backup = target.is_file();
+    if had_backup {
+        std::fs::copy(target, &bak_path)?;
+    }
+
+    match retry_io(5, || std::fs::write(target, bytes)) {
         Ok(()) => {
             if had_backup {
                 let _ = std::fs::remove_file(&bak_path);
@@ -229,15 +291,39 @@ fn overwrite_with_backup(source: &Path, target: &Path) -> Result<(), String> {
         }
         Err(e) => {
             if had_backup {
-                let _ = retry_io(5, || std::fs::copy(&bak_path, target).map(|_| ()));
+                if let Err(rollback) = retry_io(5, || std::fs::copy(&bak_path, target).map(|_| ()))
+                {
+                    return Err(std::io::Error::new(
+                        e.kind(),
+                        format!(
+                            "覆盖失败: {e}; 恢复失败: {rollback}; 备份保留在 {}",
+                            bak_path.display()
+                        ),
+                    ));
+                }
                 let _ = std::fs::remove_file(&bak_path);
             }
-            Err(format!("覆盖面板失败: {}", e))
+            Err(e)
         }
     }
 }
 
+#[tauri::command]
+pub fn take_panel_update_error(app: tauri::AppHandle) -> Option<String> {
+    let path = app
+        .path()
+        .app_data_dir()
+        .ok()?
+        .join("panel-update-error.txt");
+    let error = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(path);
+    Some(error)
+}
+
 pub fn launch_panel(target: &Path) -> Result<(), String> {
+    if singboard_service::ipc::is_elevated().map_err(|e| e.to_string())? {
+        return launch_panel_from_desktop(target);
+    }
     let mut cmd = std::process::Command::new(target);
     if let Some(dir) = target.parent() {
         cmd.current_dir(dir);
@@ -246,6 +332,84 @@ pub fn launch_panel(target: &Path) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("启动面板失败: {}", e))
+}
+
+// Also handles an upgrade launched by an older, always-elevated panel.
+fn launch_panel_from_desktop(target: &Path) -> Result<(), String> {
+    use singboard_service::ipc::wide;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Security::*;
+    use windows_sys::Win32::System::Environment::{
+        CreateEnvironmentBlock, DestroyEnvironmentBlock,
+    };
+    use windows_sys::Win32::System::Threading::*;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetShellWindow, GetWindowThreadProcessId};
+    unsafe {
+        let shell = GetShellWindow();
+        let mut shell_pid = 0;
+        GetWindowThreadProcessId(shell, &mut shell_pid);
+        if shell_pid == 0 {
+            return Err("未找到普通权限桌面进程".into());
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, shell_pid);
+        if process.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let process = OwnedHandle::from_raw_handle(process);
+        let mut token = std::ptr::null_mut();
+        if OpenProcessToken(
+            process.as_raw_handle(),
+            TOKEN_QUERY | TOKEN_DUPLICATE,
+            &mut token,
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let token = OwnedHandle::from_raw_handle(token);
+        let mut primary = std::ptr::null_mut();
+        if DuplicateTokenEx(
+            token.as_raw_handle(),
+            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY,
+            std::ptr::null(),
+            SecurityImpersonation,
+            TokenPrimary,
+            &mut primary,
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let primary = OwnedHandle::from_raw_handle(primary);
+        let application = wide(&target.to_string_lossy());
+        let mut command = wide(&crate::service::elevation::quote_arg(
+            &target.to_string_lossy(),
+        ));
+        let mut startup: STARTUPINFOW = std::mem::zeroed();
+        startup.cb = std::mem::size_of_val(&startup) as u32;
+        let mut result: PROCESS_INFORMATION = std::mem::zeroed();
+        let mut environment = std::ptr::null_mut();
+        if CreateEnvironmentBlock(&mut environment, primary.as_raw_handle(), 0) == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let launched = CreateProcessWithTokenW(
+            primary.as_raw_handle(),
+            0,
+            application.as_ptr(),
+            command.as_mut_ptr(),
+            DETACHED_PROCESS | CREATE_UNICODE_ENVIRONMENT,
+            environment,
+            std::ptr::null(),
+            &startup,
+            &mut result,
+        );
+        let error = std::io::Error::last_os_error();
+        DestroyEnvironmentBlock(environment);
+        if launched == 0 {
+            return Err(format!("以桌面用户身份启动面板失败: {error}"));
+        }
+        drop(OwnedHandle::from_raw_handle(result.hThread));
+        drop(OwnedHandle::from_raw_handle(result.hProcess));
+        Ok(())
+    }
 }
 
 pub fn cleanup_staging() {

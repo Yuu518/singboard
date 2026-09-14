@@ -2,13 +2,11 @@
 import { computed, ref } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useServiceStore } from '@/stores/service'
-import { useConfigStore } from '@/stores/config'
-import { stopService } from '@/bridge/service'
+import { stopService, isElevationCancelled } from '@/bridge/service'
 import { startCore, restartCore } from '@/utils/coreControl'
 import { showMainWindow, quitApp } from '@/bridge/app'
 
 const { serviceStatus, refresh } = useServiceStore()
-const { serviceName } = useConfigStore()
 
 const isRunning = computed(() => serviceStatus.value.state === 'running')
 const busy = ref<'' | 'toggle' | 'restart'>('')
@@ -21,12 +19,12 @@ async function handleToggle() {
   errorText.value = ''
   try {
     if (isRunning.value) {
-      await stopService(serviceName.value)
+      await stopService()
     } else {
-      await startCore(serviceName.value)
+      await startCore()
     }
   } catch (e: any) {
-    errorText.value = e?.message || String(e)
+    if (!isElevationCancelled(e)) errorText.value = e?.message || String(e)
   }
   await refresh()
   busy.value = ''
@@ -37,9 +35,9 @@ async function handleRestart() {
   busy.value = 'restart'
   errorText.value = ''
   try {
-    await restartCore(serviceName.value)
+    await restartCore()
   } catch (e: any) {
-    errorText.value = e?.message || String(e)
+    if (!isElevationCancelled(e)) errorText.value = e?.message || String(e)
   }
   await refresh()
   busy.value = ''

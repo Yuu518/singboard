@@ -61,12 +61,21 @@ fn quit_app(app: tauri::AppHandle) {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
+    // No GUI, tray or single-instance plugin in the elevated management child.
+    if args.get(1).map(String::as_str) == Some(singboard_lib::service::elevation::ADMIN_FLAG) {
+        let result = match (args.get(2), args.get(3).and_then(|p| p.parse().ok())) {
+            (Some(pipe), Some(pid)) => singboard_lib::service::elevation::run_child(pipe, pid),
+            _ => Err("管理入口参数无效".to_string()),
+        };
+        if let Err(e) = result {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if args.len() > 1 && args[1] == "service" {
-        let service_name = args
-            .get(2)
-            .cloned()
-            .unwrap_or_else(|| "sing-box".to_string());
-        if let Err(e) = singboard_service::wrapper::run_service(&service_name) {
+        if let Err(e) = singboard_service::wrapper::run_service(singboard_service::SERVICE_NAME) {
             eprintln!("Service error: {}", e);
             std::process::exit(1);
         }
@@ -81,7 +90,20 @@ fn main() {
         };
         let pid: u32 = args.get(3).and_then(|p| p.parse().ok()).unwrap_or(0);
 
-        let result = singboard_lib::commands::self_update::run_apply_update(&target, pid);
+        let source = args
+            .get(4)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| env::current_exe().expect("updater path"));
+        let data_dir = args
+            .get(5)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env::var_os("APPDATA").unwrap_or_default())
+                    .join("singboard")
+            });
+        let result = singboard_lib::commands::self_update::run_apply_update(
+            &target, pid, &source, &data_dir,
+        );
         let launched = singboard_lib::commands::self_update::launch_panel(&target);
         if let Err(e) = result.and(launched) {
             eprintln!("Update error: {}", e);
@@ -122,7 +144,14 @@ fn show_tray_menu(app: &tauri::AppHandle, position: tauri::PhysicalPosition<f64>
             .flatten()
             .or_else(|| app.primary_monitor().ok().flatten());
         let (mx, my, mw, mh) = monitor
-            .map(|m| (m.position().x, m.position().y, m.size().width as i32, m.size().height as i32))
+            .map(|m| {
+                (
+                    m.position().x,
+                    m.position().y,
+                    m.size().width as i32,
+                    m.size().height as i32,
+                )
+            })
             .unwrap_or((0, 0, i32::MAX, i32::MAX));
 
         let x = if px + w <= mx + mw { px } else { px - w };
@@ -179,26 +208,24 @@ fn run_gui() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
-            match event {
-                tauri::WindowEvent::CloseRequested { api, .. } => {
-                    if window.label() == "main" {
-                        if CLOSE_TO_TRAY.load(Ordering::Relaxed) {
-                            api.prevent_close();
-                            let _ = window.emit("window-visibility", false);
-                            let _ = window.hide();
-                        } else {
-                            let _ = window.app_handle().exit(0);
-                        }
-                    }
-                }
-                tauri::WindowEvent::Focused(false) => {
-                    if window.label() == "tray" {
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                if window.label() == "main" {
+                    if CLOSE_TO_TRAY.load(Ordering::Relaxed) {
+                        api.prevent_close();
+                        let _ = window.emit("window-visibility", false);
                         let _ = window.hide();
+                    } else {
+                        let _ = window.app_handle().exit(0);
                     }
                 }
-                _ => {}
             }
+            tauri::WindowEvent::Focused(false) => {
+                if window.label() == "tray" {
+                    let _ = window.hide();
+                }
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             set_close_to_tray,
@@ -241,6 +268,7 @@ fn run_gui() {
             singboard_lib::commands::update::perform_core_update,
             singboard_lib::commands::self_update::check_panel_update,
             singboard_lib::commands::self_update::perform_panel_update,
+            singboard_lib::commands::self_update::take_panel_update_error,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

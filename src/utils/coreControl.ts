@@ -5,7 +5,7 @@ import {
   getRunningConfigPath,
   validateSingboxConfig,
 } from '@/bridge/config'
-import { startService, stopService } from '@/bridge/service'
+import { startService, restartService } from '@/bridge/service'
 
 // 激活配置的源文件路径；未选用任何配置时返回 null
 export async function resolveActiveConfigPath(): Promise<string | null> {
@@ -48,15 +48,13 @@ export async function prepareCoreStart(): Promise<void> {
 }
 
 // 启动核心：先同步配置再拉起服务
-export async function startCore(serviceName: string): Promise<void> {
+export async function startCore(): Promise<void> {
   await prepareCoreStart()
-  await startService(serviceName)
+  await startService()
 }
 
 // 重启核心：配置校验失败时不停服务，保持当前连接可用
-export async function restartCore(serviceName: string): Promise<void> {
+export async function restartCore(): Promise<void> {
   await prepareCoreStart()
-  await stopService(serviceName)
-  await new Promise((r) => setTimeout(r, 500))
-  await startService(serviceName)
+  await restartService()
 }

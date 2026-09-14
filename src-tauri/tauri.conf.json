@@ -5,8 +5,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "cd src-tauri && cargo build --release -p singboard-service && cd .. && pnpm dev",
-    "beforeBuildCommand": "pnpm build && cd src-tauri && cargo build --release -p singboard-service"
+    "beforeDevCommand": "cd src-tauri && cargo build --release -p singboard-service --bin singboard-service && cd .. && pnpm dev",
+    "beforeBuildCommand": "pnpm build && cd src-tauri && cargo build --release -p singboard-service --bin singboard-service"
   },
   "app": {
     "withGlobalTauri": true,

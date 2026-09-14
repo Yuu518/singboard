@@ -177,7 +177,12 @@ fn pick_windows_asset(release: &GhRelease, suffix: &str) -> Result<CoreUpdateInf
         .assets
         .iter()
         .find(|a| a.name.ends_with(suffix))
-        .ok_or_else(|| format!("该版本未提供适用于 {} 的资产", suffix.trim_end_matches(".zip")))?;
+        .ok_or_else(|| {
+            format!(
+                "该版本未提供适用于 {} 的资产",
+                suffix.trim_end_matches(".zip")
+            )
+        })?;
     Ok(CoreUpdateInfo {
         version: release.tag_name.clone(),
         prerelease: release.prerelease,
@@ -226,8 +231,8 @@ pub(crate) async fn download_asset(
     dest: &Path,
 ) -> Result<(), String> {
     // 下载不设总超时（大文件慢速网络下会中途截断），连接问题由系统层面报错
-    let client = super::network::build_client(None)
-        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+    let client =
+        super::network::build_client(None).map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
     let mut resp = client
         .get(url)
         .header("User-Agent", "singboard")
@@ -246,11 +251,7 @@ pub(crate) async fn download_asset(
     let mut downloaded: u64 = 0;
     let mut last_emit = Instant::now();
     emit_progress(app, event, "download", 0, total);
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| format!("下载中断: {}", e))?
-    {
+    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("下载中断: {}", e))? {
         file.write_all(&chunk)
             .await
             .map_err(|e| format!("写入临时文件失败: {}", e))?;
@@ -279,8 +280,7 @@ pub(crate) async fn download_asset(
 /// 返回解出的 dll 文件名列表。
 fn extract_core_files(zip_path: &Path, staging: &Path) -> Result<Vec<String>, String> {
     let file = std::fs::File::open(zip_path).map_err(|e| format!("打开压缩包失败: {}", e))?;
-    let mut archive =
-        zip::ZipArchive::new(file).map_err(|e| format!("读取压缩包失败: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("读取压缩包失败: {}", e))?;
 
     let mut found_exe = false;
     let mut dlls: Vec<String> = Vec::new();
@@ -350,38 +350,43 @@ pub(crate) fn retry_io<F: FnMut() -> std::io::Result<()>>(
 
 /// 停服务 → 备份旧核心（只留一份 .bak）→ 替换 exe 并覆盖随附 dll → 重启，
 /// 失败自动回滚（dll 按需求不备份，直接覆盖）
-fn swap_and_restart(
-    app: &tauri::AppHandle,
-    staging: &Path,
-    dlls: &[String],
+pub(crate) fn swap_and_restart(
+    progress: &impl Fn(&str),
+    files: &[(String, Vec<u8>)],
     target: &Path,
     service_name: &str,
 ) -> Result<bool, String> {
-    let staged_exe = staging.join(CORE_EXE_NAME);
+    let exe_bytes = &files
+        .iter()
+        .find(|(name, _)| name == CORE_EXE_NAME)
+        .ok_or("更新清单缺少 sing-box.exe")?
+        .1;
     let target_dir = target.parent().ok_or("sing-box 路径无效")?;
     let new_path = target.with_extension("exe.new");
     let bak_path = target.with_extension("exe.bak");
 
     // 先落到目标同卷，后续 rename 才是原子操作
-    std::fs::copy(&staged_exe, &new_path).map_err(|e| format!("复制新核心失败: {}", e))?;
+    std::fs::write(&new_path, exe_bytes).map_err(|e| format!("复制新核心失败: {}", e))?;
     let cleanup_new = || {
         let _ = std::fs::remove_file(&new_path);
     };
 
     let was_running = match scm::query_service_status(service_name) {
         Ok(status) => status.state == "running" || status.state == "starting",
-        // 查询失败（含未安装）按未运行处理，只做文件替换
-        Err(_) => false,
+        Err(e) => {
+            cleanup_new();
+            return Err(e);
+        }
     };
 
     if was_running {
-        emit_progress(app, CORE_PROGRESS_EVENT, "replace", 0, 0);
+        progress("replace");
         if let Err(e) = scm::stop_service(service_name) {
             cleanup_new();
             return Err(format!("停止服务失败: {}", e));
         }
     } else {
-        emit_progress(app, CORE_PROGRESS_EVENT, "replace", 0, 0);
+        progress("replace");
     }
 
     // 备份：旧核心存在才做；只保留一份备份
@@ -411,9 +416,9 @@ fn swap_and_restart(
 
     // 覆盖随附 dll（如 naive 依赖的 libcronet.dll）：不备份，直接覆盖。
     // 失败则回滚 exe，避免 exe 与 dll 版本不一致
-    for dll in dlls {
+    for (dll, bytes) in files.iter().filter(|(name, _)| name != CORE_EXE_NAME) {
         let dll_dest = target_dir.join(dll);
-        if let Err(e) = retry_io(3, || std::fs::copy(staging.join(dll), &dll_dest).map(|_| ())) {
+        if let Err(e) = retry_io(3, || std::fs::write(&dll_dest, bytes)) {
             if had_old {
                 let _ = retry_io(3, || {
                     std::fs::remove_file(target)?;
@@ -428,7 +433,7 @@ fn swap_and_restart(
     }
 
     if was_running {
-        emit_progress(app, CORE_PROGRESS_EVENT, "restart", 0, 0);
+        progress("restart");
         let start_result = scm::start_service(service_name).and_then(|_| {
             std::thread::sleep(Duration::from_secs(2));
             match scm::query_service_status(service_name) {
@@ -480,9 +485,15 @@ pub async fn probe_asset_exe_hash(
 
     let download_url = apply_mirror(&mirror, &asset_url);
     let zip_path = staging.join("core.zip");
-    download_asset(&app, CORE_PROGRESS_EVENT, &download_url, asset_size, &zip_path)
-        .await
-        .map_err(cleanup)?;
+    download_asset(
+        &app,
+        CORE_PROGRESS_EVENT,
+        &download_url,
+        asset_size,
+        &zip_path,
+    )
+    .await
+    .map_err(cleanup)?;
 
     emit_progress(&app, CORE_PROGRESS_EVENT, "extract", 0, 0);
     // 解压结果与清单留在 staging：用户确认重新安装时直接取用，不再下载一遍
@@ -520,8 +531,8 @@ pub async fn perform_core_update(
     asset_size: u64,
     mirror: Option<String>,
     singbox_path: String,
-    service_name: String,
 ) -> Result<CoreUpdateResult, String> {
+    let service_name = crate::service::component::app_service_name(&app)?;
     let _guard = UPDATE_LOCK
         .try_lock()
         .map_err(|_| "更新正在进行中".to_string())?;
@@ -559,9 +570,15 @@ pub async fn perform_core_update(
 
             let download_url = apply_mirror(&mirror, &asset_url);
             let zip_path = staging.join("core.zip");
-            download_asset(&app, CORE_PROGRESS_EVENT, &download_url, asset_size, &zip_path)
-                .await
-                .map_err(cleanup)?;
+            download_asset(
+                &app,
+                CORE_PROGRESS_EVENT,
+                &download_url,
+                asset_size,
+                &zip_path,
+            )
+            .await
+            .map_err(cleanup)?;
 
             emit_progress(&app, CORE_PROGRESS_EVENT, "extract", 0, 0);
             let staging = staging.clone();
@@ -576,21 +593,26 @@ pub async fn perform_core_update(
     // 步骤 3：健全性检查（staging 里 dll 就在 exe 旁边，加载依赖不受影响）
     let version = probe_core_version(&staged_exe).await.map_err(cleanup)?;
 
-    // 步骤 4-9：停服 → 备份 → 替换 exe/覆盖 dll → 重启（阻塞的 SCM 调用）
-    let restarted = {
-        let app = app.clone();
-        let staging = staging.clone();
-        let target = target.clone();
-        let service_name = service_name.clone();
-        tokio::task::spawn_blocking(move || {
-            swap_and_restart(&app, &staging, &dlls, &target, &service_name)
-        })
-        .await
-        .map_err(|e| format!("任务执行失败: {}", e))
-        .and_then(|r| r)
-        .map_err(cleanup)?
-    };
-
+    // One consent covers replacement, restart and any rollback.
+    let mut files = Vec::new();
+    for name in std::iter::once("sing-box.exe".to_string()).chain(dlls) {
+        let hash = crate::service::helper::sha256_file(&staging.join(&name)).map_err(cleanup)?;
+        files.push((name, hash));
+    }
+    emit_progress(&app, CORE_PROGRESS_EVENT, "replace", 0, 0);
+    let restarted = crate::service::elevation::request(
+        &app,
+        crate::service::elevation::Operation::UpdateCore {
+            service: service_name,
+            staging: staging.clone(),
+            target,
+            files,
+        },
+    )
+    .await
+    .map_err(cleanup)?
+    .as_bool()
+    .ok_or("更新进程返回了无效结果")?;
     // 步骤 10：清理
     let _ = std::fs::remove_dir_all(&staging);
 

@@ -3,6 +3,29 @@ use std::path::{Path, PathBuf};
 
 pub const SERVICE_ERROR_LOG_NAME: &str = "singbox_last_error.log";
 
+pub fn write_panel_sid(service_name: &str, sid: &str) -> Result<(), String> {
+    if !crate::ipc::valid_sid(sid) {
+        return Err("无效的面板用户 SID".into());
+    }
+    let key = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(
+            format!(r"SYSTEM\CurrentControlSet\Services\{service_name}\Parameters"),
+            winreg::enums::KEY_SET_VALUE,
+        )
+        .map_err(|e| e.to_string())?;
+    key.set_value("PanelUserSid", &sid)
+        .map_err(|e| e.to_string())
+}
+
+pub fn read_panel_sid(service_name: &str) -> Result<String, String> {
+    winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+        .open_subkey(format!(
+            r"SYSTEM\CurrentControlSet\Services\{service_name}\Parameters"
+        ))
+        .and_then(|key| key.get_value("PanelUserSid"))
+        .map_err(|e| e.to_string())
+}
+
 fn is_log_dir_name(name: &str) -> bool {
     name.eq_ignore_ascii_case("log") || name.eq_ignore_ascii_case("logs")
 }

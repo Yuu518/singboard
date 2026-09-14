@@ -6,6 +6,7 @@ import { useSingboxVersionStore } from '@/stores/singboxVersion'
 import { useToastStore } from '@/stores/toast'
 import { checkCoreUpdate, performCoreUpdate, probeAssetExeHash, type CoreUpdateInfo, type CoreUpdateProgress } from '@/bridge/coreUpdate'
 import { getFileHash } from '@/bridge/config'
+import { isElevationCancelled } from '@/bridge/service'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 // "资产 digest → 资产内 sing-box.exe 哈希"的缓存（只留最近一条），
@@ -185,7 +186,6 @@ async function handleUpdate() {
       assetSize: latest.value.assetSize,
       mirror: config.value.coreUpdateMirror,
       singboxPath: config.value.singboxPath,
-      serviceName: config.value.serviceName,
     })
     pushToast({
       message: `核心已更新至 ${result.version}${result.restarted ? '，服务已重启' : ''}`,
@@ -204,7 +204,7 @@ async function handleUpdate() {
     } catch { }
     await detectVersion()
   } catch (e) {
-    pushToast({ message: `更新失败: ${e}`, type: 'error' })
+    if (!isElevationCancelled(e)) pushToast({ message: `更新失败: ${e}`, type: 'error' })
   } finally {
     updating.value = false
     progress.value = null

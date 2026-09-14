@@ -1,26 +1,29 @@
 import { ref, computed, onUnmounted } from 'vue'
-import { queryServiceStatus, syncServiceComponent } from '@/bridge/service'
-import { useConfigStore } from './config'
+import { queryServiceStatus, syncServiceComponent, isElevationCancelled } from '@/bridge/service'
 import type { ServiceStatus } from '@/types'
 
 const serviceStatus = ref<ServiceStatus>({ state: 'unknown' })
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let refCount = 0
 let componentSynced = false
+let polling = false
 
 let firstPollResolve: (() => void) | null = null
 const firstPollReady = new Promise<void>((resolve) => { firstPollResolve = resolve })
 
 async function poll() {
-  const { serviceName } = useConfigStore()
+  if (polling) return
+  polling = true
   try {
-    serviceStatus.value = await queryServiceStatus(serviceName.value)
+    serviceStatus.value = await queryServiceStatus()
   } catch {
     serviceStatus.value = { state: 'unknown' }
-  }
-  if (firstPollResolve) {
-    firstPollResolve()
-    firstPollResolve = null
+  } finally {
+    polling = false
+    if (firstPollResolve) {
+      firstPollResolve()
+      firstPollResolve = null
+    }
   }
 }
 
@@ -35,15 +38,13 @@ export function useServiceStore() {
   if (refCount === 0) {
     if (!componentSynced) {
       componentSynced = true
-      const { serviceName } = useConfigStore()
-      // 静默同步服务宿主组件,必要时迁移/热换(会短暂重启服务)
-      syncServiceComponent(serviceName.value)
-        .then((result) => {
-          if (result === 'migrated' || result === 'updated') {
-            console.info(`[service] 服务组件已同步: ${result}`)
-          }
+      // The backend shares this result across the main and tray WebViews,
+      // including cancellation, so startup requests never duplicate UAC prompts.
+      void syncServiceComponent()
+        .catch((e) => {
+          if (!isElevationCancelled(e)) console.warn('[service] 服务组件同步失败:', e)
         })
-        .catch((e) => console.warn('[service] 服务组件同步失败:', e))
+        .finally(poll)
     }
     poll()
     pollTimer = setInterval(poll, 1000)

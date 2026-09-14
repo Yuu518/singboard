@@ -1,4 +1,6 @@
 import { ref } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
+import { isElevationCancelled } from '@/bridge/service'
 import { getVersion } from '@tauri-apps/api/app'
 import { listen } from '@tauri-apps/api/event'
 import { checkPanelUpdate, performPanelUpdate, type PanelUpdateInfo, type PanelUpdateProgress } from '@/bridge/selfUpdate'
@@ -48,6 +50,11 @@ async function check(silent: boolean) {
 async function checkOnStartup() {
   if (checkedThisSession) return
   checkedThisSession = true
+  const previousError = await invoke<string | null>('take_panel_update_error').catch(() => null)
+  if (previousError) {
+    const { pushToast } = useToastStore()
+    pushToast({ message: isElevationCancelled(previousError) ? '已取消面板更新' : `上次面板更新失败: ${previousError}`, type: 'info' }, 6000)
+  }
   await check(true)
 }
 
@@ -68,7 +75,7 @@ async function runUpdate() {
     // Deliberately leaves `updating` set: the overlay must stay up until the
     // process actually dies.
   } catch (e) {
-    pushToast({ message: `更新失败: ${e}`, type: 'error' })
+    if (!isElevationCancelled(e)) pushToast({ message: `更新失败: ${e}`, type: 'error' })
     updating.value = false
     progress.value = null
   }

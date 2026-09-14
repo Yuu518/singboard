@@ -97,7 +97,6 @@ function normalizeConfig(raw: any): AppConfig {
     activeClashApiId,
     singboxPath: normalizeWindowsPath(raw?.singboxPath),
     workingDir: normalizeWindowsPath(raw?.workingDir),
-    serviceName: typeof raw?.serviceName === 'string' && raw.serviceName ? raw.serviceName : 'sing-box',
     startupDelaySeconds: normalizeStartupDelay(raw?.startupDelaySeconds),
     theme: ['auto', 'light', 'dark'].includes(raw?.theme) ? raw.theme : 'light',
     latencyTestUrl: typeof raw?.latencyTestUrl === 'string' && raw.latencyTestUrl
@@ -176,7 +175,6 @@ export function useConfigStore() {
   )
   const clashApiUrl = computed(() => activeClashApi.value?.url ?? '')
   const clashApiSecret = computed(() => activeClashApi.value?.secret ?? '')
-  const serviceName = computed(() => config.value.serviceName)
 
   const configProfiles = computed(() => config.value.configProfiles)
   const activeConfigProfileId = computed(() => config.value.activeConfigProfileId)
@@ -275,7 +273,6 @@ export function useConfigStore() {
     activeClashApiId,
     clashApiUrl,
     clashApiSecret,
-    serviceName,
     configProfiles,
     activeConfigProfileId,
     activeConfigProfile,

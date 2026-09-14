@@ -40,7 +40,6 @@ export async function performCoreUpdate(args: {
   assetSize: number
   mirror: string
   singboxPath: string
-  serviceName: string
 }): Promise<CoreUpdateResult> {
   return invoke<CoreUpdateResult>('perform_core_update', args)
 }
