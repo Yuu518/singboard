@@ -464,6 +464,21 @@ watch(isRunning, (running) => {
             规则提供商 ({{ ruleProviders.length }})
           </button>
         </div>
+        <button
+          v-if="activeTab === 'providers'"
+          type="button"
+          class="btn btn-sm btn-ghost btn-circle shrink-0"
+          :disabled="updatingAll || ruleProviders.length === 0"
+          :aria-busy="updatingAll"
+          aria-label="更新全部规则提供商"
+          title="更新全部规则提供商"
+          @click="handleUpdateAll"
+        >
+          <span v-if="updatingAll" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+          <svg v-else xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.992 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+          </svg>
+        </button>
       </div>
     </div>
 
@@ -543,16 +558,6 @@ watch(isRunning, (running) => {
             class="loading loading-spinner loading-xs absolute right-2 top-1/2 -translate-y-1/2 text-base-content/40"
           ></span>
         </div>
-        <button
-          class="btn btn-sm btn-outline relative shrink-0"
-          @click="handleUpdateAll"
-          :disabled="updatingAll || ruleProviders.length === 0"
-          :aria-busy="updatingAll"
-          aria-label="更新全部规则提供商"
-        >
-          <span :class="{ 'opacity-0': updatingAll }">全部更新</span>
-          <span v-if="updatingAll" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
-        </button>
       </div>
 
       <div class="rules-table-container">
