@@ -575,27 +575,31 @@ watch(
             </div>
             <div class="settings-service-actions">
               <button
-                class="btn btn-sm btn-route"
-                :class="{ loading: actionLoading === 'start' }"
-                :disabled="serviceStatus.state === 'running'"
+                class="btn btn-sm btn-route relative"
+                :aria-busy="actionLoading === 'start'"
+                :disabled="!!actionLoading || serviceStatus.state === 'running'"
                 @click="handleServiceAction('start')"
               >
-                启动
+                <span :class="{ 'opacity-0': actionLoading === 'start' }">启动</span>
+                <span v-if="actionLoading === 'start'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
               </button>
               <button
-                class="btn btn-sm btn-outline"
-                :class="{ loading: actionLoading === 'restart' }"
+                class="btn btn-sm btn-outline relative"
+                :aria-busy="actionLoading === 'restart'"
+                :disabled="!!actionLoading"
                 @click="handleServiceAction('restart')"
               >
-                重启
+                <span :class="{ 'opacity-0': actionLoading === 'restart' }">重启</span>
+                <span v-if="actionLoading === 'restart'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
               </button>
               <button
-                class="btn btn-sm btn-outline btn-error"
-                :class="{ loading: actionLoading === 'stop' }"
-                :disabled="serviceStatus.state === 'stopped'"
+                class="btn btn-sm btn-outline btn-error relative"
+                :aria-busy="actionLoading === 'stop'"
+                :disabled="!!actionLoading || serviceStatus.state === 'stopped'"
                 @click="handleServiceAction('stop')"
               >
-                停止
+                <span :class="{ 'opacity-0': actionLoading === 'stop' }">停止</span>
+                <span v-if="actionLoading === 'stop'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
               </button>
             </div>
           </div>
@@ -690,20 +694,22 @@ watch(
               </div>
               <div class="settings-row-actions">
                 <button
-                  class="btn btn-sm btn-outline"
-                  :class="{ loading: actionLoading === 'install' }"
-                  :disabled="serviceStatus.state !== 'not_installed'"
+                  class="btn btn-sm btn-outline relative"
+                  :aria-busy="actionLoading === 'install'"
+                  :disabled="!!actionLoading || serviceStatus.state !== 'not_installed'"
                   @click="handleServiceAction('install')"
                 >
-                  安装服务
+                  <span :class="{ 'opacity-0': actionLoading === 'install' }">安装服务</span>
+                  <span v-if="actionLoading === 'install'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
                 </button>
                 <button
-                  class="btn btn-sm btn-ghost settings-danger-action"
-                  :class="{ loading: actionLoading === 'uninstall' }"
-                  :disabled="serviceStatus.state === 'not_installed'"
+                  class="btn btn-sm btn-ghost settings-danger-action relative"
+                  :aria-busy="actionLoading === 'uninstall'"
+                  :disabled="!!actionLoading || serviceStatus.state === 'not_installed'"
                   @click="handleServiceAction('uninstall')"
                 >
-                  卸载
+                  <span :class="{ 'opacity-0': actionLoading === 'uninstall' }">卸载</span>
+                  <span v-if="actionLoading === 'uninstall'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
                 </button>
               </div>
             </div>
