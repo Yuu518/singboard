@@ -90,7 +90,6 @@ pub fn deploy_helper(data_dir: &Path) -> Result<PathBuf, String> {
 
 #[derive(PartialEq)]
 pub enum SyncNeed {
-    /// 已指向部署副本且哈希一致
     UpToDate,
     /// 服务仍指向旧的面板 exe，需要改指向
     Migrate,
@@ -120,7 +119,7 @@ pub fn sync_needed(data_dir: &Path, service_name: &str) -> Result<SyncNeed, Stri
         return Ok(SyncNeed::Migrate);
     }
 
-    if !deployed.is_file() {
+    if deployed_helper_needs_update(data_dir) {
         return Ok(SyncNeed::Update);
     }
     let sid = singboard_service::ipc::current_user_sid().map_err(|e| e.to_string())?;
@@ -131,13 +130,12 @@ pub fn sync_needed(data_dir: &Path, service_name: &str) -> Result<SyncNeed, Stri
     {
         return Ok(SyncNeed::Update);
     }
-    if deployed_version(data_dir).as_deref() != Some(singboard_service::HELPER_VERSION) {
-        return Ok(SyncNeed::Update);
-    }
-    if sha256_file(&deployed)? != format!("{:x}", Sha256::digest(EMBEDDED_HELPER)) {
-        return Ok(SyncNeed::Update);
-    }
     Ok(SyncNeed::UpToDate)
+}
+
+fn deployed_helper_needs_update(data_dir: &Path) -> bool {
+    !deployed_helper_path(data_dir).is_file()
+        || deployed_version(data_dir).as_deref() != Some(singboard_service::HELPER_VERSION)
 }
 
 pub fn image_points_to(image: &str, path: &Path) -> bool {
@@ -154,6 +152,51 @@ pub fn image_points_to(image: &str, path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::os::windows::fs::OpenOptionsExt;
+
+    #[test]
+    fn unchanged_service_version_does_not_require_redeployment_after_panel_update() {
+        let dir =
+            std::env::temp_dir().join(format!("singboard-helper-version-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = deploy_helper(&dir).unwrap();
+        let same_payload = deployed_helper_needs_update(&dir);
+        let mut rebuilt = EMBEDDED_HELPER.to_vec();
+        rebuilt.extend_from_slice(b"different release signature");
+        std::fs::write(dest, rebuilt).unwrap();
+        let rebuilt_payload = deployed_helper_needs_update(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(!same_payload);
+        assert!(
+            !rebuilt_payload,
+            "an unchanged service version must survive panel-only updates"
+        );
+    }
+
+    #[test]
+    fn missing_or_outdated_service_components_require_redeployment() {
+        let dir =
+            std::env::temp_dir().join(format!("singboard-helper-outdated-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = deploy_helper(&dir).unwrap();
+        std::fs::write(deployed_version_path(&dir), "old-version").unwrap();
+        let outdated_version = deployed_helper_needs_update(&dir);
+        std::fs::remove_file(deployed_version_path(&dir)).unwrap();
+        let missing_version = deployed_helper_needs_update(&dir);
+        std::fs::write(
+            deployed_version_path(&dir),
+            singboard_service::HELPER_VERSION,
+        )
+        .unwrap();
+        std::fs::remove_file(dest).unwrap();
+        let missing_payload = deployed_helper_needs_update(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(outdated_version);
+        assert!(missing_version);
+        assert!(missing_payload);
+    }
+
     #[test]
     fn locked_host_is_preserved_when_component_deployment_fails() {
         let dir =
