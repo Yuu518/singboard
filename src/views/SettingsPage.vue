@@ -5,7 +5,6 @@ import { useServiceStore } from '@/stores/service'
 import { useToastStore } from '@/stores/toast'
 import { useProxiesStore } from '@/stores/proxies'
 import {
-  SERVICE_NAME,
   stopService,
   installService,
   uninstallService,
@@ -434,14 +433,6 @@ async function syncStartupDelayToTask() {
   }
 }
 
-const statusColor = computed(() => {
-  switch (serviceStatus.value.state) {
-    case 'running': return 'badge-success'
-    case 'stopped': return 'badge-error'
-    default: return 'badge-warning'
-  }
-})
-
 const serviceStateTone = computed(() => {
   switch (serviceStatus.value.state) {
     case 'running': return 'is-running'
@@ -497,10 +488,6 @@ watch(
         <div class="settings-eyebrow">ROUTE CONTROL</div>
         <h1 class="settings-title">设置</h1>
         <p class="settings-lead">控制 sing-box 核心、连接端点与面板行为。</p>
-      </div>
-      <div class="settings-instant-chip" title="配置更改会立即写入本机">
-        <span class="settings-instant-dot"></span>
-        更改即时生效
       </div>
     </header>
 
@@ -568,7 +555,6 @@ watch(
               <div class="settings-service-title">
                 <span class="settings-service-pulse" aria-hidden="true"></span>
                 <strong>{{ statusText }}</strong>
-                <span class="badge badge-sm" :class="statusColor">{{ SERVICE_NAME }}</span>
               </div>
               <p>{{ serviceStateDescription }}</p>
             </div>
@@ -637,46 +623,44 @@ watch(
 
               <Transition name="settings-reveal">
                 <div v-if="showServiceConfigPanel" class="settings-inline-panel">
-                  <div class="settings-field-grid">
-                    <label class="settings-field settings-field-compact">
-                      <span>延迟启动</span>
-                      <div class="settings-input-unit">
-                        <input
-                          v-model.number="config.startupDelaySeconds"
-                          type="number"
-                          min="0"
-                          max="3600"
-                          step="1"
-                          class="input input-sm input-bordered"
-                          @change="updateStartupDelay(); syncStartupDelayToTask()"
-                        />
-                        <span>秒</span>
-                      </div>
-                    </label>
-                    <label class="settings-field settings-field-wide">
-                      <span>sing-box 可执行文件</span>
-                      <div class="settings-path-control">
-                        <input
-                          v-model="config.singboxPath"
-                          type="text"
-                          class="input input-sm input-bordered settings-mono"
-                          placeholder="C:\sing-box\sing-box.exe"
-                        />
-                        <button type="button" class="btn btn-sm btn-outline" @click="browseSingboxPath">浏览</button>
-                      </div>
-                    </label>
-                    <label class="settings-field settings-field-wide">
-                      <span>工作目录</span>
-                      <div class="settings-path-control">
-                        <input
-                          v-model="config.workingDir"
-                          type="text"
-                          class="input input-sm input-bordered settings-mono"
-                          placeholder="留空则使用配置文件所在目录"
-                        />
-                        <button type="button" class="btn btn-sm btn-outline" @click="browseWorkingDir">浏览</button>
-                      </div>
-                    </label>
+                  <div class="settings-service-fields">
+                    <label for="service-startup-delay" class="settings-service-field-label">延迟启动</label>
+                    <div class="settings-input-unit">
+                      <input
+                        id="service-startup-delay"
+                        v-model.number="config.startupDelaySeconds"
+                        type="number"
+                        min="0"
+                        max="3600"
+                        step="1"
+                        class="input input-sm input-bordered"
+                        aria-describedby="service-startup-delay-unit"
+                        @change="updateStartupDelay(); syncStartupDelayToTask()"
+                      />
+                      <span id="service-startup-delay-unit">秒</span>
+                    </div>
+                    <label for="service-singbox-path" class="settings-service-field-label">sing-box 可执行文件</label>
+                    <div class="settings-path-control">
+                      <input
+                        id="service-singbox-path"
+                        v-model="config.singboxPath"
+                        type="text"
+                        class="input input-sm input-bordered settings-mono"
+                        placeholder="C:\sing-box\sing-box.exe"
+                      />
+                      <button type="button" class="btn btn-sm btn-outline" aria-label="浏览 sing-box 可执行文件" @click="browseSingboxPath">浏览</button>
+                    </div>
+                    <label for="service-working-dir" class="settings-service-field-label">工作目录</label>
+                    <div class="settings-path-control">
+                      <input
+                        id="service-working-dir"
+                        v-model="config.workingDir"
+                        type="text"
+                        class="input input-sm input-bordered settings-mono"
+                        placeholder="留空则使用配置文件所在目录"
+                      />
+                      <button type="button" class="btn btn-sm btn-outline" aria-label="浏览工作目录" @click="browseWorkingDir">浏览</button>
+                    </div>
                   </div>
                 </div>
               </Transition>

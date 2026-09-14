@@ -70,29 +70,6 @@
   line-height: 1.5;
 }
 
-.settings-instant-chip {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 7px;
-  min-height: 28px;
-  padding: 4px 10px;
-  border: 1px solid oklch(var(--b3));
-  border-radius: 999px;
-  background: oklch(var(--b2));
-  color: var(--settings-ink-soft);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.settings-instant-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--route-signal);
-  box-shadow: 0 0 0 3px var(--route-signal-soft);
-}
-
 .settings-status-strip {
   --service-state-color: var(--settings-ink-faint);
   display: grid;
@@ -555,14 +532,18 @@
   background: oklch(var(--b1));
 }
 
-.settings-field-grid {
+.settings-service-fields {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 160px;
-  gap: 13px;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px 16px;
 }
 
-.settings-field-wide {
-  grid-column: 1 / -1;
+.settings-service-field-label {
+  color: var(--settings-ink-soft);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
 }
 
 .settings-field {
@@ -593,25 +574,37 @@
   line-height: 1.4;
 }
 
-.settings-path-control,
-.settings-input-unit {
-  display: flex;
+.settings-path-control {
+  display: grid;
   min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 56px;
   align-items: center;
   gap: 8px;
 }
 
 .settings-path-control > input {
+  width: 100%;
   min-width: 0;
-  flex: 1;
+}
+
+.settings-input-unit {
+  display: flex;
+  width: 136px;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
 }
 
 .settings-input-unit > input {
+  width: 0;
   min-width: 0;
   flex: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .settings-input-unit > span {
+  flex: none;
   color: var(--settings-ink-soft);
   font-size: 11px;
 }
@@ -1219,14 +1212,18 @@
     width: 100%;
   }
 
-  .settings-field-grid,
   .settings-endpoint-fields,
   .settings-update-source-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .settings-field-wide {
-    grid-column: auto;
+  .settings-service-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+  }
+
+  .settings-service-field-label:not(:first-child) {
+    margin-top: 9px;
   }
 
   .settings-mapping-row,
@@ -1363,10 +1360,6 @@
     gap: 10px;
   }
 
-  .settings-instant-chip {
-    align-self: flex-start;
-  }
-
   .settings-status-strip {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1381,11 +1374,6 @@
 
   .settings-status-fact:last-child {
     border-bottom: 0;
-  }
-
-  .settings-path-control {
-    align-items: stretch;
-    flex-direction: column;
   }
 
   .settings-endpoint-picker {
