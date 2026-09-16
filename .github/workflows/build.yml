@@ -3,8 +3,8 @@ name: Build
 on:
   workflow_dispatch:
   push:
-    tags:
-      - "v*"
+    branches:
+      - master
 
 permissions:
   contents: write
