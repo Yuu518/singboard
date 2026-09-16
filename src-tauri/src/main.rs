@@ -166,6 +166,24 @@ fn show_tray_menu(app: &tauri::AppHandle, position: tauri::PhysicalPosition<f64>
 }
 
 fn run_gui() {
+    if tauri::webview_version().is_err() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+
+        let title: Vec<u16> = "singboard\0".encode_utf16().collect();
+        let message: Vec<u16> = "未检测到当前用户可用的 Microsoft Edge WebView2 Runtime。\n\n请安装后重新启动 singboard：\nhttps://developer.microsoft.com/microsoft-edge/webview2/\n\n点击确定后程序将退出。\0"
+            .encode_utf16()
+            .collect();
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                message.as_ptr(),
+                title.as_ptr(),
+                MB_OK | MB_ICONERROR,
+            );
+        }
+        std::process::exit(1);
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if !args.iter().any(|a| a == "--hidden") {
