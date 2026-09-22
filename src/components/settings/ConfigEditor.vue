@@ -552,6 +552,7 @@ async function handleSave() {
       pushToast({ message: '配置文件已保存', type: 'info' })
       emit('saved')
     } else {
+      moduleRawContents.value[activeModule.value] = getEditorContent()
       if (!applyEditorChangesToState()) {
         saving.value = false
         return

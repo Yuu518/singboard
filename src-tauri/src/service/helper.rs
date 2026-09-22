@@ -12,7 +12,7 @@ const HELPER_VERSION_FILE: &str = "singboard.service.version";
 // an installed release service with a debug build.
 const EMBEDDED_HELPER: &[u8] = include_bytes!("../../target/release/singboard.service");
 
-/// 服务实际注册使用的 helper 副本位置（用户数据目录根下）
+/// 服务实际注册使用的 helper 副本位置。
 pub fn deployed_helper_path(data_dir: &Path) -> PathBuf {
     data_dir.join(HELPER_EXE_NAME)
 }
@@ -34,16 +34,29 @@ fn deployed_version(data_dir: &Path) -> Option<String> {
 }
 
 /// 把内嵌的 helper 释放到部署位置。调用方负责先停止服务。
-pub fn deploy_helper(data_dir: &Path) -> Result<PathBuf, String> {
+pub fn deploy_helper() -> Result<PathBuf, String> {
+    let directory = super::protected::Directory::open(true)?;
+    deploy_helper_at(directory.path(), Some(&directory))
+}
+
+fn deploy_helper_at(
+    data_dir: &Path,
+    directory: Option<&super::protected::Directory>,
+) -> Result<PathBuf, String> {
     let dest = deployed_helper_path(data_dir);
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create app data dir: {}", e))?;
     }
 
-    let staged = dest.with_extension("service.new");
+    let staged = if let Some(directory) = directory {
+        directory.write_new(&super::runtime::unique_name("helper-new"), EMBEDDED_HELPER)?
+    } else {
+        let staged = dest.with_extension("service.new");
+        std::fs::write(&staged, EMBEDDED_HELPER).map_err(|e| format!("暂存服务组件失败: {e}"))?;
+        staged
+    };
     let backup = dest.with_extension("service.bak");
-    std::fs::write(&staged, EMBEDDED_HELPER).map_err(|e| format!("暂存服务组件失败: {e}"))?;
     let had_old = dest.is_file();
     let result = (|| {
         if had_old {
@@ -75,10 +88,18 @@ pub fn deploy_helper(data_dir: &Path) -> Result<PathBuf, String> {
             }
             return Err(format!("安装服务组件失败: {e}"));
         }
-        let _ = std::fs::write(
-            deployed_version_path(data_dir),
-            singboard_service::HELPER_VERSION,
-        );
+        let version_path = deployed_version_path(data_dir);
+        if let Some(directory) = directory {
+            let version = directory.write_new(
+                &super::runtime::unique_name("version-new"),
+                singboard_service::HELPER_VERSION.as_bytes(),
+            )?;
+            let _ = std::fs::remove_file(&version_path);
+            std::fs::rename(version, version_path).map_err(|e| e.to_string())?;
+        } else {
+            std::fs::write(version_path, singboard_service::HELPER_VERSION)
+                .map_err(|e| e.to_string())?;
+        }
         if had_old {
             let _ = std::fs::remove_file(&backup);
         }
@@ -111,15 +132,21 @@ pub fn service_image_path(service_name: &str) -> Option<String> {
     key.get_value("ImagePath").ok()
 }
 
-pub fn sync_needed(data_dir: &Path, service_name: &str) -> Result<SyncNeed, String> {
-    let deployed = deployed_helper_path(data_dir);
+pub fn sync_needed(service_name: &str) -> Result<SyncNeed, String> {
+    let protected = super::protected::path()?;
+    let deployed = deployed_helper_path(&protected);
     let image_path = service_image_path(service_name).unwrap_or_default();
     let points_at_deployed = image_points_to(&image_path, &deployed);
     if !points_at_deployed {
         return Ok(SyncNeed::Migrate);
     }
 
-    if deployed_helper_needs_update(data_dir) {
+    if deployed_helper_needs_update(&protected)
+        || !super::protected::Directory::open(false)
+            .is_ok_and(|directory| directory.validate_file(&deployed).is_ok())
+        || !super::runtime::Snapshot::read(service_name)
+            .is_ok_and(|snapshot| snapshot.is_protected())
+    {
         return Ok(SyncNeed::Update);
     }
     let sid = singboard_service::ipc::current_user_sid().map_err(|e| e.to_string())?;
@@ -158,7 +185,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("singboard-helper-version-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let dest = deploy_helper(&dir).unwrap();
+        let dest = deploy_helper_at(&dir, None).unwrap();
         let same_payload = deployed_helper_needs_update(&dir);
         let mut rebuilt = EMBEDDED_HELPER.to_vec();
         rebuilt.extend_from_slice(b"different release signature");
@@ -178,7 +205,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("singboard-helper-outdated-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let dest = deploy_helper(&dir).unwrap();
+        let dest = deploy_helper_at(&dir, None).unwrap();
         std::fs::write(deployed_version_path(&dir), "old-version").unwrap();
         let outdated_version = deployed_helper_needs_update(&dir);
         std::fs::remove_file(deployed_version_path(&dir)).unwrap();
@@ -210,7 +237,7 @@ mod tests {
             .share_mode(1)
             .open(&dest)
             .unwrap();
-        assert!(deploy_helper(&dir).is_err());
+        assert!(deploy_helper_at(&dir, None).is_err());
         assert_eq!(std::fs::read(&dest).unwrap(), b"original host");
         assert_eq!(deployed_version(&dir).as_deref(), Some("old-version"));
         assert!(!dest.with_extension("service.new").exists());

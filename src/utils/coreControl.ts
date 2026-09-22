@@ -29,7 +29,8 @@ export async function syncActiveConfigToRunning(): Promise<void> {
 // 核心读取的始终是 running-config，源文件可能在面板之外被改动，
 // 因此每次启动都要重新同步，否则会用到上一次的旧配置。
 export async function prepareCoreStart(): Promise<void> {
-  const { config } = useConfigStore()
+  const { config, refreshConfigFromStorage } = useConfigStore()
+  refreshConfigFromStorage()
   const { singboxPath, workingDir } = config.value
   if (!singboxPath) throw new Error('请先配置 sing-box 路径')
 

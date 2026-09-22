@@ -1,5 +1,5 @@
 //! Startup synchronization and migration of the app-owned Windows service.
-use super::{SERVICE_NAME, elevation, helper, scm};
+use super::{SERVICE_NAME, elevation, helper, runtime, scm};
 use std::path::Path;
 use tauri::Manager;
 
@@ -67,7 +67,7 @@ pub async fn sync(app: &tauri::AppHandle) -> Result<String, String> {
                             .map(|service| elevation::Operation::Migrate { service }),
                     );
                 }
-                Ok(match helper::sync_needed(&data_dir, SERVICE_NAME)? {
+                Ok(match helper::sync_needed(SERVICE_NAME)? {
                     helper::SyncNeed::UpToDate => None,
                     _ => Some(elevation::Operation::Sync {
                         service: SERVICE_NAME.into(),
@@ -93,7 +93,12 @@ pub fn migrate(data_dir: &Path, old_name: &str, user_sid: &str) -> Result<(), St
     {
         return Err("服务安装状态已变化，请重新打开面板后重试迁移".into());
     }
-    let (core, config, working_dir) = scm::read_service_params(old_name)?;
+    let previous = runtime::Snapshot::read(old_name)?;
+    let snapshot = runtime::capture(
+        &previous.source_core,
+        &previous.source_config,
+        &previous.working_dir,
+    )?;
     let was_running = matches!(
         scm::query_service_status(old_name)?.state.as_str(),
         "running" | "starting"
@@ -102,11 +107,11 @@ pub fn migrate(data_dir: &Path, old_name: &str, user_sid: &str) -> Result<(), St
     let mut created = false;
     let mut copied_task = false;
     let install = (|| {
-        let deployed = helper::deploy_helper(data_dir)?;
+        let deployed = helper::deploy_helper()?;
         let bin = elevation::quote_arg(&deployed.to_string_lossy());
         scm::install_service(SERVICE_NAME, &bin, SERVICE_NAME)?;
         created = true;
-        scm::write_service_params(SERVICE_NAME, &core, &config, &working_dir)?;
+        snapshot.publish(SERVICE_NAME)?;
         singboard_service::params::write_panel_sid(SERVICE_NAME, user_sid)?;
         copied_task = scm::copy_startup_task(old_name, SERVICE_NAME)?;
         if was_running {
@@ -144,11 +149,101 @@ pub fn migrate(data_dir: &Path, old_name: &str, user_sid: &str) -> Result<(), St
     Ok(())
 }
 
+pub fn configure(
+    service: &str,
+    snapshot: &runtime::Snapshot,
+    user_sid: &str,
+    start: bool,
+) -> Result<(), String> {
+    let status = scm::query_service_status(service)?;
+    let installed = status.state != "not_installed";
+    let previous = installed
+        .then(|| runtime::Snapshot::read(service).ok())
+        .flatten();
+    let previous_image = helper::service_image_path(service);
+    let was_running = matches!(status.state.as_str(), "running" | "starting");
+    if was_running {
+        scm::stop_service(service)?;
+    }
+    let mut created = false;
+    let result = (|| {
+        let deployed = helper::deploy_helper()?;
+        let image = elevation::quote_arg(&deployed.to_string_lossy());
+        if installed {
+            scm::update_service_bin_path(service, &image)?;
+        } else {
+            scm::install_service(service, &image, service)?;
+            created = true;
+        }
+        snapshot.publish(service)?;
+        singboard_service::params::write_panel_sid(service, user_sid)?;
+        if start || was_running {
+            scm::start_service(service)?;
+        }
+        Ok::<_, String>(())
+    })();
+    if let Err(error) = result {
+        let mut errors = vec![error];
+        if let Some(previous) = &previous {
+            let rollback = (|| {
+                scm::stop_service(service)?;
+                previous.publish(service)?;
+                if let Some(image) = &previous_image {
+                    scm::update_service_bin_path(service, image)?;
+                }
+                if was_running {
+                    scm::start_service(service)?;
+                }
+                Ok::<_, String>(())
+            })();
+            if let Err(error) = rollback {
+                errors.push(format!("恢复旧服务失败: {error}"));
+            } else {
+                snapshot.discard_replaced_by(previous);
+            }
+        } else if created {
+            if let Err(error) = scm::uninstall_service(service) {
+                errors.push(format!("撤销服务安装失败: {error}"));
+            }
+        }
+        return Err(errors.join("; "));
+    }
+    if let Some(previous) = previous {
+        previous.discard_replaced_by(snapshot);
+    }
+    Ok(())
+}
+
+pub fn start_with_snapshot(
+    data_dir: &Path,
+    service: &str,
+    user_sid: &str,
+    restart: bool,
+) -> Result<(), String> {
+    let service = if service != SERVICE_NAME {
+        migrate(data_dir, service, user_sid)?;
+        SERVICE_NAME
+    } else {
+        service
+    };
+    if !restart && scm::query_service_status(service)?.state == "running" {
+        return Ok(());
+    }
+    let current = runtime::Snapshot::read(service)?;
+    let snapshot = current.refresh_config()?;
+    configure(service, &snapshot, user_sid, true)
+}
+
 pub fn cleanup_legacy_files(data_dir: &Path) -> Result<(), String> {
     if legacy_service_name(data_dir)?.is_some() {
         return Ok(());
     }
-    for name in ["singboard-service.exe", "singboard-service.version"] {
+    for name in [
+        "singboard-service.exe",
+        "singboard-service.version",
+        "singboard.service",
+        "singboard.service.version",
+    ] {
         match std::fs::remove_file(data_dir.join(name)) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

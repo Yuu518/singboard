@@ -93,9 +93,9 @@ This produces the distributable panel executable:
 
 - `src-tauri/target/release/singboard.exe` — the panel (GUI), with the service host embedded
 
-The service host remains a standalone crate (`src-tauri/service-host/`), but its executable bytes are embedded into `singboard.exe` at build time. When installing or repairing the service, the panel extracts it to `%APPDATA%\singboard\singboard-service.exe` and registers the Windows service against that copy, so the panel's own file is never locked while the service runs. Only `singboard.exe` needs to be distributed.
+The service host remains a standalone crate (`src-tauri/service-host/`), but its executable bytes are embedded into `singboard.exe` at build time. An elevated installation places `singboard.service` and approved copies of the core, its adjacent DLLs, and the configuration under the Windows Program Files known folder in `singboard-service`. Only SYSTEM and Administrators can replace these files or their parent directories; configuration contents are readable only by those accounts. Only `singboard.exe` needs to be distributed.
 
-The deployed copy is refreshed automatically (with a brief service restart) only when its SHA-256 differs from the embedded payload. The helper is built with `/Brepro` for reproducible bytes, so panel-only releases do not normally touch the running service. Both development and release panels embed the release helper, preventing a development session from replacing an installed service with a debug build. The Tauri hooks build the helper before compiling the panel. If building Rust directly, first run `cargo build --release -p singboard-service` from `src-tauri/`. Avoid `--workspace`: it can build the panel before the helper payload exists and can unify dependency features differently.
+Existing services are migrated through the startup elevation request. The panel continues editing the original configuration and using the selected working directory for core data. Installing, starting, or restarting through the panel approves a new protected core/configuration snapshot; the login task runs the last approved snapshot. Core updates replace the selected source files and the protected runtime together, restoring both on failure. A service-host version change also requests a component refresh. Both development and release panels embed the release helper. The Tauri hooks build the helper before compiling the panel. If building Rust directly, first run `cargo build --release -p singboard-service` from `src-tauri/`. Avoid `--workspace`: it can build the panel before the helper payload exists and can unify dependency features differently.
 
 ## Project Structure
 
@@ -117,7 +117,7 @@ The deployed copy is refreshed automatically (with a brief service restart) only
 ## Notes
 
 - This project depends on Clash API; make sure sing-box exposes a reachable API endpoint.
-- The default Windows service name is `sing-box` and can be changed in Settings.
+- The Windows service name is `singboard.service`.
 
 ---
 

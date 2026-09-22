@@ -11,7 +11,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 // "资产 digest → 资产内 sing-box.exe 哈希"的缓存（只留最近一条），
 // 版本号相同时用本地 exe 哈希与之比对，识别上游重建或本地被手动替换
-const INSTALL_RECORD_KEY = 'singboard-core-install-record'
+const INSTALL_RECORD_KEY = 'singboard-core-install-record-v2'
 
 interface InstallRecord {
   assetDigest: string
@@ -116,6 +116,7 @@ async function isLocalOutOfSync(info: CoreUpdateInfo): Promise<boolean> {
     const exeHash = await probeAssetExeHash({
       assetUrl: info.assetUrl,
       assetSize: info.assetSize,
+      assetDigest: info.assetDigest,
       mirror: config.value.coreUpdateMirror,
     })
     saveInstallRecord({ assetDigest: info.assetDigest, exeHash })
@@ -184,6 +185,7 @@ async function handleUpdate() {
     const result = await performCoreUpdate({
       assetUrl: latest.value.assetUrl,
       assetSize: latest.value.assetSize,
+      assetDigest,
       mirror: config.value.coreUpdateMirror,
       singboxPath: config.value.singboxPath,
     })

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::Emitter;
 use tokio::io::AsyncWriteExt;
 
@@ -49,8 +50,7 @@ pub(crate) struct UpdateProgress {
 struct StagedCore {
     asset_url: String,
     asset_size: u64,
-    exe_hash: String,
-    dlls: Vec<String>,
+    asset_digest: String,
 }
 
 #[derive(Deserialize)]
@@ -102,21 +102,37 @@ fn staging_dir() -> PathBuf {
     std::env::temp_dir().join("singboard")
 }
 
-/// 暂存目录里的解压结果能否直接安装：清单指向同一资产，exe 与随附 dll 都在，
-/// 且 exe 哈希与清单一致（残留被改动或上次写坏时退回重新下载）
-fn take_staged(staging: &Path, asset_url: &str, asset_size: u64) -> Option<Vec<String>> {
+fn core_asset_hash(asset_digest: &str) -> Result<&str, String> {
+    asset_digest
+        .trim()
+        .strip_prefix("sha256:")
+        .map(str::trim)
+        .filter(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| "上游未提供有效的 SHA-256 校验信息，已中止核心更新".to_string())
+}
+
+fn take_staged(
+    staging: &Path,
+    asset_url: &str,
+    asset_size: u64,
+    asset_digest: &str,
+) -> Option<Vec<String>> {
     let text = std::fs::read_to_string(staging.join(STAGED_MANIFEST)).ok()?;
     let staged: StagedCore = serde_json::from_str(&text).ok()?;
-    if staged.asset_url != asset_url || staged.asset_size != asset_size {
+    if staged.asset_url != asset_url
+        || staged.asset_size != asset_size
+        || !core_asset_hash(&staged.asset_digest)
+            .ok()?
+            .eq_ignore_ascii_case(core_asset_hash(asset_digest).ok()?)
+    {
         return None;
     }
-    if crate::service::helper::sha256_file(&staging.join(CORE_EXE_NAME)).ok()? != staged.exe_hash {
-        return None;
-    }
-    if !staged.dlls.iter().all(|d| staging.join(d).is_file()) {
-        return None;
-    }
-    Some(staged.dlls)
+    extract_core_files(
+        &staging.join("core.zip"),
+        &staging.join("files"),
+        asset_digest,
+    )
+    .ok()
 }
 
 pub(crate) fn emit_progress(
@@ -278,9 +294,22 @@ pub(crate) async fn download_asset(
 /// 从 zip 中解出 sing-box.exe（必需）与随附的 dll 依赖（如 naive 需要的
 /// libcronet.dll）。按文件名匹配、平铺写入 staging，不依赖目录结构。
 /// 返回解出的 dll 文件名列表。
-fn extract_core_files(zip_path: &Path, staging: &Path) -> Result<Vec<String>, String> {
-    let file = std::fs::File::open(zip_path).map_err(|e| format!("打开压缩包失败: {}", e))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("读取压缩包失败: {}", e))?;
+fn extract_core_files(
+    zip_path: &Path,
+    staging: &Path,
+    asset_digest: &str,
+) -> Result<Vec<String>, String> {
+    let expected = core_asset_hash(asset_digest)?;
+    let bytes = std::fs::read(zip_path).map_err(|e| format!("打开压缩包失败: {}", e))?;
+    if !format!("{:x}", Sha256::digest(&bytes)).eq_ignore_ascii_case(expected) {
+        return Err("核心文件 SHA-256 校验失败，已中止更新".into());
+    }
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .map_err(|e| format!("读取压缩包失败: {}", e))?;
+    if staging.exists() {
+        std::fs::remove_dir_all(staging).map_err(|e| format!("清理临时目录失败: {}", e))?;
+    }
+    std::fs::create_dir_all(staging).map_err(|e| format!("创建临时目录失败: {}", e))?;
 
     let mut found_exe = false;
     let mut dlls: Vec<String> = Vec::new();
@@ -469,8 +498,10 @@ pub async fn probe_asset_exe_hash(
     app: tauri::AppHandle,
     asset_url: String,
     asset_size: u64,
+    asset_digest: String,
     mirror: Option<String>,
 ) -> Result<String, String> {
+    core_asset_hash(&asset_digest)?;
     let _guard = UPDATE_LOCK
         .try_lock()
         .map_err(|_| "更新正在进行中".to_string())?;
@@ -501,14 +532,13 @@ pub async fn probe_asset_exe_hash(
         let staging = staging.clone();
         let asset_url = asset_url.clone();
         tokio::task::spawn_blocking(move || {
-            let dlls = extract_core_files(&zip_path, &staging)?;
-            let exe_hash = crate::service::helper::sha256_file(&staging.join(CORE_EXE_NAME))?;
-            let _ = std::fs::remove_file(&zip_path);
+            let files_dir = staging.join("files");
+            extract_core_files(&zip_path, &files_dir, &asset_digest)?;
+            let exe_hash = crate::service::helper::sha256_file(&files_dir.join(CORE_EXE_NAME))?;
             let manifest = serde_json::to_string(&StagedCore {
                 asset_url,
                 asset_size,
-                exe_hash: exe_hash.clone(),
-                dlls,
+                asset_digest,
             })
             .map_err(|e| format!("写入清单失败: {}", e))?;
             std::fs::write(staging.join(STAGED_MANIFEST), manifest)
@@ -529,9 +559,11 @@ pub async fn perform_core_update(
     app: tauri::AppHandle,
     asset_url: String,
     asset_size: u64,
+    asset_digest: String,
     mirror: Option<String>,
     singbox_path: String,
 ) -> Result<CoreUpdateResult, String> {
+    core_asset_hash(&asset_digest)?;
     let service_name = crate::service::component::app_service_name(&app)?;
     let _guard = UPDATE_LOCK
         .try_lock()
@@ -553,14 +585,17 @@ pub async fn perform_core_update(
         msg
     };
 
-    // 步骤 1-2：一致性校验刚下过同一个资产就直接复用其解压结果，否则下载并解压
-    let staged_exe = staging.join(CORE_EXE_NAME);
+    let files_dir = staging.join("files");
+    let staged_exe = files_dir.join(CORE_EXE_NAME);
     let reusable = {
         let staging = staging.clone();
         let asset_url = asset_url.clone();
-        tokio::task::spawn_blocking(move || take_staged(&staging, &asset_url, asset_size))
-            .await
-            .map_err(|e| format!("任务执行失败: {}", e))?
+        let asset_digest = asset_digest.clone();
+        tokio::task::spawn_blocking(move || {
+            take_staged(&staging, &asset_url, asset_size, &asset_digest)
+        })
+        .await
+        .map_err(|e| format!("任务执行失败: {}", e))?
     };
     let dlls = match reusable {
         Some(dlls) => dlls,
@@ -581,12 +616,14 @@ pub async fn perform_core_update(
             .map_err(cleanup)?;
 
             emit_progress(&app, CORE_PROGRESS_EVENT, "extract", 0, 0);
-            let staging = staging.clone();
-            tokio::task::spawn_blocking(move || extract_core_files(&zip_path, &staging))
-                .await
-                .map_err(|e| format!("任务执行失败: {}", e))
-                .and_then(|r| r)
-                .map_err(cleanup)?
+            let files_dir = files_dir.clone();
+            tokio::task::spawn_blocking(move || {
+                extract_core_files(&zip_path, &files_dir, &asset_digest)
+            })
+            .await
+            .map_err(|e| format!("任务执行失败: {}", e))
+            .and_then(|r| r)
+            .map_err(cleanup)?
         }
     };
 
@@ -596,7 +633,7 @@ pub async fn perform_core_update(
     // One consent covers replacement, restart and any rollback.
     let mut files = Vec::new();
     for name in std::iter::once("sing-box.exe".to_string()).chain(dlls) {
-        let hash = crate::service::helper::sha256_file(&staging.join(&name)).map_err(cleanup)?;
+        let hash = crate::service::helper::sha256_file(&files_dir.join(&name)).map_err(cleanup)?;
         files.push((name, hash));
     }
     emit_progress(&app, CORE_PROGRESS_EVENT, "replace", 0, 0);
@@ -604,7 +641,7 @@ pub async fn perform_core_update(
         &app,
         crate::service::elevation::Operation::UpdateCore {
             service: service_name,
-            staging: staging.clone(),
+            staging: files_dir,
             target,
             files,
         },
@@ -617,4 +654,182 @@ pub async fn perform_core_update(
     let _ = std::fs::remove_dir_all(&staging);
 
     Ok(CoreUpdateResult { version, restarted })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_CASE: AtomicUsize = AtomicUsize::new(0);
+    const ASSET_URL: &str = "https://example.invalid/sing-box.zip";
+
+    struct TestStaging(PathBuf);
+
+    impl TestStaging {
+        fn new() -> Self {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "singboard-core-update-test-{}-{}-{}",
+                std::process::id(),
+                timestamp,
+                NEXT_CASE.fetch_add(1, Ordering::Relaxed),
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn write_archive(&self, exe: &[u8], dll: &[u8]) -> (u64, String) {
+            let path = self.0.join("core.zip");
+            let file = std::fs::File::create(&path).unwrap();
+            let mut archive = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            archive.start_file("release/sing-box.exe", options).unwrap();
+            archive.write_all(exe).unwrap();
+            archive
+                .start_file("release/libcronet.dll", options)
+                .unwrap();
+            archive.write_all(dll).unwrap();
+            archive.finish().unwrap();
+            (
+                std::fs::metadata(&path).unwrap().len(),
+                format!(
+                    "sha256:{}",
+                    crate::service::helper::sha256_file(&path).unwrap()
+                ),
+            )
+        }
+
+        fn write_manifest(&self, asset_size: u64, asset_digest: &str) {
+            let manifest = StagedCore {
+                asset_url: ASSET_URL.to_string(),
+                asset_size,
+                asset_digest: asset_digest.to_string(),
+            };
+            std::fs::write(
+                self.0.join(STAGED_MANIFEST),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
+    impl Drop for TestStaging {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn core_digest_requires_a_complete_sha256_hash() {
+        for digest in ["", "sha256:", "sha256:1234", "sha512:abcd"] {
+            assert!(core_asset_hash(digest).is_err(), "{digest}");
+        }
+        assert!(core_asset_hash(&format!("sha256:{}", "g".repeat(64))).is_err());
+        let hash = "AB".repeat(32);
+        assert_eq!(core_asset_hash(&format!(" sha256:{hash} ")).unwrap(), hash);
+    }
+
+    #[test]
+    fn mismatched_archive_is_rejected_before_extracting_any_files() {
+        let staging = TestStaging::new();
+        let (size, digest) = staging.write_archive(b"trusted exe", b"trusted dll");
+        let (altered_size, _) = staging.write_archive(b"changed exe", b"changed dll");
+        assert_eq!(size, altered_size);
+        let files = staging.0.join("files");
+
+        let error = extract_core_files(&staging.0.join("core.zip"), &files, &digest).unwrap_err();
+
+        assert!(error.contains("SHA-256"));
+        assert!(!files.exists());
+    }
+
+    #[test]
+    fn cached_executable_and_dlls_are_restored_from_the_verified_archive() {
+        let staging = TestStaging::new();
+        let (size, digest) = staging.write_archive(b"trusted exe", b"trusted dll");
+        staging.write_manifest(size, &digest);
+        let files = staging.0.join("files");
+        std::fs::create_dir(&files).unwrap();
+        std::fs::write(files.join(CORE_EXE_NAME), b"changed exe").unwrap();
+        std::fs::write(files.join("libcronet.dll"), b"changed dll").unwrap();
+        std::fs::write(files.join("untrusted.dll"), b"extra dll").unwrap();
+
+        let dlls = take_staged(&staging.0, ASSET_URL, size, &digest).unwrap();
+
+        assert_eq!(dlls, vec!["libcronet.dll"]);
+        assert_eq!(
+            std::fs::read(files.join(CORE_EXE_NAME)).unwrap(),
+            b"trusted exe"
+        );
+        assert_eq!(
+            std::fs::read(files.join("libcronet.dll")).unwrap(),
+            b"trusted dll"
+        );
+        assert!(!files.join("untrusted.dll").exists());
+    }
+
+    #[test]
+    fn a_manifest_cannot_authorize_an_altered_cached_archive() {
+        let staging = TestStaging::new();
+        let (size, digest) = staging.write_archive(b"trusted exe", b"trusted dll");
+        staging.write_archive(b"changed exe", b"changed dll");
+        staging.write_manifest(size, &digest);
+
+        assert!(take_staged(&staging.0, ASSET_URL, size, &digest).is_none());
+        assert!(!staging.0.join("files").exists());
+    }
+
+    #[test]
+    fn cached_archive_must_match_the_requested_asset_and_digest() {
+        let staging = TestStaging::new();
+        let (size, digest) = staging.write_archive(b"trusted exe", b"trusted dll");
+        staging.write_manifest(size, &digest);
+
+        assert!(
+            take_staged(
+                &staging.0,
+                "https://example.invalid/other.zip",
+                size,
+                &digest
+            )
+            .is_none()
+        );
+        assert!(take_staged(&staging.0, ASSET_URL, size + 1, &digest).is_none());
+        assert!(
+            take_staged(
+                &staging.0,
+                ASSET_URL,
+                size,
+                &format!("sha256:{}", "0".repeat(64))
+            )
+            .is_none()
+        );
+        assert!(!staging.0.join("files").exists());
+    }
+
+    #[test]
+    fn legacy_unverified_cache_is_not_reused() {
+        let staging = TestStaging::new();
+        let (size, digest) = staging.write_archive(b"trusted exe", b"trusted dll");
+        let legacy_manifest = serde_json::json!({
+            "assetUrl": ASSET_URL,
+            "assetSize": size,
+            "exeHash": "unverified",
+            "dlls": ["libcronet.dll"],
+        });
+        std::fs::write(
+            staging.0.join(STAGED_MANIFEST),
+            serde_json::to_vec(&legacy_manifest).unwrap(),
+        )
+        .unwrap();
+
+        assert!(take_staged(&staging.0, ASSET_URL, size, &digest).is_none());
+        assert!(!staging.0.join("files").exists());
+    }
 }

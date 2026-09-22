@@ -13,6 +13,7 @@ vi.mock('@/bridge/config', () => ({ ...bridge,
 vi.mock('@/stores/config', () => ({ useConfigStore: () => ({
   config: ref({ singboxPath: 'C:\\app\\sing-box.exe', workingDir: 'C:\\app', activeConfigProfileId: null }),
   configProfiles: ref([]),
+  refreshConfigFromStorage: vi.fn(),
 }) }))
 import { restartCore } from './coreControl'
 

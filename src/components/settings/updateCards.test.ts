@@ -42,11 +42,15 @@ describe('update cards', () => {
     tauri.invoke.mockImplementation(() => Promise.resolve(null))
     clearToasts()
     originalSingboxPath = useConfigStore().config.value.singboxPath
+    localStorage.removeItem('singboard-core-install-record')
+    localStorage.removeItem('singboard-core-install-record-v2')
   })
 
   afterEach(() => {
     for (const wrapper of wrappers.splice(0)) wrapper.unmount()
     useConfigStore().config.value.singboxPath = originalSingboxPath
+    localStorage.removeItem('singboard-core-install-record')
+    localStorage.removeItem('singboard-core-install-record-v2')
     clearToasts()
   })
 
@@ -131,5 +135,85 @@ describe('update cards', () => {
     expect.soft(status).toContain('已是最新版本')
     expect.soft(status).toContain('1.14.0-beta.13')
     expect.soft(status).not.toContain('可用版本')
+  })
+
+  it('passes the upstream digest to the probe and ignores legacy unverified install records', async () => {
+    const { config } = useConfigStore()
+    config.value.singboxPath = 'C:\\sing-box\\sing-box.exe'
+    const assetDigest = `sha256:${'ab'.repeat(32)}`
+    const info = {
+      version: 'v1.14.0-beta.13',
+      prerelease: true,
+      publishedAt: '2026-08-12T00:00:00Z',
+      assetName: 'sing-box-windows-amd64.zip',
+      assetUrl: 'https://example.invalid/sing-box.zip',
+      assetSize: 123,
+      assetDigest,
+    }
+    localStorage.setItem('singboard-core-install-record', JSON.stringify({
+      assetDigest,
+      exeHash: 'local-hash',
+    }))
+    tauri.invoke.mockImplementation((command: string) => {
+      switch (command) {
+        case 'check_core_update': return Promise.resolve(info)
+        case 'get_file_hash':
+        case 'probe_asset_exe_hash': return Promise.resolve('local-hash')
+        case 'get_singbox_version': return Promise.resolve('sing-box version 1.14.0-beta.13')
+        default: return Promise.resolve(null)
+      }
+    })
+
+    const wrapper = mount(CoreUpdateCard)
+    wrappers.push(wrapper)
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(tauri.invoke).toHaveBeenCalledWith('probe_asset_exe_hash', {
+      assetUrl: info.assetUrl,
+      assetSize: info.assetSize,
+      assetDigest,
+      mirror: config.value.coreUpdateMirror,
+    })
+    expect(wrapper.get('.settings-update-status').text()).toContain('已是最新版本')
+    expect(wrapper.find('.btn-primary').exists()).toBe(false)
+  })
+
+  it('passes the checked release digest when installing a core update', async () => {
+    const { config } = useConfigStore()
+    config.value.singboxPath = 'C:\\sing-box\\sing-box.exe'
+    const info = {
+      version: 'v1.15.0',
+      prerelease: false,
+      publishedAt: '2026-08-12T00:00:00Z',
+      assetName: 'sing-box-windows-amd64.zip',
+      assetUrl: 'https://example.invalid/sing-box.zip',
+      assetSize: 123,
+      assetDigest: `sha256:${'cd'.repeat(32)}`,
+    }
+    tauri.invoke.mockImplementation((command: string) => {
+      switch (command) {
+        case 'check_core_update': return Promise.resolve(info)
+        case 'get_file_hash': return Promise.resolve('local-hash')
+        case 'get_singbox_version': return Promise.resolve('sing-box version 1.14.0-beta.13')
+        case 'perform_core_update': return Promise.resolve({ version: '1.15.0', restarted: true })
+        default: return Promise.resolve(null)
+      }
+    })
+
+    const wrapper = mount(CoreUpdateCard)
+    wrappers.push(wrapper)
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+    await wrapper.get('.btn-primary').trigger('click')
+    await flushPromises()
+
+    expect(tauri.invoke).toHaveBeenCalledWith('perform_core_update', {
+      assetUrl: info.assetUrl,
+      assetSize: info.assetSize,
+      assetDigest: info.assetDigest,
+      mirror: config.value.coreUpdateMirror,
+      singboxPath: config.value.singboxPath,
+    })
   })
 })

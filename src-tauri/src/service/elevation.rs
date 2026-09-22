@@ -10,7 +10,7 @@ use tokio::net::windows::named_pipe::ClientOptions;
 use windows_sys::Win32::System::Threading::{GetProcessId, WaitForSingleObject};
 use windows_sys::Win32::UI::Shell::*;
 
-use super::{helper, scm};
+use super::{helper, runtime, scm};
 
 pub const ADMIN_FLAG: &str = "--admin-operation";
 pub const CANCELLED: &str = "elevation_cancelled";
@@ -351,9 +351,13 @@ fn execute(request: Request, progress: impl Fn(&str)) -> Result<Value, String> {
         user_sid,
     } = request;
     match operation {
-        Operation::Start { service } => scm::start_service(&service)?,
+        Operation::Start { service } => {
+            super::component::start_with_snapshot(&data_dir, &service, &user_sid, false)?
+        }
         Operation::Stop { service } => scm::stop_service(&service)?,
-        Operation::Restart { service } => scm::restart_service(&service)?,
+        Operation::Restart { service } => {
+            super::component::start_with_snapshot(&data_dir, &service, &user_sid, true)?
+        }
         Operation::Install {
             service,
             core,
@@ -366,27 +370,22 @@ fn execute(request: Request, progress: impl Fn(&str)) -> Result<Value, String> {
                     super::component::migrate(&data_dir, &old_name, &user_sid)?;
                 }
             }
-            if scm::query_service_status(&service)?.state != "not_installed" {
-                scm::stop_service(&service)?;
-            }
-            let deployed = helper::deploy_helper(&data_dir)?;
-            let bin = quote_arg(&deployed.to_string_lossy());
-            scm::install_service(&service, &bin, &service)?;
-            scm::write_service_params(
-                &service,
-                &core.to_string_lossy(),
-                &config.to_string_lossy(),
-                &working_dir.to_string_lossy(),
-            )?;
-            singboard_service::params::write_panel_sid(&service, &user_sid)?;
+            let snapshot = runtime::capture(&core, &config, &working_dir.to_string_lossy())?;
+            super::component::configure(&service, &snapshot, &user_sid, false)?;
             scm::create_startup_task(&service, delay, &user_sid)?;
         }
         Operation::Uninstall { service } => {
+            let snapshot = runtime::Snapshot::read(&service).ok();
             scm::delete_startup_task(&service)?;
             scm::uninstall_service(&service)?;
+            let protected = super::protected::Directory::open(false).ok();
+            let helper_dir = protected
+                .as_ref()
+                .map(|directory| directory.path())
+                .unwrap_or(&data_dir);
             for path in [
-                helper::deployed_helper_path(&data_dir),
-                helper::deployed_version_path(&data_dir),
+                helper::deployed_helper_path(helper_dir),
+                helper::deployed_version_path(helper_dir),
             ] {
                 match std::fs::remove_file(path) {
                     Ok(()) => {}
@@ -394,28 +393,18 @@ fn execute(request: Request, progress: impl Fn(&str)) -> Result<Value, String> {
                     Err(e) => return Err(e.to_string()),
                 }
             }
+            if let Some(snapshot) = snapshot {
+                let replacement = runtime::Snapshot {
+                    core: std::path::PathBuf::new(),
+                    ..snapshot.clone()
+                };
+                snapshot.discard_replaced_by(&replacement);
+            }
             super::component::cleanup_legacy_files(&data_dir)?;
         }
         Operation::Sync { service } => {
-            let was_running = matches!(
-                scm::query_service_status(&service)?.state.as_str(),
-                "running" | "starting"
-            );
-            if was_running {
-                scm::stop_service(&service)?;
-            }
-            let result = (|| {
-                let deployed = helper::deploy_helper(&data_dir)?;
-                let bin = quote_arg(&deployed.to_string_lossy());
-                scm::update_service_bin_path(&service, &bin)?;
-                singboard_service::params::write_panel_sid(&service, &user_sid)
-            })();
-            let restart = if was_running {
-                scm::start_service(&service)
-            } else {
-                Ok(())
-            };
-            result.and(restart)?;
+            let snapshot = runtime::Snapshot::read(&service)?.refresh_config()?;
+            super::component::configure(&service, &snapshot, &user_sid, false)?;
             super::component::cleanup_legacy_files(&data_dir)?;
             return Ok(Value::String("updated".into()));
         }
@@ -443,10 +432,16 @@ fn execute(request: Request, progress: impl Fn(&str)) -> Result<Value, String> {
                 verified.push((name.clone(), bytes));
             }
             // Apply precisely the bytes authenticated above, not mutable staging files.
-            return crate::commands::update::swap_and_restart(
-                &progress, &verified, &target, &service,
-            )
-            .map(Value::Bool);
+            let service = if service != super::SERVICE_NAME
+                && scm::query_service_status(&service)?.state != "not_installed"
+            {
+                super::component::migrate(&data_dir, &service, &user_sid)?;
+                super::SERVICE_NAME.to_string()
+            } else {
+                service
+            };
+            return runtime::apply_update(&user_sid, &service, &target, &verified, &progress)
+                .map(Value::Bool);
         }
         Operation::ReplacePanel {
             source,

@@ -121,9 +121,12 @@ function normalizeConfig(raw: any): AppConfig {
   }
 }
 
+let storedConfig: string | null = null
+
 function loadConfig(): AppConfig {
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
+    storedConfig = saved
     if (saved) {
       return normalizeConfig(JSON.parse(saved))
     }
@@ -132,6 +135,27 @@ function loadConfig(): AppConfig {
 }
 
 const config = ref<AppConfig>(loadConfig())
+let syncingStorage = false
+
+function refreshConfigFromStorage() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved === storedConfig) return
+    const nextConfig = normalizeConfig(saved ? JSON.parse(saved) : {})
+    storedConfig = saved
+    syncingStorage = true
+    config.value = nextConfig
+  } catch {
+  } finally {
+    syncingStorage = false
+  }
+}
+
+window.addEventListener('storage', (event) => {
+  if (event.storageArea !== localStorage) return
+  if (event.key !== STORAGE_KEY && event.key !== null) return
+  refreshConfigFromStorage()
+})
 
 // auto 主题：跟随系统明亮/暗黑模式
 const systemDarkQuery = window.matchMedia('(prefers-color-scheme: dark)')
@@ -157,8 +181,11 @@ watch(resolvedTheme, (val) => {
 })
 
 watch(config, (val) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(val))
-}, { deep: true })
+  if (syncingStorage) return
+  const saved = JSON.stringify(val)
+  localStorage.setItem(STORAGE_KEY, saved)
+  storedConfig = saved
+}, { deep: true, flush: 'sync' })
 
 // 同步 closeToTray 状态到 Rust 后端
 invoke('set_close_to_tray', { enabled: config.value.closeToTray }).catch(() => {})
@@ -276,6 +303,7 @@ export function useConfigStore() {
     configProfiles,
     activeConfigProfileId,
     activeConfigProfile,
+    refreshConfigFromStorage,
     updateConfig,
     setActiveClashApi,
     addClashApi,

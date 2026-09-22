@@ -151,6 +151,39 @@ pub fn read_service_params(service_name: &str) -> Result<(String, String, String
     Ok((singbox_path, config_path, working_dir))
 }
 
+pub fn write_service_sources(
+    service_name: &str,
+    singbox_path: &str,
+    config_path: &str,
+) -> Result<(), String> {
+    let key = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(
+            format!(r"SYSTEM\CurrentControlSet\Services\{service_name}\Parameters"),
+            winreg::enums::KEY_SET_VALUE,
+        )
+        .map_err(|e| e.to_string())?;
+    key.set_value("SourceSingboxPath", &singbox_path)
+        .and_then(|_| key.set_value("SourceConfigPath", &config_path))
+        .map_err(|e| e.to_string())
+}
+
+pub fn read_service_sources(service_name: &str) -> Result<(String, String), String> {
+    let key = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+        .open_subkey(format!(
+            r"SYSTEM\CurrentControlSet\Services\{service_name}\Parameters"
+        ))
+        .map_err(|e| e.to_string())?;
+    let core = key
+        .get_value("SourceSingboxPath")
+        .or_else(|_| key.get_value("SingboxPath"))
+        .map_err(|e| e.to_string())?;
+    let config = key
+        .get_value("SourceConfigPath")
+        .or_else(|_| key.get_value("ConfigPath"))
+        .map_err(|e| e.to_string())?;
+    Ok((core, config))
+}
+
 pub fn read_service_error_log(service_name: &str) -> Result<String, String> {
     let log_path = resolve_service_error_log_path(service_name);
     std::fs::read_to_string(&log_path).map_err(|e| format!("Failed to read error log: {}", e))

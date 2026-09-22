@@ -30,6 +30,7 @@ export async function checkCoreUpdate(repo: string, channel: string): Promise<Co
 export async function probeAssetExeHash(args: {
   assetUrl: string
   assetSize: number
+  assetDigest: string
   mirror: string
 }): Promise<string> {
   return invoke<string>('probe_asset_exe_hash', args)
@@ -38,6 +39,7 @@ export async function probeAssetExeHash(args: {
 export async function performCoreUpdate(args: {
   assetUrl: string
   assetSize: number
+  assetDigest: string
   mirror: string
   singboxPath: string
 }): Promise<CoreUpdateResult> {

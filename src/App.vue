@@ -34,7 +34,7 @@ const logsLifecycle = isTrayWindow ? null : useLogsLifecycle()
 
 const { config } = useConfigStore()
 const { serviceStatus, ready: serviceReady } = useServiceStore()
-const { start: startAutoUpdate } = useConfigAutoUpdate()
+const configAutoUpdate = isTrayWindow ? null : useConfigAutoUpdate()
 const { loadProxies, resumePendingTests } = useProxiesStore()
 const { resetHistory: resetOverviewHistory } = useOverviewStore()
 const { resetOnRestart: resetConnections } = useConnectionsStore()
@@ -115,7 +115,7 @@ onMounted(async () => {
   })
   await loadProxies()
   resumePendingTests()
-  startAutoUpdate()
+  configAutoUpdate?.start()
   void detectVersion()
 
   if (config.value.panelAutoCheckUpdate) {

@@ -1,6 +1,6 @@
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs;
-use std::io::Read as _;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -18,6 +18,60 @@ const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
 const STARTUP_VERIFY_SECONDS: u64 = 2;
 const STARTUP_RETRY_DELAY_SECONDS: u64 = 5;
 const STARTUP_MAX_ATTEMPTS: u32 = 3;
+const STDERR_TAIL_BYTES: usize = 64 * 1024;
+
+struct CoreProcess {
+    child: Child,
+    stderr: mpsc::Receiver<String>,
+}
+
+impl CoreProcess {
+    fn spawn(command: &mut Command) -> Result<Self, String> {
+        let mut child = command
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn sing-box: {e}"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or("Failed to capture sing-box stderr")?;
+        let (sender, receiver) = mpsc::channel();
+        if let Err(error) = std::thread::Builder::new()
+            .name("singbox-stderr".into())
+            .spawn(move || {
+                let _ = sender.send(read_stderr_tail(stderr));
+            })
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("Failed to capture sing-box stderr: {error}"));
+        }
+        Ok(Self {
+            child,
+            stderr: receiver,
+        })
+    }
+}
+
+fn read_stderr_tail(mut reader: impl std::io::Read) -> String {
+    let mut tail = VecDeque::with_capacity(STDERR_TAIL_BYTES);
+    let mut buffer = [0u8; 8192];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => {
+                let excess = (tail.len() + count).saturating_sub(STDERR_TAIL_BYTES);
+                tail.drain(..excess);
+                tail.extend(&buffer[..count]);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(tail.make_contiguous())
+        .trim()
+        .to_string()
+}
 
 fn get_service_name() -> &'static str {
     SERVICE_NAME.get().map(|s| s.as_str()).unwrap_or("sing-box")
@@ -49,15 +103,12 @@ fn make_stopped_status() -> ServiceStatus {
     }
 }
 
-fn read_stderr_output(child: &mut Child) -> Option<String> {
-    if let Some(ref mut stderr) = child.stderr {
-        let mut output = String::new();
-        let _ = stderr.read_to_string(&mut output);
-        if !output.trim().is_empty() {
-            return Some(output.trim().to_string());
-        }
-    }
-    None
+fn read_stderr_output(child: &CoreProcess) -> Option<String> {
+    child
+        .stderr
+        .recv_timeout(Duration::from_secs(2))
+        .ok()
+        .filter(|output| !output.is_empty())
 }
 
 fn save_error_log(log_path: &std::path::Path, message: &str) {
@@ -111,7 +162,7 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
     // 启动前清除旧的错误日志
     let _ = fs::remove_file(&log_path);
 
-    let mut child: Option<Child> = None;
+    let mut child: Option<CoreProcess> = None;
     let mut startup_succeeded = false;
 
     for attempt in 1..=STARTUP_MAX_ATTEMPTS {
@@ -126,9 +177,9 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
 
         // 等待 2 秒验证进程是否存活
         std::thread::sleep(Duration::from_secs(STARTUP_VERIFY_SECONDS));
-        match current_child.try_wait() {
+        match current_child.child.try_wait() {
             Ok(Some(_)) => {
-                if let Some(stderr_output) = read_stderr_output(&mut current_child) {
+                if let Some(stderr_output) = read_stderr_output(&current_child) {
                     // 核心有明确报错，直接失败，不做重试
                     save_error_log(&log_path, &stderr_output);
                     status_handle.set_service_status(make_stopped_status()).ok();
@@ -198,10 +249,10 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
                 break;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                match child.try_wait() {
+                match child.child.try_wait() {
                     Ok(Some(_status)) => {
                         // 核心进程退出，收集错误信息，不再重试
-                        if let Some(stderr_output) = read_stderr_output(&mut child) {
+                        if let Some(stderr_output) = read_stderr_output(&child) {
                             save_error_log(&log_path, &stderr_output);
                         } else {
                             save_error_log(&log_path, "sing-box 异常退出，未捕获到错误输出");
@@ -230,8 +281,8 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
         })
         .ok();
 
-    let _ = child.kill();
-    let _ = child.wait();
+    let _ = child.child.kill();
+    let _ = child.child.wait();
 
     status_handle
         .set_service_status(ServiceStatus {
@@ -252,7 +303,7 @@ fn spawn_singbox(
     singbox_path: &str,
     config_path: &str,
     working_dir: &str,
-) -> Result<Child, String> {
+) -> Result<CoreProcess, String> {
     let work_dir = if working_dir.is_empty() {
         let config = std::path::Path::new(config_path);
         config
@@ -279,9 +330,71 @@ fn spawn_singbox(
 
     let mut cmd = Command::new(singbox_path);
     cmd.args(["run", "-c", config_path, "-D", &work_dir.to_string_lossy()])
-        .current_dir(&work_dir)
-        .stderr(Stdio::piped());
+        .current_dir(
+            std::path::Path::new(singbox_path)
+                .parent()
+                .ok_or("Invalid sing-box path")?,
+        );
 
-    cmd.spawn()
-        .map_err(|e| format!("Failed to spawn sing-box: {}", e))
+    CoreProcess::spawn(&mut cmd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::os::windows::process::CommandExt;
+    use std::time::Instant;
+
+    #[test]
+    fn stderr_writer_fixture() {
+        if std::env::var("SINGBOARD_STDERR_TEST_WRITER").as_deref() != Ok("1") {
+            return;
+        }
+        let mut stderr = std::io::stderr().lock();
+        stderr
+            .write_all(&vec![b'x'; STDERR_TAIL_BYTES * 16])
+            .unwrap();
+        stderr.write_all(b"\xfffinal diagnostic").unwrap();
+    }
+
+    #[test]
+    fn drains_stderr_while_the_core_runs_and_keeps_a_bounded_tail() {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "wrapper::tests::stderr_writer_fixture",
+                "--nocapture",
+            ])
+            .env("SINGBOARD_STDERR_TEST_WRITER", "1")
+            .stdout(Stdio::null())
+            .creation_flags(0x08000000);
+        let mut process = CoreProcess::spawn(&mut command).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = process.child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                let _ = process.child.kill();
+                let _ = process.child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            status.is_some_and(|status| status.success()),
+            "stderr output blocked the core"
+        );
+        let output = read_stderr_output(&process).unwrap();
+        assert!(output.ends_with("\u{fffd}final diagnostic"));
+        assert!(output.len() <= STDERR_TAIL_BYTES + 2);
+    }
+
+    #[test]
+    fn stderr_tail_preserves_diagnostics_after_invalid_utf8() {
+        let output = read_stderr_tail(std::io::Cursor::new(b"before\xffafter"));
+        assert_eq!(output, "before\u{fffd}after");
+    }
 }
