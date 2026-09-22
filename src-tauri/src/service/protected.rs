@@ -13,7 +13,7 @@ use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramFiles, SHGetKnownFolderPath};
 
 const DIRECTORY_SECURITY: &str = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)";
-const CONFIG_SECURITY: &str = "O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x00020080;;;BU)";
+const CONFIG_SECURITY: &str = "O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x00120080;;;BU)";
 const REPLACE_ACCESS: u32 =
     0x1000_0000 | 0x4000_0000 | DELETE | WRITE_DAC | WRITE_OWNER | FILE_DELETE_CHILD;
 const WRITE_ACCESS: u32 =
@@ -409,6 +409,68 @@ pub fn path() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Security::Authorization::SetSecurityInfo;
+
+    #[test]
+    fn configuration_metadata_remains_inspectable_without_content_access() {
+        let path = std::env::temp_dir().join(super::super::runtime::unique_name(
+            "singboard-metadata-test",
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let config = path.join("config.json");
+        std::fs::write(&config, b"{}").unwrap();
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .access_mode(WRITE_DAC | READ_CONTROL)
+            .open(&config)
+            .unwrap();
+        let sid = singboard_service::ipc::current_user_sid().unwrap();
+        let apply_dacl = |sddl: &str| {
+            let descriptor = Descriptor::new(sddl).unwrap();
+            let mut dacl = std::ptr::null_mut();
+            let mut present = 0;
+            let mut defaulted = 0;
+            assert_ne!(
+                unsafe {
+                    GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut defaulted)
+                },
+                0
+            );
+            assert_eq!(
+                unsafe {
+                    SetSecurityInfo(
+                        file.as_raw_handle(),
+                        SE_FILE_OBJECT,
+                        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        dacl,
+                        std::ptr::null_mut(),
+                    )
+                },
+                0
+            );
+        };
+        let metadata_security = CONFIG_SECURITY
+            .replace("O:BAG:BA", "")
+            .replace("(A;;FA;;;SY)", "")
+            .replace("(A;;FA;;;BA)", "")
+            .replace(";;;BU)", &format!(";;;{sid})"));
+        apply_dacl(&metadata_security);
+        let result = Directory::pin(&path).and_then(|directory| directory.validate_file(&config));
+        let content_denied = matches!(std::fs::read(&config), Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied);
+        apply_dacl(&format!("D:P(A;;FA;;;{sid})"));
+        drop(file);
+        std::fs::remove_dir_all(&path).unwrap();
+        assert!(content_denied);
+        assert!(
+            result.is_ok()
+                || result.as_ref().err().map(String::as_str)
+                    == Some("服务运行目录权限不安全，请使用仅管理员可写的安装目录"),
+            "metadata inspection could not reach the ACL check: {result:?}"
+        );
+    }
 
     #[test]
     fn accepts_only_protected_administrator_owned_runtime_permissions() {
