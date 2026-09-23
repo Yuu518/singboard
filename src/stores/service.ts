@@ -2,7 +2,7 @@ import { ref, computed, onUnmounted } from 'vue'
 import { queryServiceStatus, syncServiceComponent, isElevationCancelled } from '@/bridge/service'
 import type { ServiceStatus } from '@/types'
 
-const serviceStatus = ref<ServiceStatus>({ state: 'unknown' })
+export const serviceStatus = ref<ServiceStatus>({ state: 'unknown' })
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let refCount = 0
 let componentSynced = false

@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue'
 import { fetchProxies, fetchProxy, fetchProxyProviders, selectProxy, testLatency } from '@/api'
 import { useConfigStore } from '@/stores/config'
-import { getCoreStartTimestamp } from '@/stores/service'
+import { getCoreStartTimestamp, serviceStatus } from '@/stores/service'
 import type { LatencyHistory, Proxy, ProxyGroup, ProxyProvider } from '@/types'
 
 const proxyMap = ref<Record<string, Proxy>>({})
@@ -45,6 +45,11 @@ function isTimeAfter(left: string, right: string): boolean {
 }
 
 const CORE_START_TOLERANCE_MS = 10_000
+// 核心启动后会在后台对 provider / urltest 做健康检查,结果陆续写入 history,
+// 服务进入 running 时只拿到部分结果,因此在预热窗口内持续刷新
+const CORE_WARMUP_WINDOW_MS = 60_000
+const CORE_WARMUP_POLL_MS = 2_000
+let warmupGeneration = 0
 
 // 核心测速失败时会删除节点的 history,与"核心重启后 history 被清空"在数据上无法区分。
 // 若本地记录产生于核心本轮运行期间,核心侧的空 history 只能是测速失败删除所致,
@@ -437,6 +442,19 @@ export function useProxiesStore() {
     return ipv6Map.value[nowNode] === true || ipv6Map.value[name] === true
   }
 
+  async function refreshDuringCoreWarmup() {
+    const generation = ++warmupGeneration
+    const observedAt = Date.now()
+    while (true) {
+      await new Promise((resolve) => setTimeout(resolve, CORE_WARMUP_POLL_MS))
+      if (generation !== warmupGeneration) return
+      if (serviceStatus.value.state !== 'running') return
+      const startTs = getCoreStartTimestamp() ?? observedAt
+      if (Date.now() - startTs > CORE_WARMUP_WINDOW_MS) return
+      await loadProxies()
+    }
+  }
+
   async function pollAutoGroups() {
     const autoTypes = ['fallback', 'urltest']
     const autoGroups = proxyGroups.value.filter(g =>
@@ -461,6 +479,7 @@ export function useProxiesStore() {
     loadProxies,
     switchProxy,
     pollAutoGroups,
+    refreshDuringCoreWarmup,
     testNodeLatency,
     testGroupNodes,
     testAllNodes,

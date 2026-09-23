@@ -35,7 +35,7 @@ const logsLifecycle = isTrayWindow ? null : useLogsLifecycle()
 const { config } = useConfigStore()
 const { serviceStatus, ready: serviceReady } = useServiceStore()
 const configAutoUpdate = isTrayWindow ? null : useConfigAutoUpdate()
-const { loadProxies, resumePendingTests } = useProxiesStore()
+const { loadProxies, resumePendingTests, refreshDuringCoreWarmup } = useProxiesStore()
 const { resetHistory: resetOverviewHistory } = useOverviewStore()
 const { resetOnRestart: resetConnections } = useConnectionsStore()
 const { detectVersion } = useSingboxVersionStore()
@@ -154,6 +154,7 @@ if (!isTrayWindow) {
         coreStartedOnce = true
         // 核心可能在停止期间被手动替换，启动后重新检测版本
         void detectVersion()
+        void refreshDuringCoreWarmup()
         setTimeout(runNetworkAutoTest, 3000)
       } else if (coreStartedOnce) {
         resetOverviewHistory()
