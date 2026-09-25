@@ -580,11 +580,12 @@ watch(
             <select
               class="select select-sm select-bordered settings-mono"
               :value="activeClashApiId"
+              :title="activeClashApi?.url"
               aria-label="当前控制端点"
               @change="handleSwitchApi(($event.target as HTMLSelectElement).value)"
             >
               <option v-for="api in clashApis" :key="api.id" :value="api.id">
-                {{ api.name }} · {{ api.url }}
+                {{ api.name }}
               </option>
             </select>
             <button
