@@ -19,6 +19,8 @@ import TrayMenu from '@/components/tray/TrayMenu.vue'
 import { useConfigAutoUpdate } from '@/composables/useConfigAutoUpdate'
 import { useLiquidLens } from '@/composables/useLiquidLens'
 import { useGlassSheen } from '@/composables/useGlassSheen'
+import { useBackgroundStore } from '@/stores/background'
+import { useBackdropTone } from '@/composables/useBackdropTone'
 import { useSingboxVersionStore } from '@/stores/singboxVersion'
 import { usePanelUpdateStore } from '@/stores/panelUpdate'
 import { useLogsLifecycle } from '@/stores/logs'
@@ -34,6 +36,7 @@ import {
 
 const currentWindow = getCurrentWindow()
 const isTrayWindow = currentWindow.label === 'tray'
+const { backgroundUrl, init: initBackground } = useBackgroundStore()
 document.documentElement.classList.toggle('tray-window', isTrayWindow)
 const logsLifecycle = isTrayWindow ? null : useLogsLifecycle()
 
@@ -68,6 +71,8 @@ watch(
 if (!isTrayWindow) {
   useLiquidLens()
   useGlassSheen()
+  void initBackground()
+  useBackdropTone()
   watch(
     resolvedTheme,
     (theme) => {
@@ -207,6 +212,12 @@ if (!isTrayWindow) {
 <template>
   <TrayMenu v-if="isTrayWindow" />
   <div v-else class="relative flex h-screen text-base-content">
+    <div
+      v-if="backgroundUrl"
+      class="app-backdrop"
+      :style="{ backgroundImage: `url(${backgroundUrl})` }"
+      aria-hidden="true"
+    />
     <Sidebar />
     <div class="relative flex min-w-0 flex-1 flex-col">
       <Titlebar class="absolute inset-x-0 top-0 z-30" :title="pageTitle" :scrolled="scrolled" />

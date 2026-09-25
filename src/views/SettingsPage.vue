@@ -4,6 +4,7 @@ import { useConfigStore } from '@/stores/config'
 import { useServiceStore } from '@/stores/service'
 import { useToastStore } from '@/stores/toast'
 import { useProxiesStore } from '@/stores/proxies'
+import { assertBackgroundFile, useBackgroundStore } from '@/stores/background'
 import {
   stopService,
   installService,
@@ -24,6 +25,7 @@ import OverflowingText from '@/components/common/OverflowingText.vue'
 import DnsQueryTool from '@/components/settings/DnsQueryTool.vue'
 import CoreUpdateCard from '@/components/settings/CoreUpdateCard.vue'
 import PanelUpdateCard from '@/components/settings/PanelUpdateCard.vue'
+import BackgroundEditorDialog from '@/components/settings/BackgroundEditorDialog.vue'
 
 const {
   config,
@@ -50,6 +52,45 @@ const glassOptions = [
   { value: 'clear', label: '通透' },
   { value: 'blur', label: '模糊' },
 ] as const
+
+const { backgroundUrl, hasBackground, setBackground, removeBackground } = useBackgroundStore()
+const personalizationExpanded = ref(false)
+const backgroundInput = ref<HTMLInputElement | null>(null)
+const backgroundEditorRef = ref<InstanceType<typeof BackgroundEditorDialog> | null>(null)
+const backgroundBusy = ref(false)
+
+const personalizationSummary = computed(() => {
+  const glass = glassOptions.find((option) => option.value === config.value.glassMode)?.label ?? ''
+  return `${glass} · ${hasBackground.value ? '已设置背景' : '默认背景'}`
+})
+
+async function onBackgroundPicked(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  backgroundBusy.value = true
+  try {
+    assertBackgroundFile(file)
+    const edited = await backgroundEditorRef.value?.edit(file)
+    if (edited) await setBackground(edited)
+  } catch (error) {
+    pushToast({ message: error instanceof Error ? error.message : '设置背景失败', type: 'error' })
+  } finally {
+    backgroundBusy.value = false
+  }
+}
+
+async function clearBackground() {
+  backgroundBusy.value = true
+  try {
+    await removeBackground()
+  } catch (error) {
+    pushToast({ message: error instanceof Error ? error.message : '删除背景失败', type: 'error' })
+  } finally {
+    backgroundBusy.value = false
+  }
+}
 
 const { proxyGroups, loadProxies } = useProxiesStore()
 
@@ -418,6 +459,7 @@ watch(
 <template>
   <div class="settings-page">
     <ConfirmDialog ref="confirmDialogRef" />
+    <BackgroundEditorDialog ref="backgroundEditorRef" />
 
     <h1 class="text-[26px] leading-tight tracking-tight font-bold mb-5">设置</h1>
 
@@ -812,24 +854,69 @@ watch(
             </button>
           </div>
         </div>
-        <div class="settings-row">
-          <div class="settings-row-copy">
-            <strong id="settings-glass-label">玻璃效果</strong>
-            <span>作用于顶部栏、侧栏、表头和弹窗。“通透”是带折射的液态玻璃，“模糊”是带底色的模糊玻璃。</span>
-          </div>
-          <div class="settings-segmented" role="radiogroup" aria-labelledby="settings-glass-label">
-            <button
-              v-for="option in glassOptions"
-              :key="option.value"
-              type="button"
-              role="radio"
-              :class="{ 'is-active': config.glassMode === option.value }"
-              :aria-checked="config.glassMode === option.value"
-              @click="updateConfig({ glassMode: option.value })"
-            >
-              {{ option.label }}
-            </button>
-          </div>
+        <div class="settings-row settings-row-stack">
+          <button
+            type="button"
+            class="settings-disclosure"
+            :aria-expanded="personalizationExpanded"
+            @click="personalizationExpanded = !personalizationExpanded"
+          >
+            <span class="settings-row-copy">
+              <strong>个性化</strong>
+              <span>{{ personalizationSummary }}</span>
+            </span>
+            <svg viewBox="0 0 20 20" fill="none" :class="{ 'rotate-180': personalizationExpanded }" aria-hidden="true">
+              <path d="m5 8 5 5 5-5" />
+            </svg>
+          </button>
+
+          <Transition name="settings-reveal">
+            <div v-show="personalizationExpanded" class="settings-subpanel">
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <strong id="settings-glass-label">玻璃效果</strong>
+                  <span>作用于顶部栏、侧栏、卡片和弹窗。“通透”是带折射的液态玻璃，“模糊”是带底色的模糊玻璃。</span>
+                </div>
+                <div class="settings-segmented" role="radiogroup" aria-labelledby="settings-glass-label">
+                  <button
+                    v-for="option in glassOptions"
+                    :key="option.value"
+                    type="button"
+                    role="radio"
+                    :class="{ 'is-active': config.glassMode === option.value }"
+                    :aria-checked="config.glassMode === option.value"
+                    @click="updateConfig({ glassMode: option.value })"
+                  >
+                    {{ option.label }}
+                  </button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <strong>背景图片</strong>
+                  <span>{{ hasBackground ? '显示在窗口背后，“通透”模式下玻璃会折射它。' : '未设置，使用系统默认材质。' }}</span>
+                </div>
+                <div class="settings-background-actions">
+                  <img v-if="backgroundUrl" :src="backgroundUrl" alt="" class="settings-background-thumb" />
+                  <button type="button" class="btn btn-sm settings-btn" :disabled="backgroundBusy" @click="backgroundInput?.click()">
+                    {{ hasBackground ? '更换' : '选择图片' }}
+                  </button>
+                  <button
+                    v-if="hasBackground"
+                    type="button"
+                    class="btn btn-ghost btn-sm btn-square settings-icon-btn settings-danger-action"
+                    :disabled="backgroundBusy"
+                    title="删除背景"
+                    aria-label="删除背景"
+                    @click="clearBackground"
+                  >
+                    <svg class="settings-button-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M5 6h10m-7-3h4l1 3H7l1-3Zm-1 6 .5 7m5.5-7-.5 7M6 6l1 11h6l1-11" /></svg>
+                  </button>
+                  <input ref="backgroundInput" type="file" accept="image/*" class="hidden" @change="onBackgroundPicked" />
+                </div>
+              </div>
+            </div>
+          </Transition>
         </div>
         <label class="settings-row settings-toggle-row">
           <span class="settings-row-copy">

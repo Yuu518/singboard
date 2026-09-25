@@ -88,11 +88,11 @@ html.has-mica body {
   margin-bottom: 8px;
 }
 
-.surface-card::-webkit-scrollbar-track {
+.card-scroll::-webkit-scrollbar-track {
   margin-block: 12px;
 }
 
-.surface-card:has(> .table-pin-rows)::-webkit-scrollbar-track {
+.card-scroll:has(> .table-pin-rows)::-webkit-scrollbar-track {
   margin-top: var(--pinned-header-height, 26px);
   margin-bottom: 12px;
 }

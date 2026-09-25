@@ -493,52 +493,54 @@ watch(isRunning, (running) => {
         />
       </div>
 
-      <div class="rules-table-container surface-card">
-        <table v-if="filteredRules.length > 0" class="table table-xs table-pin-rows rules-table" aria-label="规则列表">
-          <thead>
-            <tr>
-              <th scope="col" class="w-12 text-right">#</th>
-              <th scope="col" class="w-36">类型</th>
-              <th scope="col">规则内容</th>
-              <th scope="col" class="w-[38%]">代理链</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="(rule, i) in filteredRules"
-              :key="i"
-              class="rules-row"
-            >
-              <td class="rules-index">{{ i + 1 }}</td>
-              <td>
-                <span class="rules-badge">
-                  {{ rule.type }}
-                </span>
-              </td>
-              <td :title="rule.payload">
-                <span class="rules-primary">{{ rule.payload || '—' }}</span>
-              </td>
-              <td>
-                <div class="rules-proxy-chain">
-                  <template v-for="(node, j) in resolveProxyChain(rule.proxy)" :key="j">
-                    <span v-if="j > 0" class="text-base-content/20">›</span>
-                    <span class="rules-action-badge" :class="actionColor(node)">{{ node }}</span>
-                  </template>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div v-if="loading" class="rules-empty" aria-label="正在加载规则">
-          <span class="loading loading-spinner loading-md"></span>
-        </div>
-
-        <div
-          v-else-if="filteredRules.length === 0"
-          class="rules-empty"
-        >
-          {{ filterText.trim() ? '未找到匹配规则' : '暂无规则' }}
+      <div class="surface-card flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div class="rules-table-container card-scroll">
+          <table v-if="filteredRules.length > 0" class="table table-xs table-pin-rows rules-table" aria-label="规则列表">
+            <thead>
+              <tr>
+                <th scope="col" class="w-12 text-right">#</th>
+                <th scope="col" class="w-36">类型</th>
+                <th scope="col">规则内容</th>
+                <th scope="col" class="w-[38%]">代理链</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="(rule, i) in filteredRules"
+                :key="i"
+                class="rules-row"
+              >
+                <td class="rules-index">{{ i + 1 }}</td>
+                <td>
+                  <span class="rules-badge">
+                    {{ rule.type }}
+                  </span>
+                </td>
+                <td :title="rule.payload">
+                  <span class="rules-primary">{{ rule.payload || '—' }}</span>
+                </td>
+                <td>
+                  <div class="rules-proxy-chain">
+                    <template v-for="(node, j) in resolveProxyChain(rule.proxy)" :key="j">
+                      <span v-if="j > 0" class="text-base-content/20">›</span>
+                      <span class="rules-action-badge" :class="actionColor(node)">{{ node }}</span>
+                    </template>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+  
+          <div v-if="loading" class="rules-empty" aria-label="正在加载规则">
+            <span class="loading loading-spinner loading-md"></span>
+          </div>
+  
+          <div
+            v-else-if="filteredRules.length === 0"
+            class="rules-empty"
+          >
+            {{ filterText.trim() ? '未找到匹配规则' : '暂无规则' }}
+          </div>
         </div>
       </div>
     </template>
@@ -560,91 +562,93 @@ watch(isRunning, (running) => {
         </div>
       </div>
 
-      <div class="rules-table-container surface-card">
-        <table v-if="displayedProviders.length > 0" class="table table-xs table-pin-rows rules-table" aria-label="规则提供商列表">
-          <thead>
-            <tr>
-              <th scope="col" class="w-12 text-right">#</th>
-              <th scope="col">提供商</th>
-              <th scope="col" class="w-20 text-center">规则数</th>
-              <th scope="col" class="w-24 text-center">格式</th>
-              <th scope="col" class="w-24 text-center">载入方式</th>
-              <th scope="col" class="w-28">更新时间</th>
-              <th scope="col" class="w-12 text-center">
-                <span class="sr-only">操作</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="(provider, i) in displayedProviders"
-              :key="provider.name"
-              class="rules-row"
-              :class="{ 'cursor-pointer': canOpenProvider(provider) }"
-              @click="canOpenProvider(provider) && openProviderDetail(provider)"
-            >
-              <td class="rules-index">{{ i + 1 }}</td>
-              <td :title="provider.name">
-                <button
-                  v-if="canOpenProvider(provider)"
-                  type="button"
-                  class="rules-primary w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-                  :aria-label="`查看规则提供商 ${provider.name} 的详情`"
-                  @click.stop="openProviderDetail(provider)"
-                >
-                  {{ provider.name }}
-                </button>
-                <span v-else class="rules-primary">{{ provider.name }}</span>
-              </td>
-              <td class="rules-meta text-center tabular-nums">{{ provider.ruleCount }}</td>
-              <td class="text-center">
-                <span v-if="provider.behavior" class="rules-badge">
-                  {{ provider.behavior }}
-                </span>
-                <span v-else class="text-base-content/30">—</span>
-              </td>
-              <td class="text-center">
-                <span v-if="provider.vehicleType" class="rules-badge">
-                  {{ provider.vehicleType }}
-                </span>
-                <span v-else class="text-base-content/30">—</span>
-              </td>
-              <td class="rules-meta whitespace-nowrap">
-                {{ formatDate(provider.updatedAt) || '—' }}
-              </td>
-              <td class="text-center">
-                <button
-                  v-if="provider.vehicleType !== 'Inline'"
-                  type="button"
-                  class="btn btn-ghost btn-xs btn-square"
-                  :aria-busy="updatingProvider === provider.name"
-                  :disabled="updatingProvider === provider.name || updatingAll"
-                  @click.stop="handleUpdateProvider(provider.name)"
-                  title="更新"
-                  :aria-label="`更新规则提供商 ${provider.name}`"
-                >
-                  <span v-if="updatingProvider === provider.name" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
-                  <svg v-else xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-3.5 h-3.5" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.992 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
-                  </svg>
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div
-          v-if="ruleProviders.length === 0"
-          class="rules-empty"
-        >
-          暂无规则提供商
-        </div>
-
-        <div
-          v-else-if="providerSearchText.trim() && providerSearchDone && displayedProviders.length === 0"
-          class="rules-empty"
-        >
-          未找到匹配规则
+      <div class="surface-card flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div class="rules-table-container card-scroll">
+          <table v-if="displayedProviders.length > 0" class="table table-xs table-pin-rows rules-table" aria-label="规则提供商列表">
+            <thead>
+              <tr>
+                <th scope="col" class="w-12 text-right">#</th>
+                <th scope="col">提供商</th>
+                <th scope="col" class="w-20 text-center">规则数</th>
+                <th scope="col" class="w-24 text-center">格式</th>
+                <th scope="col" class="w-24 text-center">载入方式</th>
+                <th scope="col" class="w-28">更新时间</th>
+                <th scope="col" class="w-12 text-center">
+                  <span class="sr-only">操作</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="(provider, i) in displayedProviders"
+                :key="provider.name"
+                class="rules-row"
+                :class="{ 'cursor-pointer': canOpenProvider(provider) }"
+                @click="canOpenProvider(provider) && openProviderDetail(provider)"
+              >
+                <td class="rules-index">{{ i + 1 }}</td>
+                <td :title="provider.name">
+                  <button
+                    v-if="canOpenProvider(provider)"
+                    type="button"
+                    class="rules-primary w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                    :aria-label="`查看规则提供商 ${provider.name} 的详情`"
+                    @click.stop="openProviderDetail(provider)"
+                  >
+                    {{ provider.name }}
+                  </button>
+                  <span v-else class="rules-primary">{{ provider.name }}</span>
+                </td>
+                <td class="rules-meta text-center tabular-nums">{{ provider.ruleCount }}</td>
+                <td class="text-center">
+                  <span v-if="provider.behavior" class="rules-badge">
+                    {{ provider.behavior }}
+                  </span>
+                  <span v-else class="text-base-content/30">—</span>
+                </td>
+                <td class="text-center">
+                  <span v-if="provider.vehicleType" class="rules-badge">
+                    {{ provider.vehicleType }}
+                  </span>
+                  <span v-else class="text-base-content/30">—</span>
+                </td>
+                <td class="rules-meta whitespace-nowrap">
+                  {{ formatDate(provider.updatedAt) || '—' }}
+                </td>
+                <td class="text-center">
+                  <button
+                    v-if="provider.vehicleType !== 'Inline'"
+                    type="button"
+                    class="btn btn-ghost btn-xs btn-square"
+                    :aria-busy="updatingProvider === provider.name"
+                    :disabled="updatingProvider === provider.name || updatingAll"
+                    @click.stop="handleUpdateProvider(provider.name)"
+                    title="更新"
+                    :aria-label="`更新规则提供商 ${provider.name}`"
+                  >
+                    <span v-if="updatingProvider === provider.name" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+                    <svg v-else xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-3.5 h-3.5" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.992 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+                    </svg>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+  
+          <div
+            v-if="ruleProviders.length === 0"
+            class="rules-empty"
+          >
+            暂无规则提供商
+          </div>
+  
+          <div
+            v-else-if="providerSearchText.trim() && providerSearchDone && displayedProviders.length === 0"
+            class="rules-empty"
+          >
+            未找到匹配规则
+          </div>
         </div>
       </div>
     </template>

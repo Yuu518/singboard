@@ -69,3 +69,65 @@ describe('liquid lens filter', () => {
     expect(filter.lastElementChild).toBe(blends[1])
   })
 })
+
+describe('liquid lens targets', () => {
+  it('only refracts cards when a background is set', async () => {
+    const { lensSelector } = await import('./useLiquidLens')
+    expect(lensSelector(false)).toBe('.glass-float, .glass-popover')
+    expect(lensSelector(true)).toBe('.glass-float, .glass-popover, .surface-card, .settings-card')
+  })
+})
+
+describe('card lens filter', () => {
+  it('uses a single displacement pass without colour fringing', async () => {
+    const { buildLensFilter, REFRACTION_AMOUNT } = await import('./useLiquidLens')
+    const filter = buildLensFilter(200, 120, 'data:image/png;base64,', 'card-lens', { chroma: false })
+    const shifts = [...filter.querySelectorAll('feDisplacementMap')]
+    expect(shifts).toHaveLength(1)
+    expect(Number(shifts[0].getAttribute('scale'))).toBe(REFRACTION_AMOUNT * 2)
+    expect(filter.querySelectorAll('feColorMatrix, feBlend')).toHaveLength(0)
+    expect(filter.lastElementChild).toBe(shifts[0])
+  })
+})
+
+describe('popover lens filter', () => {
+  it('keeps the rim sharp and frosts the middle', async () => {
+    const { buildLensFilter } = await import('./useLiquidLens')
+    const filter = buildLensFilter(200, 120, 'data:image/png;base64,', 'pop-lens', { frost: 20 })
+    const blur = filter.querySelector('feGaussianBlur')!
+    expect(blur.getAttribute('in')).toBe('SourceGraphic')
+    expect(blur.getAttribute('stdDeviation')).toBe('20')
+    const [rim, over] = [...filter.querySelectorAll('feComposite')]
+    expect(rim.getAttribute('in')).toBe('refracted-soft')
+    expect(rim.getAttribute('operator')).toBe('in')
+    expect(over.getAttribute('in2')).toBe(blur.getAttribute('result'))
+    expect(over.getAttribute('operator')).toBe('over')
+    expect(filter.lastElementChild).toBe(over)
+    expect(filter.querySelectorAll('feDisplacementMap')).toHaveLength(3)
+  })
+
+  it('stores the rim band as an edge mask in the blue channel', async () => {
+    const { buildDisplacementMap } = await import('./useLiquidLens')
+    const data = buildDisplacementMap(200, 120, 20, 24, 24)
+    const blue = (x: number, y: number) => data[(y * 200 + x) * 4 + 2]
+    expect(blue(0, 60)).toBeGreaterThan(240)
+    expect(blue(12, 60)).toBeGreaterThan(90)
+    expect(blue(12, 60)).toBeLessThan(170)
+    expect(blue(100, 60)).toBe(0)
+  })
+})
+
+describe('lens strength', () => {
+  it('scales every displacement pass with the requested amount', async () => {
+    const { buildLensFilter, CHROMA_SPREAD } = await import('./useLiquidLens')
+    const filter = buildLensFilter(200, 120, 'data:image/png;base64,', 'soft-lens', { amount: 12, frost: 4 })
+    expect([...filter.querySelectorAll('feDisplacementMap')].map((node) => Number(node.getAttribute('scale')))).toEqual([
+      24,
+      24 * (1 + CHROMA_SPREAD),
+      24 * (1 + 2 * CHROMA_SPREAD),
+    ])
+    const soften = [...filter.querySelectorAll('feGaussianBlur')].find((node) => node.getAttribute('in') === 'refracted')
+    expect(Number(soften?.getAttribute('stdDeviation'))).toBeGreaterThan(0)
+    expect(Number(soften?.getAttribute('stdDeviation'))).toBeLessThan(2)
+  })
+})

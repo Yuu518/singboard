@@ -27,8 +27,6 @@
 .settings-card {
   min-width: 0;
   border-radius: var(--radius-card);
-  background: var(--surface);
-  box-shadow: var(--surface-edge), var(--surface-shadow);
 }
 
 .settings-card + .settings-card {
@@ -390,6 +388,35 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.settings-subpanel {
+  border-radius: var(--radius-tile);
+  background: var(--fill);
+}
+
+.settings-subpanel > .settings-row {
+  min-height: 52px;
+  padding: 10px 14px;
+}
+
+.settings-subpanel > .settings-row + .settings-row::before {
+  left: 14px;
+}
+
+.settings-background-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-background-thumb {
+  width: 64px;
+  height: 40px;
+  border-radius: 8px;
+  object-fit: cover;
+  box-shadow: 0 0 0 0.5px var(--hairline);
 }
 
 .settings-mapping-row {

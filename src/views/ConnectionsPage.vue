@@ -185,115 +185,119 @@ onMounted(() => {
       class="input input-sm input-bordered w-full"
     />
 
-    <div v-show="activeTab === 'active'" class="surface-card flex-1 overflow-auto">
-      <table class="table table-xs table-pin-rows">
-        <thead>
-          <tr>
-            <th class="z-20 cursor-pointer select-none hover:text-primary" @click="toggleSort('host')">主机{{ sortIcon('host') }}</th>
-            <th class="z-20 cursor-pointer select-none hover:text-primary" @click="toggleSort('rule')">规则{{ sortIcon('rule') }}</th>
-            <th class="z-20 cursor-pointer select-none hover:text-primary" @click="toggleSort('chains')">链路{{ sortIcon('chains') }}</th>
-            <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('dlSpeed')">下载速度{{ sortIcon('dlSpeed') }}</th>
-            <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('ulSpeed')">上传速度{{ sortIcon('ulSpeed') }}</th>
-            <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('dl')">下载{{ sortIcon('dl') }}</th>
-            <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('ul')">上传{{ sortIcon('ul') }}</th>
-            <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('duration')">时长{{ sortIcon('duration') }}</th>
-            <th class="z-20 w-8"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="conn in sortedActiveConnections"
-            :key="conn.id"
-            class="hover:bg-base-content/[0.04] cursor-pointer"
-            @click="openDetail(conn)"
-          >
-            <td class="whitespace-nowrap" :title="getHost(conn)">
-              <span class="text-xs leading-none px-2 py-0.5 rounded-full mr-1.5 inline-block" :class="conn.metadata.network === 'tcp' ? 'bg-info/15 text-info' : 'bg-accent/15 text-accent'">
-                {{ conn.metadata.network }}
-              </span>
-              <span class="truncate inline">{{ getHost(conn) }}</span>
-            </td>
-            <td class="text-xs text-base-content/100 align-top min-w-64 max-w-xl" :title="conn.rule">
-              <span class="block whitespace-normal break-words leading-relaxed [overflow-wrap:anywhere]">{{ conn.rule }}</span>
-            </td>
-            <td class="text-xs text-base-content/100 max-w-xl truncate" :title="formatChains(conn.chains)">
-              {{ formatChains(conn.chains) }}
-            </td>
-            <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatSpeed(conn.downloadSpeed || 0) }}</td>
-            <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatSpeed(conn.uploadSpeed || 0) }}</td>
-            <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatBytes(conn.download) }}</td>
-            <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatBytes(conn.upload) }}</td>
-            <td class="text-right text-xs text-base-content/50 whitespace-nowrap">{{ formatDuration(conn.start) }}</td>
-            <td>
-              <button
-                class="btn btn-ghost btn-xs text-error"
-                @click.stop="closeConnection(conn.id)"
-                title="断开"
-              >
-                ✕
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      <div
-        v-if="filteredConnections.length === 0"
-        class="flex items-center justify-center py-10 text-base-content/40"
-      >
-        暂无活跃连接
+    <div v-show="activeTab === 'active'" class="surface-card flex flex-1 flex-col overflow-hidden">
+      <div class="card-scroll min-h-0 flex-1 overflow-auto">
+        <table class="table table-xs table-pin-rows">
+          <thead>
+            <tr>
+              <th class="z-20 cursor-pointer select-none hover:text-primary" @click="toggleSort('host')">主机{{ sortIcon('host') }}</th>
+              <th class="z-20 cursor-pointer select-none hover:text-primary" @click="toggleSort('rule')">规则{{ sortIcon('rule') }}</th>
+              <th class="z-20 cursor-pointer select-none hover:text-primary" @click="toggleSort('chains')">链路{{ sortIcon('chains') }}</th>
+              <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('dlSpeed')">下载速度{{ sortIcon('dlSpeed') }}</th>
+              <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('ulSpeed')">上传速度{{ sortIcon('ulSpeed') }}</th>
+              <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('dl')">下载{{ sortIcon('dl') }}</th>
+              <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('ul')">上传{{ sortIcon('ul') }}</th>
+              <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('duration')">时长{{ sortIcon('duration') }}</th>
+              <th class="z-20 w-8"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="conn in sortedActiveConnections"
+              :key="conn.id"
+              class="hover:bg-base-content/[0.04] cursor-pointer"
+              @click="openDetail(conn)"
+            >
+              <td class="whitespace-nowrap" :title="getHost(conn)">
+                <span class="text-xs leading-none px-2 py-0.5 rounded-full mr-1.5 inline-block" :class="conn.metadata.network === 'tcp' ? 'bg-info/15 text-info' : 'bg-accent/15 text-accent'">
+                  {{ conn.metadata.network }}
+                </span>
+                <span class="truncate inline">{{ getHost(conn) }}</span>
+              </td>
+              <td class="text-xs text-base-content/100 align-top min-w-64 max-w-xl" :title="conn.rule">
+                <span class="block whitespace-normal break-words leading-relaxed [overflow-wrap:anywhere]">{{ conn.rule }}</span>
+              </td>
+              <td class="text-xs text-base-content/100 max-w-xl truncate" :title="formatChains(conn.chains)">
+                {{ formatChains(conn.chains) }}
+              </td>
+              <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatSpeed(conn.downloadSpeed || 0) }}</td>
+              <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatSpeed(conn.uploadSpeed || 0) }}</td>
+              <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatBytes(conn.download) }}</td>
+              <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatBytes(conn.upload) }}</td>
+              <td class="text-right text-xs text-base-content/50 whitespace-nowrap">{{ formatDuration(conn.start) }}</td>
+              <td>
+                <button
+                  class="btn btn-ghost btn-xs text-error"
+                  @click.stop="closeConnection(conn.id)"
+                  title="断开"
+                >
+                  ✕
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+  
+        <div
+          v-if="filteredConnections.length === 0"
+          class="flex items-center justify-center py-10 text-base-content/40"
+        >
+          暂无活跃连接
+        </div>
       </div>
     </div>
 
-    <div v-show="activeTab === 'closed'" class="surface-card flex-1 overflow-auto">
-      <table class="table table-xs table-pin-rows">
-        <thead>
-          <tr>
-            <th class="z-20 cursor-pointer select-none hover:text-primary" @click="toggleSort('host')">主机{{ sortIcon('host') }}</th>
-            <th class="z-20 cursor-pointer select-none hover:text-primary" @click="toggleSort('rule')">规则{{ sortIcon('rule') }}</th>
-            <th class="z-20 cursor-pointer select-none hover:text-primary" @click="toggleSort('chains')">链路{{ sortIcon('chains') }}</th>
-            <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('dlSpeed')">下载速度{{ sortIcon('dlSpeed') }}</th>
-            <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('ulSpeed')">上传速度{{ sortIcon('ulSpeed') }}</th>
-            <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('dl')">下载{{ sortIcon('dl') }}</th>
-            <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('ul')">上传{{ sortIcon('ul') }}</th>
-            <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('duration')">时长{{ sortIcon('duration') }}</th>
-            <th class="z-20 w-8"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="conn in sortedClosedConnections"
-            :key="conn.id"
-            class="hover:bg-base-content/[0.04] opacity-60 cursor-pointer"
-            @click="openDetail(conn)"
-          >
-            <td class="whitespace-nowrap" :title="getHost(conn)">
-              <span class="text-xs leading-none px-2 py-0.5 rounded-full mr-1.5 inline-block" :class="conn.metadata.network === 'tcp' ? 'bg-info/15 text-info' : 'bg-accent/15 text-accent'">
-                {{ conn.metadata.network }}
-              </span>
-              <span class="truncate inline">{{ getHost(conn) }}</span>
-            </td>
-            <td class="text-xs text-base-content/100 align-top min-w-64 max-w-xl" :title="conn.rule">
-              <span class="block whitespace-normal break-words leading-relaxed [overflow-wrap:anywhere]">{{ conn.rule }}</span>
-            </td>
-            <td class="text-xs text-base-content/100 max-w-xl truncate" :title="formatChains(conn.chains)">
-              {{ formatChains(conn.chains) }}
-            </td>
-            <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatSpeed(conn.downloadSpeed || 0) }}</td>
-            <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatSpeed(conn.uploadSpeed || 0) }}</td>
-            <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatBytes(conn.download) }}</td>
-            <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatBytes(conn.upload) }}</td>
-            <td class="text-right text-xs text-base-content/50 whitespace-nowrap">{{ formatDuration(conn.start) }}</td>
-            <td class="w-8"><span class="block h-6"></span></td>
-          </tr>
-        </tbody>
-      </table>
-
-      <div
-        v-if="filteredClosedConnections.length === 0"
-        class="flex items-center justify-center py-10 text-base-content/40"
-      >
-        暂无已关闭连接
+    <div v-show="activeTab === 'closed'" class="surface-card flex flex-1 flex-col overflow-hidden">
+      <div class="card-scroll min-h-0 flex-1 overflow-auto">
+        <table class="table table-xs table-pin-rows">
+          <thead>
+            <tr>
+              <th class="z-20 cursor-pointer select-none hover:text-primary" @click="toggleSort('host')">主机{{ sortIcon('host') }}</th>
+              <th class="z-20 cursor-pointer select-none hover:text-primary" @click="toggleSort('rule')">规则{{ sortIcon('rule') }}</th>
+              <th class="z-20 cursor-pointer select-none hover:text-primary" @click="toggleSort('chains')">链路{{ sortIcon('chains') }}</th>
+              <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('dlSpeed')">下载速度{{ sortIcon('dlSpeed') }}</th>
+              <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('ulSpeed')">上传速度{{ sortIcon('ulSpeed') }}</th>
+              <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('dl')">下载{{ sortIcon('dl') }}</th>
+              <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('ul')">上传{{ sortIcon('ul') }}</th>
+              <th class="z-20 text-right cursor-pointer select-none hover:text-primary" @click="toggleSort('duration')">时长{{ sortIcon('duration') }}</th>
+              <th class="z-20 w-8"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="conn in sortedClosedConnections"
+              :key="conn.id"
+              class="hover:bg-base-content/[0.04] opacity-60 cursor-pointer"
+              @click="openDetail(conn)"
+            >
+              <td class="whitespace-nowrap" :title="getHost(conn)">
+                <span class="text-xs leading-none px-2 py-0.5 rounded-full mr-1.5 inline-block" :class="conn.metadata.network === 'tcp' ? 'bg-info/15 text-info' : 'bg-accent/15 text-accent'">
+                  {{ conn.metadata.network }}
+                </span>
+                <span class="truncate inline">{{ getHost(conn) }}</span>
+              </td>
+              <td class="text-xs text-base-content/100 align-top min-w-64 max-w-xl" :title="conn.rule">
+                <span class="block whitespace-normal break-words leading-relaxed [overflow-wrap:anywhere]">{{ conn.rule }}</span>
+              </td>
+              <td class="text-xs text-base-content/100 max-w-xl truncate" :title="formatChains(conn.chains)">
+                {{ formatChains(conn.chains) }}
+              </td>
+              <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatSpeed(conn.downloadSpeed || 0) }}</td>
+              <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatSpeed(conn.uploadSpeed || 0) }}</td>
+              <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatBytes(conn.download) }}</td>
+              <td class="text-right text-xs whitespace-nowrap min-w-20">{{ formatBytes(conn.upload) }}</td>
+              <td class="text-right text-xs text-base-content/50 whitespace-nowrap">{{ formatDuration(conn.start) }}</td>
+              <td class="w-8"><span class="block h-6"></span></td>
+            </tr>
+          </tbody>
+        </table>
+  
+        <div
+          v-if="filteredClosedConnections.length === 0"
+          class="flex items-center justify-center py-10 text-base-content/40"
+        >
+          暂无已关闭连接
+        </div>
       </div>
     </div>
 

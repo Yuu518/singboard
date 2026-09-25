@@ -302,7 +302,7 @@ watch(isRunning, (running) => {
       <div
         v-for="group in filteredGroups"
         :key="group.name"
-        class="surface-card overflow-hidden cursor-pointer"
+        class="surface-card glass-hover overflow-hidden cursor-pointer"
         @click="toggleGroup(group.name)"
       >
         <div class="flex items-start justify-between px-5 pt-4 pb-4">
@@ -396,7 +396,7 @@ watch(isRunning, (running) => {
       <div
         v-for="provider in proxyProviders"
         :key="provider.name"
-        class="surface-card overflow-hidden cursor-pointer"
+        class="surface-card glass-hover overflow-hidden cursor-pointer"
         @click="toggleProvider(provider.name)"
       >
         <div class="flex items-start justify-between px-5 pt-4 pb-4">
