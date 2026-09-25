@@ -72,7 +72,7 @@ const statusPillClass = computed(() => {
       <button
         v-for="item in navItems"
         :key="item.path"
-        class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-[13px] transition-colors duration-150"
+        class="glass-press flex w-full items-center gap-3 rounded-xl px-3 py-2 text-[13px]"
         :class="
           currentPath === item.path
             ? 'bg-primary/15 font-semibold text-primary'
@@ -99,7 +99,7 @@ const statusPillClass = computed(() => {
 
     <div class="p-3">
       <button
-        class="surface-fill surface-fill-hover inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium"
+        class="glass-press surface-fill surface-fill-hover inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium"
         :class="statusPillClass"
         :title="serviceStatus.state === 'running' ? '点击停止服务' : '点击启动服务'"
         :disabled="pillBusy"

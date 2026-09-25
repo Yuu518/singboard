@@ -1,10 +1,16 @@
 import { onBeforeUnmount, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
 
-const LENS_SELECTOR = '.glass-float, .glass-popover, .modal-box'
+const LENS_SELECTOR = '.glass-float, .glass-popover'
 const REFRACTION_HEIGHT = 24
-const REFRACTION_AMOUNT = 24
+export const REFRACTION_AMOUNT = 24
+export const CHROMA_SPREAD = 0.06
 const SVG_NS = 'http://www.w3.org/2000/svg'
+const CHANNELS = [
+  { name: 'r', matrix: '1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0' },
+  { name: 'g', matrix: '0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 1 0' },
+  { name: 'b', matrix: '0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 1 0' },
+] as const
 
 function circleMap(x: number): number {
   return 1 - Math.sqrt(Math.max(0, 1 - x * x))
@@ -67,6 +73,49 @@ export function buildDisplacementMap(
   return data
 }
 
+function svgElement(tag: string, attributes: Record<string, string | number>): SVGElement {
+  const element = document.createElementNS(SVG_NS, tag)
+  for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, String(value))
+  return element
+}
+
+export function buildLensFilter(width: number, height: number, href: string, id: string): SVGFilterElement {
+  const filter = svgElement('filter', {
+    id,
+    filterUnits: 'userSpaceOnUse',
+    primitiveUnits: 'userSpaceOnUse',
+    'color-interpolation-filters': 'sRGB',
+    x: 0,
+    y: 0,
+    width,
+    height,
+  }) as SVGFilterElement
+  filter.append(svgElement('feImage', { x: 0, y: 0, width, height, preserveAspectRatio: 'none', result: 'map', href }))
+  CHANNELS.forEach((channel, index) => {
+    filter.append(
+      svgElement('feDisplacementMap', {
+        in: 'SourceGraphic',
+        in2: 'map',
+        scale: REFRACTION_AMOUNT * 2 * (1 + index * CHROMA_SPREAD),
+        xChannelSelector: 'R',
+        yChannelSelector: 'G',
+        result: `${channel.name}-shift`,
+      }),
+      svgElement('feColorMatrix', {
+        in: `${channel.name}-shift`,
+        type: 'matrix',
+        values: channel.matrix,
+        result: channel.name,
+      }),
+    )
+  })
+  filter.append(
+    svgElement('feBlend', { in: 'g', in2: 'b', mode: 'screen', result: 'gb' }),
+    svgElement('feBlend', { in: 'r', in2: 'gb', mode: 'screen' }),
+  )
+  return filter
+}
+
 interface LensEntry {
   filter: SVGFilterElement | null
   key: string
@@ -109,30 +158,7 @@ export function useLiquidLens() {
     const preload = new Image()
     preload.src = href
     await preload.decode().catch(() => {})
-    const filter = document.createElementNS(SVG_NS, 'filter')
-    filter.id = `liquid-lens-${++counter}`
-    filter.setAttribute('filterUnits', 'userSpaceOnUse')
-    filter.setAttribute('primitiveUnits', 'userSpaceOnUse')
-    filter.setAttribute('color-interpolation-filters', 'sRGB')
-    filter.setAttribute('x', '0')
-    filter.setAttribute('y', '0')
-    filter.setAttribute('width', String(width))
-    filter.setAttribute('height', String(height))
-    const image = document.createElementNS(SVG_NS, 'feImage')
-    image.setAttribute('x', '0')
-    image.setAttribute('y', '0')
-    image.setAttribute('width', String(width))
-    image.setAttribute('height', String(height))
-    image.setAttribute('preserveAspectRatio', 'none')
-    image.setAttribute('result', 'map')
-    const displacement = document.createElementNS(SVG_NS, 'feDisplacementMap')
-    displacement.setAttribute('in', 'SourceGraphic')
-    displacement.setAttribute('in2', 'map')
-    displacement.setAttribute('scale', String(REFRACTION_AMOUNT * 2))
-    displacement.setAttribute('xChannelSelector', 'R')
-    displacement.setAttribute('yChannelSelector', 'G')
-    image.setAttribute('href', href)
-    filter.append(image, displacement)
+    const filter = buildLensFilter(width, height, href, `liquid-lens-${++counter}`)
     ensureSvg().appendChild(filter)
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
     return filter

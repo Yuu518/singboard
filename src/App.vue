@@ -18,6 +18,7 @@ import { appVisible } from '@/stores/appVisible'
 import TrayMenu from '@/components/tray/TrayMenu.vue'
 import { useConfigAutoUpdate } from '@/composables/useConfigAutoUpdate'
 import { useLiquidLens } from '@/composables/useLiquidLens'
+import { useGlassSheen } from '@/composables/useGlassSheen'
 import { useSingboxVersionStore } from '@/stores/singboxVersion'
 import { usePanelUpdateStore } from '@/stores/panelUpdate'
 import { useLogsLifecycle } from '@/stores/logs'
@@ -66,6 +67,7 @@ watch(
 
 if (!isTrayWindow) {
   useLiquidLens()
+  useGlassSheen()
   watch(
     resolvedTheme,
     (theme) => {

@@ -298,14 +298,20 @@ onMounted(() => {
     </div>
 
     <!-- 连接详情弹窗 -->
-    <div class="modal" :class="{ 'modal-visible': selectedConnection }" @click.self="closeDetail">
-      <div v-if="selectedConnection" class="modal-box max-w-2xl">
-        <div class="flex items-center justify-between mb-4">
+    <Teleport to="body">
+    <Transition name="glass-pop">
+    <div
+      v-if="selectedConnection"
+      class="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
+      @click.self="closeDetail"
+    >
+      <div class="glass-popover w-full max-w-2xl max-h-[80vh] flex flex-col rounded-[var(--radius-panel)]">
+        <div class="flex items-center justify-between px-5 pt-4 pb-3 shrink-0">
           <h3 class="font-bold text-lg">连接详情</h3>
           <button class="btn btn-sm btn-circle btn-ghost" @click="closeDetail">✕</button>
         </div>
 
-        <div class="space-y-4">
+        <div class="flex-1 min-h-0 overflow-y-auto px-5 space-y-4">
           <!-- 基本信息 -->
           <div>
             <h4 class="text-sm font-semibold text-base-content/70 mb-2">基本信息</h4>
@@ -385,7 +391,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="modal-action">
+        <div class="flex justify-end gap-2 px-5 pt-3 pb-4 shrink-0">
           <button
             v-if="activeTab === 'active'"
             class="btn btn-sm btn-glass btn-glass-danger"
@@ -396,15 +402,8 @@ onMounted(() => {
           <button class="btn btn-sm" @click="closeDetail">关闭</button>
         </div>
       </div>
-      <div class="modal-backdrop" @click="closeDetail"></div>
     </div>
+    </Transition>
+    </Teleport>
   </div>
 </template>
-
-<style scoped>
-.modal.modal-visible {
-  pointer-events: auto;
-  visibility: visible;
-  opacity: 1;
-}
-</style>

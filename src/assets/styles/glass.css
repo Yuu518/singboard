@@ -12,12 +12,18 @@
 
   --glass-rgb: 255 255 255;
   --glass-highlight:
-    inset 0 0 0 0.8px rgb(255 255 255 / 0.4),
     inset 0 1.2px 2.8px -0.6px rgb(255 255 255 / 0.75),
     inset 0 -1px 2.8px -0.6px rgb(255 255 255 / 0.35);
   --glass-edge: 0 0 0 0.5px rgb(0 0 0 / 0.08);
   --glass-shadow: 0 8px 24px -10px rgb(0 0 0 / 0.16);
   --glass-shadow-lg: 0 24px 56px -18px rgb(0 0 0 / 0.28), 0 4px 12px -4px rgb(0 0 0 / 0.08);
+  --glass-rim-screen-a1: 0.3;
+  --glass-rim-screen-a2: 0.9;
+  --glass-rim-after-rgb: 0 0 0;
+  --glass-rim-after-offset: 180deg;
+  --glass-rim-after-blend: normal;
+  --glass-rim-after-a1: 0.04;
+  --glass-rim-after-a2: 0.16;
 
   --fill: rgb(118 118 128 / 0.12);
   --fill-strong: rgb(118 118 128 / 0.2);
@@ -35,12 +41,18 @@
 
   --glass-rgb: 44 44 48;
   --glass-highlight:
-    inset 0 0 0 0.8px rgb(255 255 255 / 0.08),
     inset 0 1px 2px -0.4px rgb(255 255 255 / 0.22),
     inset 0 -1px 2px -0.4px rgb(255 255 255 / 0.1);
   --glass-edge: 0 0 0 0.5px rgb(0 0 0 / 0.6);
   --glass-shadow: 0 8px 24px -10px rgb(0 0 0 / 0.5);
   --glass-shadow-lg: 0 28px 64px -18px rgb(0 0 0 / 0.7), 0 4px 14px -4px rgb(0 0 0 / 0.35);
+  --glass-rim-screen-a1: 0.1;
+  --glass-rim-screen-a2: 0.35;
+  --glass-rim-after-rgb: 255 255 255;
+  --glass-rim-after-offset: 0deg;
+  --glass-rim-after-blend: overlay;
+  --glass-rim-after-a1: 0.15;
+  --glass-rim-after-a2: 0.4;
 
   --fill: rgb(118 118 128 / 0.24);
   --fill-strong: rgb(118 118 128 / 0.34);
@@ -107,6 +119,56 @@
   box-shadow: var(--glass-highlight), var(--glass-edge), var(--glass-shadow-lg);
   -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-pop-blur)) var(--glass-lens,);
   backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-pop-blur)) var(--glass-lens,);
+}
+
+@property --glass-rim-angle {
+  syntax: '<angle>';
+  inherits: true;
+  initial-value: 135deg;
+}
+
+:where(.glass-float, .glass-popover) {
+  position: relative;
+}
+
+.glass-float::before,
+.glass-float::after,
+.glass-popover::before,
+.glass-popover::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  padding: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    calc(var(--glass-rim-angle) + var(--rim-offset, 0deg)),
+    transparent 0%,
+    transparent 35%,
+    rgb(var(--rim-rgb, 255 255 255) / var(--rim-a1)) 70%,
+    rgb(var(--rim-rgb, 255 255 255) / var(--rim-a2)) 100%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  transition: --glass-rim-angle 220ms ease-out;
+}
+
+.glass-float::before,
+.glass-popover::before {
+  --rim-a1: var(--glass-rim-screen-a1);
+  --rim-a2: var(--glass-rim-screen-a2);
+  mix-blend-mode: screen;
+}
+
+.glass-float::after,
+.glass-popover::after {
+  --rim-rgb: var(--glass-rim-after-rgb);
+  --rim-offset: var(--glass-rim-after-offset);
+  --rim-a1: var(--glass-rim-after-a1);
+  --rim-a2: var(--glass-rim-after-a2);
+  mix-blend-mode: var(--glass-rim-after-blend);
 }
 
 .glass-scrim {
@@ -228,18 +290,6 @@ html .table-pin-rows thead th {
   box-shadow: inset 0 -0.5px 0 var(--hairline);
 }
 
-html .modal {
-  background-color: var(--scrim);
-}
-
-html .modal-box {
-  border-radius: var(--radius-panel);
-  background: var(--glass-grain), rgb(var(--glass-rgb) / var(--glass-pop-alpha));
-  box-shadow: var(--glass-highlight), var(--glass-edge), var(--glass-shadow-lg);
-  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-pop-blur)) var(--glass-lens,);
-  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-pop-blur)) var(--glass-lens,);
-}
-
 html .divider::before,
 html .divider::after {
   background-color: var(--hairline);
@@ -253,6 +303,13 @@ html .divider::after {
     --glass-edge: 0 0 0 1px oklch(var(--bc) / 0.35) !important;
     --surface-edge: 0 0 0 1px oklch(var(--bc) / 0.3) !important;
     --hairline: oklch(var(--bc) / 0.3) !important;
+  }
+
+  .glass-float::before,
+  .glass-float::after,
+  .glass-popover::before,
+  .glass-popover::after {
+    display: none;
   }
 }
 
@@ -275,12 +332,47 @@ html .divider::after {
   .glass-pop-leave-active > * {
     transition-duration: 0.01ms !important;
   }
+
+  html .glass-press:active,
+  html .btn.btn-glass:active {
+    transform: none;
+  }
+
+  .glass-float::before,
+  .glass-float::after,
+  .glass-popover::before,
+  .glass-popover::after {
+    transition: none;
+  }
 }
 
 html .btn.btn-glass {
   border-color: transparent;
   background-color: var(--fill);
   color: oklch(var(--p));
+  transition:
+    transform 380ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    color 200ms ease,
+    background-color 200ms ease,
+    border-color 200ms ease;
+}
+
+html .glass-press {
+  transition:
+    transform 380ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    color 150ms ease,
+    background-color 150ms ease;
+}
+
+html .glass-press:active {
+  transform: scale(0.96);
+  transition-duration: 90ms, 150ms, 150ms;
+  transition-timing-function: ease-out, ease, ease;
+}
+
+html .btn.btn-glass:active {
+  transition-duration: 90ms, 200ms, 200ms, 200ms;
+  transition-timing-function: ease-out, ease, ease, ease;
 }
 
 html .btn.btn-glass:hover {
@@ -295,9 +387,4 @@ html .btn.btn-glass.btn-glass-danger {
 
 html .btn.btn-glass.btn-glass-danger:hover {
   background-color: oklch(var(--er) / 0.2);
-}
-
-html .modal.modal-visible .modal-box {
-  --tw-scale-x: 1;
-  --tw-scale-y: 1;
 }

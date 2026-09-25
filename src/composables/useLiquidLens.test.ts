@@ -34,3 +34,38 @@ describe('liquid lens displacement map', () => {
     expect(Math.abs(inner - 127.5)).toBeLessThan(1)
   })
 })
+
+describe('liquid lens filter', () => {
+  it('splits the refraction into three channels with rising strength', async () => {
+    const { buildLensFilter, REFRACTION_AMOUNT, CHROMA_SPREAD } = await import('./useLiquidLens')
+    const filter = buildLensFilter(200, 120, 'data:image/png;base64,', 'lens-test')
+    const base = REFRACTION_AMOUNT * 2
+
+    const shifts = [...filter.querySelectorAll('feDisplacementMap')]
+    expect(shifts.map((node) => Number(node.getAttribute('scale')))).toEqual([
+      base,
+      base * (1 + CHROMA_SPREAD),
+      base * (1 + 2 * CHROMA_SPREAD),
+    ])
+    for (const node of shifts) {
+      expect(node.getAttribute('in')).toBe('SourceGraphic')
+      expect(node.getAttribute('in2')).toBe('map')
+    }
+
+    const matrices = [...filter.querySelectorAll('feColorMatrix')].map((node) =>
+      node.getAttribute('values')!.split(' ').map(Number),
+    )
+    expect(matrices).toHaveLength(3)
+    matrices.forEach((values, channel) => {
+      for (let row = 0; row < 3; row++) {
+        expect(values.slice(row * 5, row * 5 + 3)).toEqual([0, 1, 2].map((col) => (row === channel && col === channel ? 1 : 0)))
+      }
+      expect(values.slice(15)).toEqual([0, 0, 0, 1, 0])
+    })
+
+    const blends = [...filter.querySelectorAll('feBlend')]
+    expect(blends).toHaveLength(2)
+    expect(blends.every((node) => node.getAttribute('mode') === 'screen')).toBe(true)
+    expect(filter.lastElementChild).toBe(blends[1])
+  })
+})
