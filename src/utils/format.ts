@@ -53,14 +53,14 @@ export function formatDate(dateStr: string): string {
 export function latencyColor(delay: number): string {
   if (delay === 0) return 'bg-base-content/10 text-base-content/50'
   if (delay < 300) return 'bg-success/15 text-success'
-  if (delay < 800) return 'bg-amber-500/15 text-amber-600'
+  if (delay < 800) return 'bg-warning/15 text-warning'
   return 'bg-error/15 text-error'
 }
 
 export function dotColor(delay: number): string {
   if (delay === 0) return 'bg-base-content/20'
   if (delay < 300) return 'bg-success'
-  if (delay < 800) return 'bg-amber-500'
+  if (delay < 800) return 'bg-warning'
   return 'bg-error'
 }
 

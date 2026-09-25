@@ -278,17 +278,17 @@ async function handleAddRemote() {
     <ConfirmDialog ref="confirmDialogRef" />
     <!-- 标题栏 -->
     <div class="flex items-center justify-between shrink-0">
-      <h1 class="text-xl font-bold" v-if="!editingProfileId">配置</h1>
+      <h1 class="text-[26px] leading-tight tracking-tight font-bold" v-if="!editingProfileId">配置</h1>
       <template v-if="!editingProfileId">
         <div class="flex gap-2">
-          <button class="btn btn-sm btn-outline" @click="openAddLocalDialog">添加本地配置</button>
-          <button class="btn btn-sm btn-outline" @click="openAddRemoteDialog">添加远程配置</button>
+          <button class="btn btn-sm btn-glass" @click="openAddLocalDialog">添加本地配置</button>
+          <button class="btn btn-sm btn-glass" @click="openAddRemoteDialog">添加远程配置</button>
         </div>
       </template>
     </div>
 
     <!-- 卡片列表 -->
-    <div v-if="!editingProfileId" class="grid grid-cols-1 md:grid-cols-2 gap-3 overflow-auto flex-1 content-start items-start">
+    <div v-if="!editingProfileId" class="-mx-2 -mt-1 grid grid-cols-1 md:grid-cols-2 gap-3 overflow-auto flex-1 content-start items-start px-2 pb-2 pt-1">
       <ConfigProfileCard
         v-for="profile in configProfiles"
         :key="profile.id"
@@ -321,19 +321,20 @@ async function handleAddRemote() {
       />
       <div
         v-else
-        class="flex-1 min-h-0 rounded-lg bg-base-200 flex items-center justify-center text-sm text-base-content/60"
+        class="surface-card flex-1 min-h-0 flex items-center justify-center text-sm text-base-content/60"
       >
         正在加载配置路径...
       </div>
     </template>
 
     <!-- 添加本地配置对话框 -->
+    <Transition name="glass-pop">
     <div
       v-if="showAddLocalDialog"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      class="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
       @click.self="showAddLocalDialog = false"
     >
-      <div class="w-full max-w-md rounded-lg bg-base-100 p-5 shadow-xl space-y-4">
+      <div class="glass-popover w-full max-w-md rounded-[var(--radius-panel)] p-5 space-y-4">
         <h2 class="text-lg font-semibold">添加本地配置</h2>
         <div class="form-control">
           <label class="label"><span class="label-text text-xs">配置名称</span></label>
@@ -353,7 +354,7 @@ async function handleAddRemote() {
               class="input input-sm input-bordered flex-1"
               placeholder="config.json 或 C:\sing-box\config.json"
             />
-            <button class="btn btn-sm btn-outline shrink-0" @click="browseLocalFile">浏览</button>
+            <button class="btn btn-sm btn-glass shrink-0" @click="browseLocalFile">浏览</button>
           </div>
         </div>
         <div class="flex justify-end gap-2">
@@ -362,14 +363,16 @@ async function handleAddRemote() {
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- 添加远程配置对话框 -->
+    <Transition name="glass-pop">
     <div
       v-if="showAddRemoteDialog"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      class="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
       @click.self="showAddRemoteDialog = false"
     >
-      <div class="w-full max-w-md rounded-lg bg-base-100 p-5 shadow-xl space-y-4">
+      <div class="glass-popover w-full max-w-md rounded-[var(--radius-panel)] p-5 space-y-4">
         <h2 class="text-lg font-semibold">添加远程配置</h2>
         <div class="form-control">
           <label class="label"><span class="label-text text-xs">配置名称</span></label>
@@ -413,13 +416,15 @@ async function handleAddRemote() {
         </div>
       </div>
     </div>
+    </Transition>
     <!-- 修改信息对话框 -->
+    <Transition name="glass-pop">
     <div
       v-if="showEditInfoDialog"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      class="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
       @click.self="showEditInfoDialog = false"
     >
-      <div class="w-full max-w-md rounded-lg bg-base-100 p-5 shadow-xl space-y-4">
+      <div class="glass-popover w-full max-w-md rounded-[var(--radius-panel)] p-5 space-y-4">
         <h2 class="text-lg font-semibold">修改信息</h2>
         <div class="form-control">
           <label class="label"><span class="label-text text-xs">名称</span></label>
@@ -441,7 +446,7 @@ async function handleAddRemote() {
             />
             <button
               v-if="editInfoForm.type === 'local'"
-              class="btn btn-sm btn-outline shrink-0"
+              class="btn btn-sm btn-glass shrink-0"
               @click="browseEditInfoFile"
             >
               浏览
@@ -464,5 +469,6 @@ async function handleAddRemote() {
         </div>
       </div>
     </div>
+    </Transition>
   </div>
 </template>

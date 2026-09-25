@@ -43,12 +43,14 @@ defineExpose({ show })
 </script>
 
 <template>
+  <Teleport to="body">
+  <Transition name="glass-pop">
   <div
     v-if="visible"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+    class="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
     @click.self="cancel"
   >
-    <div class="w-full max-w-sm rounded-lg bg-base-100 p-5 shadow-xl space-y-4">
+    <div class="glass-popover w-full max-w-sm rounded-[var(--radius-panel)] p-5 space-y-4">
       <h3 v-if="title" class="text-base font-semibold">{{ title }}</h3>
       <p class="text-sm text-base-content/80 whitespace-pre-line">{{ message }}</p>
       <div class="flex justify-end gap-2">
@@ -63,4 +65,6 @@ defineExpose({ show })
       </div>
     </div>
   </div>
+  </Transition>
+  </Teleport>
 </template>

@@ -113,11 +113,12 @@ defineExpose({ checkAndOpen })
 </script>
 
 <template>
+  <Transition name="glass-pop">
   <div
     v-if="props.visible"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+    class="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
   >
-    <div class="w-full max-w-xl rounded-lg bg-base-100 p-5 shadow-xl space-y-4">
+    <div class="glass-popover w-full max-w-xl rounded-[var(--radius-panel)] p-5 space-y-4">
       <h2 class="text-lg font-semibold">初始化向导</h2>
       <p class="text-sm text-base-content/70">
         只需填写工作目录，系统会自动扫描该目录及其子目录，识别 sing-box 核心与配置文件。
@@ -133,7 +134,7 @@ defineExpose({ checkAndOpen })
             class="input input-sm input-bordered flex-1"
             placeholder="C:\sing-box"
           />
-          <button class="btn btn-sm btn-outline shrink-0" @click="browseWorkingDir">浏览</button>
+          <button class="btn btn-sm btn-glass shrink-0" @click="browseWorkingDir">浏览</button>
         </div>
       </div>
 
@@ -168,4 +169,5 @@ defineExpose({ checkAndOpen })
       </div>
     </div>
   </div>
+  </Transition>
 </template>

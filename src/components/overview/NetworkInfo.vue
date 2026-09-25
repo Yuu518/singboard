@@ -163,10 +163,10 @@ watch(() => serviceStatus.value.state, (state, oldState) => {
 </script>
 
 <template>
-  <div class="bg-base-200 rounded-lg p-4 space-y-3">
+  <div class="surface-card p-4 space-y-3">
     <h2 class="text-sm font-semibold">网络信息</h2>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-      <div class="bg-base-300/50 rounded-lg p-3 space-y-2 relative">
+      <div class="surface-fill rounded-[var(--radius-tile)] p-3 space-y-2 relative">
         <div class="text-xs font-medium text-base-content/60 mb-2">IP 信息</div>
         <div class="grid grid-cols-[auto_auto_1fr] gap-x-2 gap-y-1 text-sm">
           <span>ipip.net</span>
@@ -220,7 +220,7 @@ watch(() => serviceStatus.value.state, (state, oldState) => {
         </div>
       </div>
 
-      <div class="bg-base-300/50 rounded-lg p-3 space-y-2 relative">
+      <div class="surface-fill rounded-[var(--radius-tile)] p-3 space-y-2 relative">
         <div class="text-xs font-medium text-base-content/60 mb-2">连通性测试</div>
         <div class="grid grid-cols-[auto_auto_1fr] gap-x-2 gap-y-1 text-sm">
           <span>微信</span>

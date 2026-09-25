@@ -258,7 +258,7 @@ watch(isRunning, (running) => {
     <template v-else>
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <h1 class="text-xl font-bold shrink-0">代理</h1>
+        <h1 class="text-[26px] leading-tight tracking-tight font-bold shrink-0">代理</h1>
         <div class="tabs tabs-boxed tabs-sm">
           <a class="tab" :class="{ 'tab-active': activeTab === 'groups' }" @click="activeTab = 'groups'">
             代理 ({{ filteredGroups.length }})
@@ -292,7 +292,7 @@ watch(isRunning, (running) => {
 
     <div
       v-show="activeTab === 'groups'"
-      class="flex-1 overflow-auto"
+      class="-mx-2 -mt-1 flex-1 overflow-auto px-2 pb-2 pt-1"
     >
       <div v-if="loading && proxyGroups.length === 0" class="flex justify-center py-10">
         <span class="loading loading-spinner loading-md"></span>
@@ -302,7 +302,7 @@ watch(isRunning, (running) => {
       <div
         v-for="group in filteredGroups"
         :key="group.name"
-        class="bg-base-200 rounded-lg overflow-hidden cursor-pointer hover:bg-base-300/30 transition-colors"
+        class="surface-card overflow-hidden cursor-pointer"
         @click="toggleGroup(group.name)"
       >
         <div class="flex items-start justify-between px-5 pt-4 pb-4">
@@ -318,7 +318,7 @@ watch(isRunning, (running) => {
               <span class="truncate">{{ group.now }}</span>
               <span
                 v-if="group.now && shouldShowLatencyBadge(group.now)"
-                class="shrink-0 text-xs leading-none px-1.5 py-0.5 rounded"
+                class="shrink-0 text-xs leading-none px-2 py-0.5 rounded-full"
                 :class="getLatencyBadgeClass(group.now)"
               >
                 {{ getLatencyLabel(group.now) }}
@@ -356,11 +356,11 @@ watch(isRunning, (running) => {
             <div
               v-for="nodeName in group.all"
               :key="nodeName"
-              class="flex h-[70px] min-w-[180px] flex-col items-start gap-2 p-2 rounded-md text-xs transition-all cursor-pointer overflow-hidden"
+              class="flex h-[70px] min-w-[180px] flex-col items-start gap-2 p-2.5 rounded-[var(--radius-tile)] text-xs transition-all duration-150 cursor-pointer overflow-hidden active:scale-[0.98]"
               :class="
                 group.now === nodeName
-                  ? 'bg-primary/15 text-primary ring-1 ring-primary/30'
-                  : 'bg-base-100 hover:bg-base-300'
+                  ? 'bg-primary/15 text-primary ring-1 ring-inset ring-primary/40'
+                  : 'surface-fill surface-fill-hover'
               "
               @click.stop="handleSelect(group.name, nodeName)"
             >
@@ -373,7 +373,7 @@ watch(isRunning, (running) => {
                   :class="group.now === nodeName ? 'text-primary/70' : 'text-base-content/60'"
                 >{{ getTypeDescription(nodeName) }}</span>
                 <button
-                  class="shrink-0 cursor-pointer text-xs leading-none px-1.5 py-0.5 rounded"
+                  class="shrink-0 cursor-pointer text-xs leading-none px-2 py-0.5 rounded-full"
                   :class="[getLatencyBadgeClass(nodeName), { 'loading loading-xs': testingNodes.has(nodeName) }]"
                   @click="handleTestNode($event, nodeName, group.name)"
                   title="点击测速"
@@ -388,7 +388,7 @@ watch(isRunning, (running) => {
       </div>
     </div>
 
-    <div v-show="activeTab === 'providers'" class="flex-1 overflow-auto space-y-3">
+    <div v-show="activeTab === 'providers'" class="-mx-2 -mt-1 flex-1 overflow-auto space-y-3 px-2 pb-2 pt-1">
       <div v-if="proxyProviders.length === 0" class="flex items-center justify-center py-10 text-base-content/40">
         暂无代理提供商
       </div>
@@ -396,7 +396,7 @@ watch(isRunning, (running) => {
       <div
         v-for="provider in proxyProviders"
         :key="provider.name"
-        class="bg-base-200 rounded-lg overflow-hidden cursor-pointer hover:bg-base-300/30 transition-colors"
+        class="surface-card overflow-hidden cursor-pointer"
         @click="toggleProvider(provider.name)"
       >
         <div class="flex items-start justify-between px-5 pt-4 pb-4">
@@ -450,7 +450,7 @@ watch(isRunning, (running) => {
             <div
               v-for="node in provider.proxies"
               :key="node.name"
-              class="bg-base-100 flex h-[70px] min-w-[180px] flex-col items-start gap-2 p-2 rounded-md text-xs overflow-hidden"
+              class="surface-fill flex h-[70px] min-w-[180px] flex-col items-start gap-2 p-2.5 rounded-[var(--radius-tile)] text-xs overflow-hidden"
             >
               <div class="w-full flex-1 text-sm leading-tight break-all" :title="node.name">
                 {{ node.name }}
@@ -460,7 +460,7 @@ watch(isRunning, (running) => {
                   {{ getTypeDescription(node.name) }}
                 </span>
                 <button
-                  class="shrink-0 cursor-pointer text-xs leading-none px-1.5 py-0.5 rounded"
+                  class="shrink-0 cursor-pointer text-xs leading-none px-2 py-0.5 rounded-full"
                   :class="[getLatencyBadgeClass(node.name), { 'loading loading-xs': testingNodes.has(node.name) }]"
                   @click.stop="handleTestNode($event, node.name, provider.name)"
                   title="点击测速"

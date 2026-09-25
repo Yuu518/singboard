@@ -1,4 +1,4 @@
-import { flushPromises, mount } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { VueWrapper } from '@vue/test-utils'
 
@@ -205,7 +205,7 @@ describe('update cards', () => {
     wrappers.push(wrapper)
     await wrapper.get('button').trigger('click')
     await flushPromises()
-    await wrapper.get('.btn-primary').trigger('click')
+    await new DOMWrapper(document.body).get('.btn-primary').trigger('click')
     await flushPromises()
 
     expect(tauri.invoke).toHaveBeenCalledWith('perform_core_update', {

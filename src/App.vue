@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import Titlebar from '@/components/layout/Titlebar.vue'
 import Sidebar from '@/components/layout/Sidebar.vue'
+import { navItems } from '@/components/layout/navItems'
 import ToastHost from '@/components/common/ToastHost.vue'
 import SetupWizard from '@/components/common/SetupWizard.vue'
 import PanelUpdateDialog from '@/components/common/PanelUpdateDialog.vue'
@@ -11,10 +13,11 @@ import { useProxiesStore } from '@/stores/proxies'
 import { useOverviewStore } from '@/stores/overview'
 import { useConnectionsStore } from '@/stores/connections'
 import { syncActiveConfigToRunning } from '@/utils/coreControl'
-import { isLaunchedHidden } from '@/bridge/app'
+import { isLaunchedHidden, setWindowMaterial } from '@/bridge/app'
 import { appVisible } from '@/stores/appVisible'
 import TrayMenu from '@/components/tray/TrayMenu.vue'
 import { useConfigAutoUpdate } from '@/composables/useConfigAutoUpdate'
+import { useLiquidLens } from '@/composables/useLiquidLens'
 import { useSingboxVersionStore } from '@/stores/singboxVersion'
 import { usePanelUpdateStore } from '@/stores/panelUpdate'
 import { useLogsLifecycle } from '@/stores/logs'
@@ -30,9 +33,10 @@ import {
 
 const currentWindow = getCurrentWindow()
 const isTrayWindow = currentWindow.label === 'tray'
+document.documentElement.classList.toggle('tray-window', isTrayWindow)
 const logsLifecycle = isTrayWindow ? null : useLogsLifecycle()
 
-const { config } = useConfigStore()
+const { config, resolvedTheme } = useConfigStore()
 const { serviceStatus, ready: serviceReady } = useServiceStore()
 const configAutoUpdate = isTrayWindow ? null : useConfigAutoUpdate()
 const { loadProxies, resumePendingTests, refreshDuringCoreWarmup } = useProxiesStore()
@@ -40,6 +44,38 @@ const { resetHistory: resetOverviewHistory } = useOverviewStore()
 const { resetOnRestart: resetConnections } = useConnectionsStore()
 const { detectVersion } = useSingboxVersionStore()
 const { checkOnStartup: checkPanelUpdateOnStartup } = usePanelUpdateStore()
+
+const route = useRoute()
+const pageTitle = computed(() => navItems.find((item) => item.path === route.path)?.label ?? '')
+const mainRef = ref<HTMLElement | null>(null)
+const scrolled = ref(false)
+
+function onMainScroll() {
+  scrolled.value = (mainRef.value?.scrollTop ?? 0) > 0
+}
+
+watch(
+  () => route.path,
+  () => {
+    void nextTick(() => {
+      if (mainRef.value) mainRef.value.scrollTop = 0
+      scrolled.value = false
+    })
+  },
+)
+
+if (!isTrayWindow) {
+  useLiquidLens()
+  watch(
+    resolvedTheme,
+    (theme) => {
+      setWindowMaterial(theme === 'dark')
+        .then((applied) => document.documentElement.classList.toggle('has-mica', applied))
+        .catch(() => document.documentElement.classList.remove('has-mica'))
+    },
+    { immediate: true },
+  )
+}
 
 const setupWizardVisible = ref(false)
 const setupWizardRef = ref<InstanceType<typeof SetupWizard> | null>(null)
@@ -168,11 +204,11 @@ if (!isTrayWindow) {
 
 <template>
   <TrayMenu v-if="isTrayWindow" />
-  <div v-else class="flex flex-col h-screen bg-base-100 text-base-content">
-    <Titlebar />
-    <div class="flex flex-1 overflow-hidden">
-      <Sidebar />
-      <main class="flex-1 overflow-auto p-4">
+  <div v-else class="relative flex h-screen text-base-content">
+    <Sidebar />
+    <div class="relative flex min-w-0 flex-1 flex-col">
+      <Titlebar class="absolute inset-x-0 top-0 z-30" :title="pageTitle" :scrolled="scrolled" />
+      <main ref="mainRef" class="app-main min-h-0 flex-1 overflow-auto px-5 pb-5 pt-12" @scroll.passive="onMainScroll">
         <router-view />
       </main>
     </div>

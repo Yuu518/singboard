@@ -58,6 +58,33 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+fn supports_mica() -> bool {
+    winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+        .and_then(|key| key.get_value::<String, _>("CurrentBuildNumber"))
+        .ok()
+        .and_then(|build| build.trim().parse::<u32>().ok())
+        .is_some_and(|build| build >= 22000)
+}
+
+#[tauri::command]
+fn set_window_material(window: tauri::WebviewWindow, dark: bool) -> bool {
+    use tauri::window::{Effect, EffectsBuilder};
+
+    if !supports_mica() {
+        let _ = window.set_effects(None);
+        return false;
+    }
+    let effect = if dark { Effect::MicaDark } else { Effect::MicaLight };
+    match window.set_effects(EffectsBuilder::new().effect(effect).build()) {
+        Ok(()) => true,
+        Err(_) => {
+            let _ = window.set_effects(None);
+            false
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -252,6 +279,7 @@ fn run_gui() {
             set_auto_launch,
             show_main_window,
             quit_app,
+            set_window_material,
             singboard_lib::commands::service::service_status,
             singboard_lib::commands::service::service_start,
             singboard_lib::commands::service::service_stop,

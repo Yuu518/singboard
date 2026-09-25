@@ -16,7 +16,7 @@ const isPaused = ref(false)
 let myChart: echarts.ECharts | null = null
 let resizeOb: ResizeObserver | null = null
 
-const layerColors = ['#6a6fc5', '#a8d4a0', '#fddb8a', '#f2a0a0']
+const layerColors = ['#0A84FF', '#30D158', '#FF9F0A', '#FF6482']
 const darkThemes = new Set(['dark'])
 const labelColor = computed(() => (darkThemes.has(resolvedTheme.value) ? '#ffffff' : '#000000'))
 
@@ -116,6 +116,11 @@ const options = computed(() => ({
   tooltip: {
     trigger: 'item' as const,
     triggerOn: 'mousemove' as const,
+    backgroundColor: darkThemes.has(resolvedTheme.value) ? 'rgba(44, 44, 46, 0.78)' : 'rgba(255, 255, 255, 0.78)',
+    borderWidth: 0,
+    padding: [8, 12],
+    textStyle: { color: labelColor.value, fontSize: 12 },
+    extraCssText: 'border-radius: 12px; backdrop-filter: blur(24px) saturate(180%); box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(0, 0, 0, 0.12);',
     formatter: (params: any) => {
       if (params.dataType === 'node') {
         return `${params.data.name}<br/>类型: ${params.data.nodeType || '未知'}`
@@ -194,7 +199,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="bg-base-200 rounded-lg p-4 space-y-3">
+  <div class="surface-card p-4 space-y-3">
     <div class="flex items-center justify-between">
       <h2 class="text-sm font-semibold">连接拓扑</h2>
       <button class="btn btn-ghost btn-xs btn-circle" @click="isPaused = !isPaused">

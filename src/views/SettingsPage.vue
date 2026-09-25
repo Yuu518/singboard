@@ -46,6 +46,11 @@ const themeOptions = [
   { value: 'dark', label: '深色' },
 ] as const
 
+const glassOptions = [
+  { value: 'clear', label: '通透' },
+  { value: 'blur', label: '模糊' },
+] as const
+
 const { proxyGroups, loadProxies } = useProxiesStore()
 
 const groupTestUrlsExpanded = ref(false)
@@ -414,7 +419,7 @@ watch(
   <div class="settings-page">
     <ConfirmDialog ref="confirmDialogRef" />
 
-    <h1 class="text-xl font-bold mb-5">设置</h1>
+    <h1 class="text-[26px] leading-tight tracking-tight font-bold mb-5">设置</h1>
 
     <section class="settings-group">
       <h2 class="settings-group-title">核心与服务</h2>
@@ -803,6 +808,25 @@ watch(
               @click="updateConfig({ theme: theme.value })"
             >
               {{ theme.label }}
+            </button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-copy">
+            <strong id="settings-glass-label">玻璃效果</strong>
+            <span>作用于顶部栏、侧栏、表头和弹窗。“通透”是带折射的液态玻璃，“模糊”是带底色的模糊玻璃。</span>
+          </div>
+          <div class="settings-segmented" role="radiogroup" aria-labelledby="settings-glass-label">
+            <button
+              v-for="option in glassOptions"
+              :key="option.value"
+              type="button"
+              role="radio"
+              :class="{ 'is-active': config.glassMode === option.value }"
+              :aria-checked="config.glassMode === option.value"
+              @click="updateConfig({ glassMode: option.value })"
+            >
+              {{ option.label }}
             </button>
           </div>
         </div>

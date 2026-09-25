@@ -207,12 +207,12 @@ onBeforeUnmount(() => {
         />
         <div
           v-if="historyOpen && history.length"
-          class="absolute z-20 mt-1 w-full rounded-md bg-base-100 border border-base-300 shadow-lg py-1"
+          class="glass-popover absolute z-20 mt-1 w-full rounded-xl p-1"
         >
           <div
             v-for="(item, index) in history"
             :key="item.domain"
-            class="flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-base-200"
+            class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-base-content/[0.06]"
           >
             <button class="flex-1 min-w-0 text-left" @click="applyHistory(item)">
               <span class="block truncate">{{ item.domain }}</span>
@@ -256,7 +256,7 @@ onBeforeUnmount(() => {
         </button>
         <div
           v-if="typeMenuOpen"
-          class="absolute z-20 mt-1 w-full rounded-md bg-base-100 border border-base-300 shadow-lg py-1"
+          class="glass-popover absolute z-20 mt-1 w-full rounded-xl p-1"
           role="listbox"
           aria-label="记录类型"
         >
@@ -266,7 +266,7 @@ onBeforeUnmount(() => {
             type="button"
             role="option"
             :aria-selected="recordType === type"
-            class="block w-full px-3 py-2 text-left text-sm hover:bg-base-200"
+            class="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-base-content/[0.06]"
             @click="applyRecordType(type)"
           >
             {{ type }}
@@ -301,7 +301,7 @@ onBeforeUnmount(() => {
         </button>
         <div
           v-if="dnsMenuOpen"
-          class="absolute z-20 mt-1 w-full rounded-md bg-base-100 border border-base-300 shadow-lg py-1"
+          class="glass-popover absolute z-20 mt-1 w-full rounded-xl p-1"
           role="listbox"
           aria-label="DNS 解析器"
         >
@@ -311,7 +311,7 @@ onBeforeUnmount(() => {
             type="button"
             role="option"
             :aria-selected="server === serverLabelFromValue(preset.value)"
-            class="block w-full px-3 py-2 text-left text-sm hover:bg-base-200"
+            class="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-base-content/[0.06]"
             @click="applyDnsPreset(preset.value)"
           >
             <span class="block">{{ preset.label }}</span>
@@ -346,7 +346,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="settings-dns-value settings-mono">{{ item.value }}</div>
       </div>
-      <div class="px-3 py-2 text-xs text-base-content/50 border-t border-base-300">
+      <div class="px-3 py-2 text-xs text-base-content/50 border-t border-[color:var(--hairline)]">
         {{ sourceLabel }}
       </div>
     </div>

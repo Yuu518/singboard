@@ -26,8 +26,9 @@
 
 .settings-card {
   min-width: 0;
-  border-radius: 12px;
-  background: oklch(var(--b2));
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--surface-edge), var(--surface-shadow);
 }
 
 .settings-card + .settings-card {
@@ -45,7 +46,17 @@
 }
 
 .settings-row + .settings-row {
-  border-top: 1px solid oklch(var(--b3));
+  position: relative;
+}
+
+.settings-row + .settings-row::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 16px;
+  height: 0.5px;
+  background: var(--hairline);
+  content: '';
 }
 
 .settings-row-stack {
@@ -169,31 +180,32 @@
 }
 
 .settings-page .btn-route:hover:not(:disabled) {
-  border-color: color-mix(in oklab, oklch(var(--p)) 88%, black);
-  background: color-mix(in oklab, oklch(var(--p)) 88%, black);
+  border-color: oklch(var(--p));
+  background: oklch(var(--p));
+  filter: brightness(1.08);
 }
 
 .settings-page .btn-route:disabled {
   border-color: transparent;
-  background: oklch(var(--bc) / 0.08);
+  background: var(--fill);
   color: oklch(var(--bc) / 0.35);
 }
 
 .settings-page .settings-btn {
-  border-color: oklch(var(--b3));
-  background: oklch(var(--b1));
-  color: oklch(var(--bc));
+  border-color: transparent;
+  background: var(--fill);
+  color: oklch(var(--p));
   font-weight: 500;
 }
 
 .settings-page .settings-btn:hover:not(:disabled) {
-  border-color: oklch(var(--b3));
-  background: oklch(var(--b3));
+  border-color: transparent;
+  background: var(--fill-strong);
 }
 
 .settings-page .settings-btn:disabled {
-  border-color: oklch(var(--b3) / 0.6);
-  background: transparent;
+  border-color: transparent;
+  background: var(--fill);
   color: oklch(var(--bc) / 0.3);
 }
 
@@ -202,7 +214,7 @@
 }
 
 .settings-page .settings-icon-btn:hover:not(:disabled) {
-  background: oklch(var(--b3));
+  background: var(--fill-strong);
   color: oklch(var(--bc));
 }
 
@@ -222,15 +234,15 @@
 
 .settings-page :is(.input-bordered, .select-bordered) {
   min-width: 0;
-  border-color: oklch(var(--b3));
-  background-color: oklch(var(--b1));
+  border-color: transparent;
+  background-color: var(--fill);
 }
 
 .settings-page :is(.input-bordered, .select-bordered):focus,
 .settings-page :is(.input-bordered, .select-bordered):focus-visible {
-  border-color: oklch(var(--p));
+  border-color: oklch(var(--p) / 0.55);
   outline: none;
-  box-shadow: 0 0 0 3px oklch(var(--p) / 0.15);
+  box-shadow: 0 0 0 3px oklch(var(--p) / 0.18);
 }
 
 .settings-button-icon {
@@ -394,8 +406,8 @@
 
 .settings-group-badge {
   overflow: hidden;
-  padding: 4px 8px;
-  border-radius: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
   background: oklch(var(--p) / 0.1);
   color: oklch(var(--p));
   font-size: 12px;
@@ -425,20 +437,19 @@
   grid-auto-columns: 1fr;
   grid-auto-flow: column;
   gap: 2px;
-  padding: 3px;
-  border: 1px solid oklch(var(--b3));
-  border-radius: 9px;
-  background: oklch(var(--b1));
+  padding: 2px;
+  border-radius: 9999px;
+  background: var(--fill);
 }
 
 .settings-segmented > button {
   min-height: 26px;
-  padding: 3px 12px;
-  border-radius: 6px;
-  color: oklch(var(--bc) / 0.6);
+  padding: 3px 14px;
+  border-radius: 9999px;
+  color: oklch(var(--bc) / 0.7);
   font-size: 12px;
   white-space: nowrap;
-  transition: background-color 150ms ease, color 150ms ease;
+  transition: background-color 180ms ease, color 180ms ease, box-shadow 180ms ease;
 }
 
 .settings-segmented > button:hover {
@@ -446,9 +457,10 @@
 }
 
 .settings-segmented > button.is-active {
-  background: oklch(var(--p) / 0.12);
-  color: oklch(var(--p));
-  font-weight: 500;
+  background: var(--segment-thumb);
+  color: oklch(var(--bc));
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12), 0 0 0 0.5px rgb(0 0 0 / 0.04);
 }
 
 .settings-update-status {
@@ -526,9 +538,8 @@
 .settings-dns-results {
   margin-top: 14px;
   overflow: hidden;
-  border: 1px solid oklch(var(--b3));
-  border-radius: 10px;
-  background: oklch(var(--b1));
+  border-radius: var(--radius-tile);
+  background: var(--fill);
 }
 
 .settings-dns-record {
@@ -537,7 +548,7 @@
   align-items: start;
   gap: 12px;
   padding: 10px 12px;
-  border-bottom: 1px solid oklch(var(--b3));
+  border-bottom: 0.5px solid var(--hairline);
 }
 
 .settings-dns-record:last-of-type {

@@ -51,8 +51,9 @@ watch(pendingConfirm, async (info) => {
   <ConfirmDialog ref="dialogRef" />
 
   <!-- Covers the titlebar too, so the window cannot be closed mid-update. -->
-  <div v-if="updating" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-    <div class="w-full max-w-sm rounded-lg bg-base-100 p-5 shadow-xl space-y-3">
+  <Transition name="glass-pop">
+  <div v-if="updating" class="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div class="glass-popover w-full max-w-sm rounded-[var(--radius-panel)] p-5 space-y-3">
       <h3 class="text-base font-semibold">正在更新面板</h3>
       <div class="text-xs text-base-content/70">{{ phaseText }}</div>
       <progress
@@ -65,4 +66,5 @@ watch(pendingConfirm, async (info) => {
       <p class="text-xs text-base-content/60">请勿关闭面板，更新完成后会自动重新启动。</p>
     </div>
   </div>
+  </Transition>
 </template>

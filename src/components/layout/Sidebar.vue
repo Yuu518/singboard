@@ -6,21 +6,12 @@ import { useToastStore } from '@/stores/toast'
 import { stopService, isElevationCancelled } from '@/bridge/service'
 import { startCore } from '@/utils/coreControl'
 import { formatUptime } from '@/utils/format'
+import { navItems } from './navItems'
 
 const route = useRoute()
 const router = useRouter()
 const { serviceStatus, statusText, refresh } = useServiceStore()
 const { pushToast } = useToastStore()
-
-const navItems = [
-  { path: '/overview', label: '概览', icon: 'chart' },
-  { path: '/proxies', label: '代理', icon: 'proxy' },
-  { path: '/connections', label: '连接', icon: 'connection' },
-  { path: '/logs', label: '日志', icon: 'log' },
-  { path: '/rules', label: '规则', icon: 'rule' },
-  { path: '/config', label: '配置', icon: 'config' },
-  { path: '/settings', label: '设置', icon: 'settings' },
-]
 
 const currentPath = computed(() => route.path)
 
@@ -61,55 +52,64 @@ async function toggleService() {
 
 const statusPillClass = computed(() => {
   switch (serviceStatus.value.state) {
-    case 'running': return 'bg-success/15 text-success'
-    case 'stopped': return 'bg-error/15 text-error'
+    case 'running': return 'text-success'
+    case 'stopped': return 'text-error'
     case 'starting':
-    case 'stopping': return 'bg-warning/15 text-warning'
-    default: return 'bg-base-content/10 text-base-content/60'
+    case 'stopping': return 'text-warning'
+    default: return 'text-base-content/60'
   }
 })
 </script>
 
 <template>
-  <div class="flex flex-col w-48 bg-base-200 border-r border-base-300 h-full">
-    <nav class="flex-1 py-2 overflow-y-auto">
+  <aside class="glass-float relative m-2 mr-0 flex w-52 shrink-0 flex-col rounded-[var(--radius-panel)]">
+    <div class="flex h-12 items-center gap-2.5 px-4 select-none" data-tauri-drag-region>
+      <img src="/favicon.png" alt="" class="pointer-events-none h-6 w-6 rounded-md" />
+      <span class="pointer-events-none text-[15px] font-semibold tracking-tight">singboard</span>
+    </div>
+
+    <nav class="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-1">
       <button
         v-for="item in navItems"
         :key="item.path"
-        class="w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors"
+        class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-[13px] transition-colors duration-150"
         :class="
           currentPath === item.path
-            ? 'bg-primary/10 text-primary font-medium border-r-2 border-primary'
-            : 'hover:bg-base-300 text-base-content/70'
+            ? 'bg-primary/15 font-semibold text-primary'
+            : 'text-base-content/75 hover:bg-base-content/[0.06] hover:text-base-content'
         "
+        :aria-current="currentPath === item.path ? 'page' : undefined"
         @click="navigate(item.path)"
       >
-        <span class="w-5 text-center emoji-font">
-          <template v-if="item.icon === 'chart'">📊</template>
-          <template v-else-if="item.icon === 'proxy'">🔀</template>
-          <template v-else-if="item.icon === 'connection'">🔗</template>
-          <template v-else-if="item.icon === 'log'">📝</template>
-          <template v-else-if="item.icon === 'rule'">📋</template>
-          <template v-else-if="item.icon === 'config'">📄</template>
-          <template v-else-if="item.icon === 'settings'">⚙️</template>
-        </span>
+        <svg
+          class="h-[18px] w-[18px] shrink-0"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path v-for="(d, i) in item.icon" :key="i" :d="d" />
+        </svg>
         <span>{{ item.label }}</span>
       </button>
     </nav>
 
     <div class="p-3">
       <button
-        class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-opacity hover:opacity-75"
+        class="surface-fill surface-fill-hover inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium"
         :class="statusPillClass"
         :title="serviceStatus.state === 'running' ? '点击停止服务' : '点击启动服务'"
         :disabled="pillBusy"
         @click="toggleService"
       >
-        <span v-if="pillBusy" class="loading loading-spinner w-3 h-3 shrink-0"></span>
-        <span v-else class="w-1.5 h-1.5 rounded-full bg-current shrink-0"></span>
-        <span v-if="uptimeText" class="tabular-nums">{{ uptimeText }}</span>
+        <span v-if="pillBusy" class="loading loading-spinner h-3 w-3 shrink-0"></span>
+        <span v-else class="h-2 w-2 shrink-0 rounded-full bg-current shadow-[0_0_0_3px_color-mix(in_oklab,currentColor_22%,transparent)]"></span>
+        <span v-if="uptimeText" class="tabular-nums text-base-content/80">{{ uptimeText }}</span>
         <span v-else>{{ statusText }}</span>
       </button>
     </div>
-  </div>
+  </aside>
 </template>

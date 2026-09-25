@@ -165,6 +165,7 @@ export interface AppConfig {
   workingDir: string
   startupDelaySeconds: number
   theme: string
+  glassMode: 'clear' | 'blur'
   latencyTestUrl: string
   ipv6TestEnabled: boolean
   groupTestUrls: Record<string, string>

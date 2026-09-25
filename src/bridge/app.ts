@@ -19,3 +19,7 @@ export async function showMainWindow(): Promise<void> {
 export async function quitApp(): Promise<void> {
   return invoke('quit_app')
 }
+
+export async function setWindowMaterial(dark: boolean): Promise<boolean> {
+  return invoke<boolean>('set_window_material', { dark })
+}

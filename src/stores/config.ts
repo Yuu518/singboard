@@ -99,6 +99,7 @@ function normalizeConfig(raw: any): AppConfig {
     workingDir: normalizeWindowsPath(raw?.workingDir),
     startupDelaySeconds: normalizeStartupDelay(raw?.startupDelaySeconds),
     theme: ['auto', 'light', 'dark'].includes(raw?.theme) ? raw.theme : 'light',
+    glassMode: raw?.glassMode === 'clear' ? 'clear' : 'blur',
     latencyTestUrl: typeof raw?.latencyTestUrl === 'string' && raw.latencyTestUrl
       ? raw.latencyTestUrl
       : 'https://www.gstatic.com/generate_204',
@@ -178,6 +179,16 @@ applyTheme(resolvedTheme.value)
 
 watch(resolvedTheme, (val) => {
   applyTheme(val)
+})
+
+function applyGlassMode(mode: AppConfig['glassMode']) {
+  document.documentElement.setAttribute('data-glass', mode)
+}
+
+applyGlassMode(config.value.glassMode)
+
+watch(() => config.value.glassMode, (val) => {
+  applyGlassMode(val)
 })
 
 watch(config, (val) => {

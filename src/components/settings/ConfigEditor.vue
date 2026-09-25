@@ -105,33 +105,50 @@ const editorTheme = EditorView.theme({
     backgroundColor: 'oklch(var(--bc) / 0.08)',
   },
   '.cm-gutters': {
-    backgroundColor: 'oklch(var(--b2))',
+    backgroundColor: 'transparent',
     color: 'oklch(var(--bc) / 0.4)',
-    borderRight: '1px solid oklch(var(--b3))',
+    borderRight: '0.5px solid var(--hairline)',
   },
   '.cm-foldGutter': {
     width: '12px',
   },
   '.cm-tooltip': {
-    backgroundColor: 'oklch(var(--b2))',
-    border: '1px solid oklch(var(--b3))',
+    backgroundColor: 'rgb(var(--glass-rgb) / var(--glass-pop-alpha))',
+    backdropFilter: 'saturate(var(--glass-saturate)) blur(var(--glass-pop-blur))',
+    border: 'none',
+    borderRadius: '10px',
+    boxShadow: 'var(--glass-highlight), var(--glass-edge), var(--glass-shadow)',
     color: 'oklch(var(--bc))',
+    overflow: 'hidden',
   },
   '.cm-panels': {
-    backgroundColor: 'oklch(var(--b2))',
+    backgroundColor: 'transparent',
     color: 'oklch(var(--bc))',
+  },
+  '.cm-panels.cm-panels-top': {
+    borderBottom: '0.5px solid var(--hairline)',
+  },
+  '.cm-panels.cm-panels-bottom': {
+    borderTop: '0.5px solid var(--hairline)',
   },
   '.cm-panel.cm-search': {
-    backgroundColor: 'oklch(var(--b2))',
+    backgroundColor: 'transparent',
+    padding: '6px 8px',
   },
   '.cm-panel.cm-search input': {
-    backgroundColor: 'oklch(var(--b1))',
+    backgroundColor: 'var(--fill)',
     color: 'oklch(var(--bc))',
-    border: '1px solid oklch(var(--b3))',
+    border: 'none',
+    borderRadius: '8px',
+    padding: '3px 8px',
   },
   '.cm-panel.cm-search button': {
-    backgroundColor: 'oklch(var(--b3))',
+    backgroundColor: 'var(--fill)',
+    backgroundImage: 'none',
     color: 'oklch(var(--bc))',
+    border: 'none',
+    borderRadius: '9999px',
+    padding: '3px 10px',
   },
   '.cm-matchingBracket': {
     backgroundColor: 'oklch(var(--p) / 0.15)',
@@ -743,7 +760,7 @@ watch(() => props.configPath, (newPath, oldPath) => {
 </script>
 
 <template>
-  <div class="bg-base-200 rounded-lg p-4 flex flex-col h-full min-h-0">
+  <div class="surface-card p-4 flex flex-col h-full min-h-0">
     <div class="flex flex-col gap-2 shrink-0">
       <div class="flex items-center gap-2">
         <h2 class="font-semibold text-sm shrink-0">配置编辑</h2>
@@ -795,17 +812,19 @@ watch(() => props.configPath, (newPath, oldPath) => {
       </div>
       <div class="flex items-center gap-1.5">
         <div class="flex items-center gap-2">
-          <div class="join">
+          <div class="tabs tabs-boxed tabs-xs">
             <button
-              class="btn btn-xs join-item"
-              :class="editorMode === 'whole' ? 'btn-primary' : 'btn-ghost'"
+              type="button"
+              class="tab"
+              :class="{ 'tab-active': editorMode === 'whole' }"
               @click="switchMode('whole')"
             >
               整体编辑
             </button>
             <button
-              class="btn btn-xs join-item"
-              :class="editorMode === 'module' ? 'btn-primary' : 'btn-ghost'"
+              type="button"
+              class="tab"
+              :class="{ 'tab-active': editorMode === 'module' }"
               @click="switchMode('module')"
             >
               分模块编辑
@@ -827,14 +846,14 @@ watch(() => props.configPath, (newPath, oldPath) => {
       </div>
     </div>
 
-    <div class="relative flex-1 min-h-[360px] rounded-lg border border-base-300 bg-base-100 overflow-hidden mt-3">
+    <div class="surface-fill relative flex-1 min-h-[360px] rounded-[var(--radius-tile)] overflow-hidden mt-3">
       <div
         ref="editorContainer"
         class="h-full w-full overflow-hidden"
       ></div>
       <div
         v-if="loading"
-        class="absolute inset-0 flex items-center justify-center bg-base-100/70 text-base-content/60 backdrop-blur-[1px]"
+        class="absolute inset-0 flex items-center justify-center bg-base-100/60 text-base-content/60 backdrop-blur-sm"
       >
         加载中...
       </div>

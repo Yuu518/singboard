@@ -1,3 +1,4 @@
+@import './glass.css';
 @import './settings.css';
 
 @tailwind base;
@@ -17,8 +18,10 @@ body,
   margin: 0;
   padding: 0;
   font-family:
+    'SF Pro Text',
     system-ui,
     -apple-system,
+    'Segoe UI Variable Text',
     'Segoe UI',
     Roboto,
     'Helvetica Neue',
@@ -29,6 +32,16 @@ body,
     'Apple Color Emoji',
     'Noto Color Emoji',
     sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+:root {
+  background: var(--page-bg);
+}
+
+html.has-mica,
+html.has-mica body {
+  background: transparent;
 }
 
 .emoji-font {
@@ -40,9 +53,14 @@ body,
     sans-serif;
 }
 
+*,
+*:hover {
+  scrollbar-color: auto;
+}
+
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -50,12 +68,33 @@ body,
 }
 
 ::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 9999px;
   background: oklch(var(--bc) / 0.2);
-  border-radius: 3px;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: oklch(var(--bc) / 0.4);
+  background: oklch(var(--bc) / 0.38);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.app-main::-webkit-scrollbar-track {
+  margin-top: 48px;
+  margin-bottom: 8px;
+}
+
+.surface-card::-webkit-scrollbar-track {
+  margin-block: 12px;
+}
+
+.surface-card:has(> .table-pin-rows)::-webkit-scrollbar-track {
+  margin-top: var(--pinned-header-height, 26px);
+  margin-bottom: 12px;
 }
 
 [data-tauri-drag-region] {

@@ -55,11 +55,11 @@ function handleQuit() {
 
 <template>
   <div class="h-screen w-screen p-1.5">
-    <div class="h-full flex flex-col bg-base-200 text-base-content border border-base-300 rounded-xl shadow-lg overflow-hidden select-none">
+    <div class="tray-panel h-full flex flex-col gap-0.5 p-1 text-base-content rounded-[18px] overflow-hidden select-none">
       <div class="flex items-center justify-center gap-3 flex-1">
         <button
-          class="btn btn-circle btn-sm border-none text-white"
-          :class="isRunning ? 'bg-success hover:bg-success/80' : 'bg-error hover:bg-error/80'"
+          class="btn btn-circle btn-sm border-none text-white shadow-sm"
+          :class="isRunning ? 'bg-success hover:bg-success hover:brightness-110' : 'bg-error hover:bg-error hover:brightness-110'"
           :title="isRunning ? '停止服务' : '启动服务'"
           @click="handleToggle"
         >
@@ -70,7 +70,7 @@ function handleQuit() {
           </svg>
         </button>
         <button
-          class="btn btn-circle btn-sm btn-ghost border border-base-content/20"
+          class="btn btn-circle btn-sm btn-glass"
           title="重启服务"
           @click="handleRestart"
         >
@@ -84,18 +84,21 @@ function handleQuit() {
       <div v-if="errorText" class="px-2 pb-1 text-[10px] leading-tight text-error truncate" :title="errorText">
         {{ errorText }}
       </div>
-      <div class="border-t border-base-300"></div>
-      <button class="text-xs py-1.5 hover:bg-base-300 transition-colors" @click="openPanel">打开面板</button>
-      <div class="border-t border-base-300"></div>
-      <button class="text-xs py-1.5 hover:bg-base-300 transition-colors" @click="handleQuit">退出</button>
+      <button class="rounded-xl py-1.5 text-xs transition-colors hover:bg-base-content/[0.08]" @click="openPanel">打开面板</button>
+      <button class="rounded-xl py-1.5 text-xs text-error transition-colors hover:bg-error/10" @click="handleQuit">退出</button>
     </div>
   </div>
 </template>
 
 <style>
 /* 托盘菜单窗口透明背景（该组件仅在 tray 窗口挂载） */
-html,
-body {
+html.tray-window,
+html.tray-window body {
   background: transparent !important;
+}
+
+.tray-panel {
+  background: var(--surface);
+  box-shadow: var(--surface-edge), 0 2px 6px -1px rgb(0 0 0 / 0.18);
 }
 </style>

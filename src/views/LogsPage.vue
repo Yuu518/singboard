@@ -50,7 +50,7 @@ function handleScroll() {
 <template>
   <div class="flex flex-col h-full gap-3">
     <div class="flex items-center justify-between">
-      <h1 class="text-xl font-bold">
+      <h1 class="text-[26px] leading-tight tracking-tight font-bold">
         日志
         <span class="text-sm font-normal text-base-content/50">({{ filteredLogs.length }})</span>
       </h1>
@@ -82,13 +82,13 @@ function handleScroll() {
 
     <div
       ref="logContainer"
-      class="flex-1 min-h-0 overflow-auto rounded-xl bg-base-200 p-2"
+      class="surface-card flex-1 min-h-0 overflow-auto p-2"
       @scroll="handleScroll"
     >
       <article
         v-for="(log, i) in filteredLogs"
         :key="log.seq ?? i"
-        class="mb-2 rounded-xl border border-base-300/50 bg-base-100 px-3 py-2.5 last:mb-0"
+        class="surface-fill mb-2 rounded-[var(--radius-tile)] px-3 py-2.5 last:mb-0"
       >
         <div class="flex items-center gap-2 text-[11px] leading-none">
           <span class="shrink-0 tabular-nums text-base-content/30">

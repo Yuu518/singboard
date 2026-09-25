@@ -27,8 +27,8 @@ function formatDate(iso?: string): string {
 
 <template>
   <div
-    class="bg-base-200 rounded-lg p-4 border-2 transition-colors"
-    :class="isActive ? 'border-primary' : 'border-transparent'"
+    class="surface-card p-4 outline outline-2 outline-offset-0 transition-[outline-color]"
+    :class="isActive ? 'outline-primary' : 'outline-transparent'"
   >
     <div class="flex items-start justify-between gap-2">
       <div class="min-w-0 flex-1">

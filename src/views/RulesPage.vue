@@ -442,7 +442,7 @@ watch(isRunning, (running) => {
     <template v-else>
     <div class="flex items-center justify-between">
       <div class="flex flex-wrap items-center gap-3">
-        <h1 class="text-xl font-bold shrink-0">规则</h1>
+        <h1 class="text-[26px] leading-tight tracking-tight font-bold shrink-0">规则</h1>
         <div class="tabs tabs-boxed tabs-sm">
           <button
             type="button"
@@ -493,7 +493,7 @@ watch(isRunning, (running) => {
         />
       </div>
 
-      <div class="rules-table-container">
+      <div class="rules-table-container surface-card">
         <table v-if="filteredRules.length > 0" class="table table-xs table-pin-rows rules-table" aria-label="规则列表">
           <thead>
             <tr>
@@ -560,7 +560,7 @@ watch(isRunning, (running) => {
         </div>
       </div>
 
-      <div class="rules-table-container">
+      <div class="rules-table-container surface-card">
         <table v-if="displayedProviders.length > 0" class="table table-xs table-pin-rows rules-table" aria-label="规则提供商列表">
           <thead>
             <tr>
@@ -652,12 +652,13 @@ watch(isRunning, (running) => {
   </div>
 
   <!-- 规则详情弹窗 -->
+  <Transition name="glass-pop">
   <div
     v-if="detailProvider"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+    class="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
     @click.self="closeProviderDetail"
   >
-    <div class="w-full max-w-2xl max-h-[80vh] flex flex-col rounded-lg bg-base-100 shadow-xl">
+    <div class="glass-popover w-full max-w-2xl max-h-[80vh] flex flex-col rounded-[var(--radius-panel)]">
       <div class="flex items-start justify-between px-5 pt-4 pb-3 shrink-0">
         <div class="flex flex-col gap-1.5">
           <div class="flex items-baseline gap-2">
@@ -688,7 +689,7 @@ watch(isRunning, (running) => {
         </div>
         <span
           v-if="detailFilterText.trim() && !detailMatchSearching && detailMatchResult !== null"
-          class="text-xs leading-none px-2 py-1 rounded shrink-0"
+          class="text-xs leading-none px-2.5 py-1 rounded-full shrink-0"
           :class="detailMatchResult ? 'bg-success/15 text-success' : 'bg-base-content/10 text-base-content/40'"
         >{{ detailMatchResult ? '匹配' : '未匹配' }}</span>
       </div>
@@ -699,7 +700,7 @@ watch(isRunning, (running) => {
         </div>
         <div v-else-if="detailError" class="text-sm text-error py-4">{{ detailError }}</div>
         <template v-else>
-          <div class="flex text-xs font-semibold text-base-content/60 bg-base-200 rounded-t px-2 shrink-0" :style="{ height: ROW_HEIGHT + 'px', lineHeight: ROW_HEIGHT + 'px' }">
+          <div class="surface-fill flex text-xs font-semibold text-base-content/60 rounded-[var(--radius-control)] px-2 shrink-0" :style="{ height: ROW_HEIGHT + 'px', lineHeight: ROW_HEIGHT + 'px' }">
             <span class="w-12 shrink-0">#</span>
             <span class="w-28 shrink-0">类型</span>
             <span class="flex-1">内容</span>
@@ -714,7 +715,7 @@ watch(isRunning, (running) => {
                 <div
                   v-for="(rule, j) in virtualSlice.items"
                   :key="virtualSlice.startIdx + j"
-                  class="flex items-center px-2 text-xs hover:bg-base-200/50"
+                  class="flex items-center rounded-lg px-2 text-xs hover:bg-base-content/[0.05]"
                   :style="{ height: ROW_HEIGHT + 'px' }"
                 >
                   <span class="w-12 shrink-0 text-base-content/30">{{ virtualSlice.startIdx + j + 1 }}</span>
@@ -738,6 +739,7 @@ watch(isRunning, (running) => {
       </div>
     </div>
   </div>
+  </Transition>
 </template>
 
 <style scoped>
@@ -747,12 +749,12 @@ watch(isRunning, (running) => {
 }
 
 .rules-search {
-  @apply w-full min-w-0 bg-base-100 text-xs;
-  border-color: oklch(var(--bc) / 0.15);
+  @apply w-full min-w-0 text-xs;
 }
 
 .rules-table-container {
-  @apply flex-1 min-h-0 overflow-auto rounded-lg border border-base-content/10 bg-base-100;
+  @apply flex-1 min-h-0 overflow-auto;
+  --pinned-header-height: 36px;
 }
 
 .rules-table {
@@ -769,15 +771,14 @@ watch(isRunning, (running) => {
 }
 
 .rules-table th {
-  @apply bg-base-200 text-base-content/60;
+  @apply text-base-content/60;
   z-index: 20;
-  border-bottom: 1px solid oklch(var(--bc) / 0.1);
   font-size: 12px;
   font-weight: 600;
 }
 
 .rules-row {
-  @apply hover:bg-base-200/50 transition-colors;
+  @apply hover:bg-base-content/[0.04] transition-colors;
 }
 
 .rules-index {
@@ -798,7 +799,7 @@ button.rules-primary:hover {
 
 .rules-badge,
 .rules-action-badge {
-  @apply inline-flex shrink-0 items-center whitespace-nowrap rounded px-1.5 text-xs;
+  @apply inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2 text-xs;
   min-height: 20px;
   line-height: 16px;
 }
