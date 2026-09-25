@@ -192,20 +192,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="rootEl" class="settings-card settings-dns-card" @pointerdown="handleRootPointerDown">
-    <header class="settings-tool-header">
-      <div>
-        <div class="settings-tool-title-row">
-          <h3>DNS 查询</h3>
-          <span>即时工具</span>
-        </div>
-        <p>通过指定解析器查询记录，并查看结果来源与 IP 地理信息。</p>
-      </div>
-      <svg class="settings-tool-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <circle cx="12" cy="12" r="8" />
-        <path d="M4 12h16M12 4a13 13 0 0 1 0 16M12 4a13 13 0 0 0 0 16" />
-      </svg>
-    </header>
-
     <div class="settings-dns-grid">
       <div class="settings-dns-field settings-dns-domain" data-dns-history-area>
         <label for="settings-dns-domain">域名</label>

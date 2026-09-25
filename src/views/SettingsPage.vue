@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { useServiceStore } from '@/stores/service'
 import { useToastStore } from '@/stores/toast'
@@ -40,69 +40,11 @@ const { serviceStatus, statusText, refresh } = useServiceStore()
 const { pushToast } = useToastStore()
 const confirmDialogRef = ref<InstanceType<typeof ConfirmDialog> | null>(null)
 
-const settingsRootRef = ref<HTMLElement | null>(null)
-const activeSection = ref('core')
-const settingsSections = [
-  { id: 'core', label: '核心与服务', hint: '运行与模式' },
-  { id: 'backends', label: '后端', hint: '控制端点' },
-  { id: 'network', label: '网络测试', hint: '测速与 DNS' },
-  { id: 'application', label: '应用', hint: '外观与行为' },
-  { id: 'updates', label: '更新', hint: '核心与面板' },
-] as const
-
 const themeOptions = [
-  { value: 'auto', label: '跟随系统', hint: '随 Windows 外观切换' },
-  { value: 'light', label: '浅色', hint: '明亮清晰' },
-  { value: 'dark', label: '深色', hint: '低光环境' },
+  { value: 'auto', label: '跟随系统' },
+  { value: 'light', label: '浅色' },
+  { value: 'dark', label: '深色' },
 ] as const
-
-let settingsScrollRoot: HTMLElement | null = null
-let scrollFrame = 0
-
-function updateActiveSection() {
-  scrollFrame = 0
-  if (
-    settingsScrollRoot
-    && settingsScrollRoot.scrollTop + settingsScrollRoot.clientHeight >= settingsScrollRoot.scrollHeight - 8
-  ) {
-    activeSection.value = settingsSections[settingsSections.length - 1].id
-    return
-  }
-  const rootTop = settingsScrollRoot?.getBoundingClientRect().top ?? 0
-  const threshold = rootTop + 88
-  let current: (typeof settingsSections)[number]['id'] = settingsSections[0].id
-
-  for (const section of settingsSections) {
-    const element = document.getElementById(`settings-${section.id}`)
-    if (element && element.getBoundingClientRect().top <= threshold) {
-      current = section.id
-    }
-  }
-  activeSection.value = current
-}
-
-function scheduleActiveSectionUpdate() {
-  if (!scrollFrame) scrollFrame = requestAnimationFrame(updateActiveSection)
-}
-
-function scrollToSection(id: string) {
-  activeSection.value = id
-  document.getElementById(`settings-${id}`)?.scrollIntoView({
-    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-    block: 'start',
-  })
-}
-
-onMounted(() => {
-  settingsScrollRoot = settingsRootRef.value?.closest('main') as HTMLElement | null
-  settingsScrollRoot?.addEventListener('scroll', scheduleActiveSectionUpdate, { passive: true })
-  updateActiveSection()
-})
-
-onBeforeUnmount(() => {
-  settingsScrollRoot?.removeEventListener('scroll', scheduleActiveSectionUpdate)
-  if (scrollFrame) cancelAnimationFrame(scrollFrame)
-})
 
 const { proxyGroups, loadProxies } = useProxiesStore()
 
@@ -444,17 +386,6 @@ const serviceStateTone = computed(() => {
   }
 })
 
-const serviceStateDescription = computed(() => {
-  switch (serviceStatus.value.state) {
-    case 'running': return '核心正在接管并处理网络流量。'
-    case 'stopped': return '核心已停止，当前不会处理新流量。'
-    case 'starting': return '正在加载配置并启动核心。'
-    case 'stopping': return '正在安全停止核心服务。'
-    case 'not_installed': return '先安装 Windows 服务，再启动核心。'
-    default: return '暂时无法读取 Windows 服务状态。'
-  }
-})
-
 loadClashConfig()
 syncActiveApiForm()
 if (serviceStatus.value.state === 'running') {
@@ -480,551 +411,422 @@ watch(
 </script>
 
 <template>
-  <div ref="settingsRootRef" class="settings-page">
+  <div class="settings-page">
     <ConfirmDialog ref="confirmDialogRef" />
 
-    <header class="settings-header">
-      <div>
-        <div class="settings-eyebrow">ROUTE CONTROL</div>
-        <h1 class="settings-title">设置</h1>
-        <p class="settings-lead">控制 sing-box 核心、连接端点与面板行为。</p>
-      </div>
-    </header>
+    <h1 class="text-xl font-bold mb-5">设置</h1>
 
-    <div class="settings-status-strip" :class="serviceStateTone">
-      <div class="settings-status-primary">
-        <span class="settings-status-beacon" aria-hidden="true"></span>
-        <div>
-          <span class="settings-status-kicker">WINDOWS SERVICE</span>
-          <strong>{{ statusText }}</strong>
-        </div>
-      </div>
-      <div class="settings-status-fact">
-        <span>核心版本</span>
-        <strong class="settings-mono settings-status-version">
-          <OverflowingText :text="singboxVersion || '未检测'" />
-        </strong>
-      </div>
-      <div class="settings-status-fact">
-        <span>控制端点</span>
-        <strong>{{ activeClashApi?.name || '未配置' }}</strong>
-      </div>
-      <div class="settings-status-fact">
-        <span>路由模式</span>
-        <strong class="settings-mono">{{ clashMode }}</strong>
-      </div>
-    </div>
-
-    <div class="settings-layout">
-      <aside class="settings-route-nav" aria-label="设置分类">
-        <div class="settings-route-list">
-          <button
-            v-for="section in settingsSections"
-            :key="section.id"
-            type="button"
-            class="settings-route-link"
-            :class="{ 'is-active': activeSection === section.id }"
-            :aria-current="activeSection === section.id ? 'location' : undefined"
-            @click="scrollToSection(section.id)"
-          >
-            <span>
-              <strong>{{ section.label }}</strong>
-              <small>{{ section.hint }}</small>
-            </span>
-          </button>
-        </div>
-      </aside>
-
-      <div class="settings-content">
-        <section id="settings-core" class="settings-section">
-          <div class="settings-section-heading">
-            <span class="settings-section-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none">
-                <path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1" />
-                <circle cx="12" cy="12" r="4" />
-              </svg>
-            </span>
-            <div>
-              <h2>核心与服务</h2>
-              <p>运行核心、切换路由模式，并维护 Windows 服务。</p>
-            </div>
-          </div>
-
-          <div class="settings-service-console" :class="serviceStateTone">
-            <div class="settings-service-copy">
-              <div class="settings-service-title">
-                <span class="settings-service-pulse" aria-hidden="true"></span>
-                <strong>{{ statusText }}</strong>
-              </div>
-              <p>{{ serviceStateDescription }}</p>
-            </div>
-            <div class="settings-service-actions">
-              <button
-                class="btn btn-sm btn-route relative"
-                :aria-busy="actionLoading === 'start'"
-                :disabled="!!actionLoading || serviceStatus.state === 'running'"
-                @click="handleServiceAction('start')"
-              >
-                <span :class="{ 'opacity-0': actionLoading === 'start' }">启动</span>
-                <span v-if="actionLoading === 'start'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
-              </button>
-              <button
-                class="btn btn-sm btn-outline relative"
-                :aria-busy="actionLoading === 'restart'"
-                :disabled="!!actionLoading"
-                @click="handleServiceAction('restart')"
-              >
-                <span :class="{ 'opacity-0': actionLoading === 'restart' }">重启</span>
-                <span v-if="actionLoading === 'restart'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
-              </button>
-              <button
-                class="btn btn-sm btn-outline btn-error relative"
-                :aria-busy="actionLoading === 'stop'"
-                :disabled="!!actionLoading || serviceStatus.state === 'stopped'"
-                @click="handleServiceAction('stop')"
-              >
-                <span :class="{ 'opacity-0': actionLoading === 'stop' }">停止</span>
-                <span v-if="actionLoading === 'stop'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
-              </button>
-            </div>
-          </div>
-
-          <div class="settings-card">
-            <div class="settings-row">
-              <div class="settings-row-copy">
-                <strong>代理模式</strong>
-                <span>切换核心当前采用的流量处理策略。</span>
-              </div>
-              <select
-                class="select select-sm select-bordered settings-row-control"
-                :value="clashMode"
-                aria-label="代理模式"
-                @change="changeMode(($event.target as HTMLSelectElement).value)"
-              >
-                <option v-for="mode in clashModeOptions" :key="mode" :value="mode">{{ mode }}</option>
-              </select>
-            </div>
-
-            <div class="settings-row settings-row-stack">
-              <button
-                type="button"
-                class="settings-disclosure"
-                :aria-expanded="showServiceConfigPanel"
-                @click="showServiceConfigPanel = !showServiceConfigPanel"
-              >
-                <span class="settings-row-copy">
-                  <strong>服务参数</strong>
-                  <span>核心路径、工作目录与启动延迟。</span>
-                </span>
-                <svg viewBox="0 0 20 20" fill="none" :class="{ 'rotate-180': showServiceConfigPanel }" aria-hidden="true">
-                  <path d="m5 8 5 5 5-5" />
-                </svg>
-              </button>
-
-              <Transition name="settings-reveal">
-                <div v-if="showServiceConfigPanel" class="settings-inline-panel">
-                  <div class="settings-service-fields">
-                    <label for="service-startup-delay" class="settings-service-field-label">延迟启动</label>
-                    <div class="settings-input-unit">
-                      <input
-                        id="service-startup-delay"
-                        v-model.number="config.startupDelaySeconds"
-                        type="number"
-                        min="0"
-                        max="3600"
-                        step="1"
-                        class="input input-sm input-bordered"
-                        aria-describedby="service-startup-delay-unit"
-                        @change="updateStartupDelay(); syncStartupDelayToTask()"
-                      />
-                      <span id="service-startup-delay-unit">秒</span>
-                    </div>
-                    <label for="service-singbox-path" class="settings-service-field-label">sing-box 可执行文件</label>
-                    <div class="settings-path-control">
-                      <input
-                        id="service-singbox-path"
-                        v-model="config.singboxPath"
-                        type="text"
-                        class="input input-sm input-bordered settings-mono"
-                        placeholder="C:\sing-box\sing-box.exe"
-                      />
-                      <button type="button" class="btn btn-sm btn-outline" aria-label="浏览 sing-box 可执行文件" @click="browseSingboxPath">浏览</button>
-                    </div>
-                    <label for="service-working-dir" class="settings-service-field-label">工作目录</label>
-                    <div class="settings-path-control">
-                      <input
-                        id="service-working-dir"
-                        v-model="config.workingDir"
-                        type="text"
-                        class="input input-sm input-bordered settings-mono"
-                        placeholder="留空则使用配置文件所在目录"
-                      />
-                      <button type="button" class="btn btn-sm btn-outline" aria-label="浏览工作目录" @click="browseWorkingDir">浏览</button>
-                    </div>
-                  </div>
-                </div>
-              </Transition>
-            </div>
-
-            <div class="settings-row settings-maintenance-row">
-              <div class="settings-row-copy">
-                <strong>Windows 服务</strong>
-                <span>安装后，核心可独立于面板在后台运行。</span>
-              </div>
-              <div class="settings-row-actions">
-                <button
-                  class="btn btn-sm btn-outline relative"
-                  :aria-busy="actionLoading === 'install'"
-                  :disabled="!!actionLoading || serviceStatus.state !== 'not_installed'"
-                  @click="handleServiceAction('install')"
-                >
-                  <span :class="{ 'opacity-0': actionLoading === 'install' }">安装服务</span>
-                  <span v-if="actionLoading === 'install'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
-                </button>
-                <button
-                  class="btn btn-sm btn-ghost settings-danger-action relative"
-                  :aria-busy="actionLoading === 'uninstall'"
-                  :disabled="!!actionLoading || serviceStatus.state === 'not_installed'"
-                  @click="handleServiceAction('uninstall')"
-                >
-                  <span :class="{ 'opacity-0': actionLoading === 'uninstall' }">卸载</span>
-                  <span v-if="actionLoading === 'uninstall'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section id="settings-backends" class="settings-section">
-          <div class="settings-section-heading">
-            <span class="settings-section-icon settings-section-icon-signal" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none">
-                <circle cx="6" cy="12" r="2.5" />
-                <circle cx="18" cy="6" r="2.5" />
-                <circle cx="18" cy="18" r="2.5" />
-                <path d="m8.3 10.9 7.4-3.8M8.3 13.1l7.4 3.8" />
-              </svg>
-            </span>
-            <div>
-              <h2>后端</h2>
-              <p>选择面板连接的 Clash API 控制端点。</p>
-            </div>
-          </div>
-
-          <div class="settings-card settings-card-padded">
-            <div class="settings-card-label-row">
-              <span class="settings-field-label">当前控制端点</span>
-              <span class="settings-endpoint-count">{{ clashApis.length }} 个端点</span>
-            </div>
-            <div class="settings-endpoint-picker">
-              <select
-                class="select select-sm select-bordered settings-mono"
-                :value="activeClashApiId"
-                @change="handleSwitchApi(($event.target as HTMLSelectElement).value)"
-              >
-                <option v-for="api in clashApis" :key="api.id" :value="api.id">
-                  {{ api.name }} · {{ api.url }}
-                </option>
-              </select>
-              <button
-                type="button"
-                class="btn btn-sm btn-square btn-outline"
-                :class="{ 'is-selected': showEditApiForm }"
-                aria-label="编辑当前后端"
-                title="编辑当前后端"
-                @click="toggleEditApiForm"
-              >
-                <svg class="settings-button-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                  <path d="m13.8 3.7 2.5 2.5M4 16l.7-3.3L13.9 3.5a1.8 1.8 0 0 1 2.6 0l.1.1a1.8 1.8 0 0 1 0 2.6l-9.2 9.2L4 16Z" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                class="btn btn-sm btn-square btn-outline"
-                :class="{ 'is-selected': showAddApiForm }"
-                aria-label="新增后端"
-                title="新增后端"
-                @click="toggleAddApiForm"
-              >
-                <svg class="settings-button-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                  <path d="M10 4v12M4 10h12" />
-                </svg>
-              </button>
-            </div>
-
-            <Transition name="settings-reveal" mode="out-in">
-              <div v-if="showEditApiForm" key="edit" class="settings-form-panel">
-                <div class="settings-form-heading">
-                  <div>
-                    <strong>编辑当前端点</strong>
-                    <span>保存后面板会立即重新连接。</span>
-                  </div>
-                  <span class="settings-mono settings-version-note">{{ singboxVersion || 'sing-box' }}</span>
-                </div>
-                <label class="settings-field">
-                  <span>名称</span>
-                  <input v-model="activeApiForm.name" type="text" class="input input-sm input-bordered" placeholder="默认后端" />
-                </label>
-                <div class="settings-endpoint-fields">
-                  <label class="settings-field">
-                    <span>协议</span>
-                    <select v-model="activeApiForm.protocol" class="select select-sm select-bordered settings-mono">
-                      <option value="http">http</option>
-                      <option value="https">https</option>
-                    </select>
-                  </label>
-                  <label class="settings-field">
-                    <span>主机</span>
-                    <input v-model="activeApiForm.host" type="text" class="input input-sm input-bordered settings-mono" placeholder="127.0.0.1" />
-                  </label>
-                  <label class="settings-field">
-                    <span>端口</span>
-                    <input v-model="activeApiForm.port" type="text" class="input input-sm input-bordered settings-mono" placeholder="9090" />
-                  </label>
-                </div>
-                <label class="settings-field">
-                  <span>访问密钥</span>
-                  <input v-model="activeApiForm.secret" type="password" class="input input-sm input-bordered settings-mono" placeholder="留空表示无密钥" />
-                </label>
-                <div class="settings-form-actions settings-form-actions-between">
-                  <button class="btn btn-sm btn-ghost settings-danger-action" :disabled="clashApis.length <= 1" @click="handleRemoveActiveApi">删除端点</button>
-                  <button class="btn btn-sm btn-route" @click="handleSaveActiveApi">保存端点</button>
-                </div>
-              </div>
-
-              <div v-else-if="showAddApiForm" key="add" class="settings-form-panel">
-                <div class="settings-form-heading">
-                  <div>
-                    <strong>新增控制端点</strong>
-                    <span>新增后会自动切换到这个端点。</span>
-                  </div>
-                </div>
-                <label class="settings-field">
-                  <span>名称</span>
-                  <input v-model="newApiForm.name" type="text" class="input input-sm input-bordered" placeholder="后端 2" />
-                </label>
-                <div class="settings-endpoint-fields">
-                  <label class="settings-field">
-                    <span>协议</span>
-                    <select v-model="newApiForm.protocol" class="select select-sm select-bordered settings-mono">
-                      <option value="http">http</option>
-                      <option value="https">https</option>
-                    </select>
-                  </label>
-                  <label class="settings-field">
-                    <span>主机</span>
-                    <input v-model="newApiForm.host" type="text" class="input input-sm input-bordered settings-mono" placeholder="127.0.0.1" />
-                  </label>
-                  <label class="settings-field">
-                    <span>端口</span>
-                    <input v-model="newApiForm.port" type="text" class="input input-sm input-bordered settings-mono" placeholder="9090" />
-                  </label>
-                </div>
-                <label class="settings-field">
-                  <span>访问密钥</span>
-                  <input v-model="newApiForm.secret" type="password" class="input input-sm input-bordered settings-mono" placeholder="留空表示无密钥" />
-                </label>
-                <div class="settings-form-actions">
-                  <button class="btn btn-sm btn-route" @click="handleAddApi">新增并切换</button>
-                </div>
-              </div>
-            </Transition>
-          </div>
-        </section>
-
-        <section id="settings-network" class="settings-section">
-          <div class="settings-section-heading">
-            <span class="settings-section-icon settings-section-icon-signal" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none">
-                <path d="M4 17h3v3H4zm6-6h3v9h-3zm6-7h3v16h-3z" />
-                <path d="M3.5 8.5 9 4l4 3 7-5" />
-              </svg>
-            </span>
-            <div>
-              <h2>网络测试</h2>
-              <p>设置代理延迟测试目标，并即时诊断 DNS。</p>
-            </div>
-          </div>
-
-          <div class="settings-card settings-card-padded settings-stack">
-            <label class="settings-field">
-              <span>默认测速地址</span>
-              <input
-                v-model="config.latencyTestUrl"
-                type="text"
-                class="input input-sm input-bordered settings-mono"
-                placeholder="https://www.gstatic.com/generate_204"
-              />
-              <small>没有单独指定测试地址的代理组会使用这里的 URL。</small>
-            </label>
-
-            <div class="settings-mapping-block">
-              <button
-                type="button"
-                class="settings-mapping-toggle"
-                :aria-expanded="groupTestUrlsExpanded"
-                @click="groupTestUrlsExpanded = !groupTestUrlsExpanded"
-              >
-                <span>
-                  <strong>代理组专用地址</strong>
-                  <small>{{ groupTestUrlEntries.length ? `已配置 ${groupTestUrlEntries.length} 个代理组` : '暂未配置' }}</small>
-                </span>
-                <svg viewBox="0 0 20 20" fill="none" :class="{ 'rotate-180': groupTestUrlsExpanded }" aria-hidden="true">
-                  <path d="m5 8 5 5 5-5" />
-                </svg>
-              </button>
-
-              <Transition name="settings-reveal">
-                <div v-show="groupTestUrlsExpanded" class="settings-mapping-list">
-                  <div v-for="[group, url] in groupTestUrlEntries" :key="group" class="settings-mapping-row">
-                    <template v-if="editingGroupTestUrl === group">
-                      <select v-model="editGroupTestUrlGroup" class="select select-xs select-bordered">
-                        <option v-for="name in editAvailableGroups" :key="name" :value="name">{{ name }}</option>
-                      </select>
-                      <span class="settings-mapping-arrow" aria-hidden="true">→</span>
-                      <input
-                        v-model="editGroupTestUrlValue"
-                        type="text"
-                        class="input input-xs input-bordered settings-mono"
-                        @keyup.enter="saveEditGroupTestUrl"
-                        @keyup.escape="editingGroupTestUrl = null"
-                      />
-                      <button class="btn btn-ghost btn-xs btn-square" @click="saveEditGroupTestUrl" title="保存" aria-label="保存测速地址">
-                        <svg class="settings-button-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m4 10 4 4 8-9" /></svg>
-                      </button>
-                    </template>
-                    <template v-else>
-                      <span class="settings-group-badge">{{ group }}</span>
-                      <span class="settings-mapping-arrow" aria-hidden="true">→</span>
-                      <span class="settings-mapping-url settings-mono" :title="url">{{ url }}</span>
-                      <button class="btn btn-ghost btn-xs btn-square" @click="startEditGroupTestUrl(group)" title="编辑" aria-label="编辑测速地址">
-                        <svg class="settings-button-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m13.8 3.7 2.5 2.5M4 16l.7-3.3L13.9 3.5a1.8 1.8 0 0 1 2.6 0l.1.1a1.8 1.8 0 0 1 0 2.6l-9.2 9.2L4 16Z" /></svg>
-                      </button>
-                    </template>
-                    <button class="btn btn-ghost btn-xs btn-square settings-danger-action" @click="removeGroupTestUrl(group)" title="删除" aria-label="删除测速地址">
-                      <svg class="settings-button-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M5 6h10m-7-3h4l1 3H7l1-3Zm-1 6 .5 7m5.5-7-.5 7M6 6l1 11h6l1-11" /></svg>
-                    </button>
-                  </div>
-
-                  <div class="settings-mapping-row settings-mapping-new">
-                    <select v-model="newGroupTestUrl.group" class="select select-xs select-bordered" aria-label="代理组">
-                      <option value="" disabled hidden>选择代理组</option>
-                      <option v-for="name in availableGroups" :key="name" :value="name">{{ name }}</option>
-                    </select>
-                    <span class="settings-mapping-arrow" aria-hidden="true">→</span>
-                    <input
-                      v-model="newGroupTestUrl.url"
-                      type="text"
-                      class="input input-xs input-bordered settings-mono"
-                      placeholder="测速地址"
-                      @keyup.enter="addGroupTestUrl"
-                    />
-                    <button class="btn btn-xs btn-route" @click="addGroupTestUrl">添加</button>
-                  </div>
-                </div>
-              </Transition>
-            </div>
-
-            <label class="settings-toggle-row">
-              <span class="settings-row-copy">
-                <strong>IPv6 连通性测试</strong>
-                <span>测速时额外检查节点的 IPv6 可用性。</span>
+    <section class="settings-group">
+      <h2 class="settings-group-title">核心与服务</h2>
+      <div class="settings-card">
+        <div class="settings-row settings-service-row" :class="serviceStateTone">
+          <div class="settings-status">
+            <span class="settings-status-dot" aria-hidden="true"></span>
+            <div class="settings-status-copy">
+              <strong>{{ statusText }}</strong>
+              <span class="settings-status-version settings-mono">
+                <OverflowingText :text="singboxVersion || '未检测'" />
               </span>
-              <input v-model="config.ipv6TestEnabled" type="checkbox" class="toggle toggle-sm toggle-primary" />
-            </label>
+            </div>
           </div>
+          <div class="settings-row-actions">
+            <button
+              class="btn btn-sm btn-route relative"
+              :aria-busy="actionLoading === 'start'"
+              :disabled="!!actionLoading || serviceStatus.state === 'running'"
+              @click="handleServiceAction('start')"
+            >
+              <span :class="{ 'opacity-0': actionLoading === 'start' }">启动</span>
+              <span v-if="actionLoading === 'start'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
+            </button>
+            <button
+              class="btn btn-sm settings-btn relative"
+              :aria-busy="actionLoading === 'restart'"
+              :disabled="!!actionLoading"
+              @click="handleServiceAction('restart')"
+            >
+              <span :class="{ 'opacity-0': actionLoading === 'restart' }">重启</span>
+              <span v-if="actionLoading === 'restart'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
+            </button>
+            <button
+              class="btn btn-sm settings-btn settings-danger-action relative"
+              :aria-busy="actionLoading === 'stop'"
+              :disabled="!!actionLoading || serviceStatus.state === 'stopped'"
+              @click="handleServiceAction('stop')"
+            >
+              <span :class="{ 'opacity-0': actionLoading === 'stop' }">停止</span>
+              <span v-if="actionLoading === 'stop'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
 
-          <DnsQueryTool />
-        </section>
+        <div class="settings-row">
+          <div class="settings-row-copy">
+            <strong>代理模式</strong>
+            <span>核心当前采用的流量处理策略。</span>
+          </div>
+          <select
+            class="select select-sm select-bordered settings-row-control"
+            :value="clashMode"
+            aria-label="代理模式"
+            @change="changeMode(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="mode in clashModeOptions" :key="mode" :value="mode">{{ mode }}</option>
+          </select>
+        </div>
 
-        <section id="settings-application" class="settings-section">
-          <div class="settings-section-heading">
-            <span class="settings-section-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none">
-                <rect x="3" y="4" width="18" height="13" rx="2" />
-                <path d="M8 21h8m-4-4v4" />
-              </svg>
+        <div class="settings-row settings-row-stack">
+          <button
+            type="button"
+            class="settings-disclosure"
+            :aria-expanded="showServiceConfigPanel"
+            @click="showServiceConfigPanel = !showServiceConfigPanel"
+          >
+            <span class="settings-row-copy">
+              <strong>服务参数</strong>
+              <span>核心路径、工作目录与启动延迟。</span>
             </span>
-            <div>
-              <h2>应用</h2>
-              <p>调整面板外观，以及它在 Windows 中的运行方式。</p>
+            <svg viewBox="0 0 20 20" fill="none" :class="{ 'rotate-180': showServiceConfigPanel }" aria-hidden="true">
+              <path d="m5 8 5 5 5-5" />
+            </svg>
+          </button>
+
+          <Transition name="settings-reveal">
+            <div v-if="showServiceConfigPanel" class="settings-service-fields">
+              <label for="service-startup-delay">延迟启动</label>
+              <div class="settings-input-unit">
+                <input
+                  id="service-startup-delay"
+                  v-model.number="config.startupDelaySeconds"
+                  type="number"
+                  min="0"
+                  max="3600"
+                  step="1"
+                  class="input input-sm input-bordered"
+                  aria-describedby="service-startup-delay-unit"
+                  @change="updateStartupDelay(); syncStartupDelayToTask()"
+                />
+                <span id="service-startup-delay-unit">秒</span>
+              </div>
+              <label for="service-singbox-path">sing-box 可执行文件</label>
+              <div class="settings-path-control">
+                <input
+                  id="service-singbox-path"
+                  v-model="config.singboxPath"
+                  type="text"
+                  class="input input-sm input-bordered settings-mono"
+                  placeholder="C:\sing-box\sing-box.exe"
+                />
+                <button type="button" class="btn btn-sm settings-btn" aria-label="浏览 sing-box 可执行文件" @click="browseSingboxPath">浏览</button>
+              </div>
+              <label for="service-working-dir">工作目录</label>
+              <div class="settings-path-control">
+                <input
+                  id="service-working-dir"
+                  v-model="config.workingDir"
+                  type="text"
+                  class="input input-sm input-bordered settings-mono"
+                  placeholder="留空则使用配置文件所在目录"
+                />
+                <button type="button" class="btn btn-sm settings-btn" aria-label="浏览工作目录" @click="browseWorkingDir">浏览</button>
+              </div>
+            </div>
+          </Transition>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-row-copy">
+            <strong>Windows 服务</strong>
+            <span>安装后，核心可独立于面板在后台运行。</span>
+          </div>
+          <div class="settings-row-actions">
+            <button
+              class="btn btn-sm settings-btn relative"
+              :aria-busy="actionLoading === 'install'"
+              :disabled="!!actionLoading || serviceStatus.state !== 'not_installed'"
+              @click="handleServiceAction('install')"
+            >
+              <span :class="{ 'opacity-0': actionLoading === 'install' }">安装服务</span>
+              <span v-if="actionLoading === 'install'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
+            </button>
+            <button
+              class="btn btn-sm btn-ghost settings-danger-action relative"
+              :aria-busy="actionLoading === 'uninstall'"
+              :disabled="!!actionLoading || serviceStatus.state === 'not_installed'"
+              @click="handleServiceAction('uninstall')"
+            >
+              <span :class="{ 'opacity-0': actionLoading === 'uninstall' }">卸载</span>
+              <span v-if="actionLoading === 'uninstall'" class="loading loading-spinner loading-xs absolute inset-0 m-auto h-4" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="settings-group">
+      <h2 class="settings-group-title">后端</h2>
+      <div class="settings-card">
+        <div class="settings-row">
+          <div class="settings-row-copy">
+            <strong>控制端点</strong>
+            <span>面板连接的 Clash API，共 {{ clashApis.length }} 个。</span>
+          </div>
+          <div class="settings-endpoint-picker">
+            <select
+              class="select select-sm select-bordered settings-mono"
+              :value="activeClashApiId"
+              aria-label="当前控制端点"
+              @change="handleSwitchApi(($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="api in clashApis" :key="api.id" :value="api.id">
+                {{ api.name }} · {{ api.url }}
+              </option>
+            </select>
+            <button
+              type="button"
+              class="btn btn-sm btn-square btn-ghost settings-icon-btn"
+              :class="{ 'is-selected': showEditApiForm }"
+              aria-label="编辑当前后端"
+              title="编辑当前后端"
+              @click="toggleEditApiForm"
+            >
+              <svg class="settings-button-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="m13.8 3.7 2.5 2.5M4 16l.7-3.3L13.9 3.5a1.8 1.8 0 0 1 2.6 0l.1.1a1.8 1.8 0 0 1 0 2.6l-9.2 9.2L4 16Z" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="btn btn-sm btn-square btn-ghost settings-icon-btn"
+              :class="{ 'is-selected': showAddApiForm }"
+              aria-label="新增后端"
+              title="新增后端"
+              @click="toggleAddApiForm"
+            >
+              <svg class="settings-button-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M10 4v12M4 10h12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <Transition name="settings-reveal" mode="out-in">
+          <div v-if="showEditApiForm" key="edit" class="settings-row settings-row-stack">
+            <div class="settings-form-heading">
+              <strong>编辑当前端点</strong>
+              <span>保存后面板会立即重新连接。</span>
+            </div>
+            <label class="settings-field">
+              <span>名称</span>
+              <input v-model="activeApiForm.name" type="text" class="input input-sm input-bordered" placeholder="默认后端" />
+            </label>
+            <div class="settings-endpoint-fields">
+              <label class="settings-field">
+                <span>协议</span>
+                <select v-model="activeApiForm.protocol" class="select select-sm select-bordered settings-mono">
+                  <option value="http">http</option>
+                  <option value="https">https</option>
+                </select>
+              </label>
+              <label class="settings-field">
+                <span>主机</span>
+                <input v-model="activeApiForm.host" type="text" class="input input-sm input-bordered settings-mono" placeholder="127.0.0.1" />
+              </label>
+              <label class="settings-field">
+                <span>端口</span>
+                <input v-model="activeApiForm.port" type="text" class="input input-sm input-bordered settings-mono" placeholder="9090" />
+              </label>
+            </div>
+            <label class="settings-field">
+              <span>访问密钥</span>
+              <input v-model="activeApiForm.secret" type="password" class="input input-sm input-bordered settings-mono" placeholder="留空表示无密钥" />
+            </label>
+            <div class="settings-form-actions settings-form-actions-between">
+              <button class="btn btn-sm btn-ghost settings-danger-action" :disabled="clashApis.length <= 1" @click="handleRemoveActiveApi">删除端点</button>
+              <button class="btn btn-sm btn-route" @click="handleSaveActiveApi">保存</button>
             </div>
           </div>
 
-          <div class="settings-card settings-card-padded settings-stack">
-            <div>
-              <div class="settings-card-label-row settings-theme-label-row">
-                <div>
-                  <strong>界面主题</strong>
-                  <span>选择更适合当前环境的显示方式。</span>
-                </div>
-              </div>
-              <div class="settings-theme-grid" role="radiogroup" aria-label="界面主题">
-                <button
-                  v-for="theme in themeOptions"
-                  :key="theme.value"
-                  type="button"
-                  class="settings-theme-option"
-                  :class="{ 'is-active': config.theme === theme.value }"
-                  role="radio"
-                  :aria-checked="config.theme === theme.value"
-                  @click="updateConfig({ theme: theme.value })"
-                >
-                  <span class="settings-theme-preview" :class="`theme-preview-${theme.value}`" aria-hidden="true">
-                    <span class="preview-sidebar"></span>
-                    <span class="preview-card preview-card-top"></span>
-                    <span class="preview-card preview-card-bottom"></span>
-                  </span>
-                  <span class="settings-theme-copy">
-                    <strong>{{ theme.label }}</strong>
-                    <small>{{ theme.hint }}</small>
-                  </span>
-                  <span class="settings-theme-check" aria-hidden="true">
-                    <svg viewBox="0 0 16 16" fill="none"><path d="m3.5 8 3 3 6-7" /></svg>
-                  </span>
+          <div v-else-if="showAddApiForm" key="add" class="settings-row settings-row-stack">
+            <div class="settings-form-heading">
+              <strong>新增控制端点</strong>
+              <span>新增后会自动切换到这个端点。</span>
+            </div>
+            <label class="settings-field">
+              <span>名称</span>
+              <input v-model="newApiForm.name" type="text" class="input input-sm input-bordered" placeholder="后端 2" />
+            </label>
+            <div class="settings-endpoint-fields">
+              <label class="settings-field">
+                <span>协议</span>
+                <select v-model="newApiForm.protocol" class="select select-sm select-bordered settings-mono">
+                  <option value="http">http</option>
+                  <option value="https">https</option>
+                </select>
+              </label>
+              <label class="settings-field">
+                <span>主机</span>
+                <input v-model="newApiForm.host" type="text" class="input input-sm input-bordered settings-mono" placeholder="127.0.0.1" />
+              </label>
+              <label class="settings-field">
+                <span>端口</span>
+                <input v-model="newApiForm.port" type="text" class="input input-sm input-bordered settings-mono" placeholder="9090" />
+              </label>
+            </div>
+            <label class="settings-field">
+              <span>访问密钥</span>
+              <input v-model="newApiForm.secret" type="password" class="input input-sm input-bordered settings-mono" placeholder="留空表示无密钥" />
+            </label>
+            <div class="settings-form-actions">
+              <button class="btn btn-sm btn-route" @click="handleAddApi">新增并切换</button>
+            </div>
+          </div>
+        </Transition>
+      </div>
+    </section>
+
+    <section class="settings-group">
+      <h2 class="settings-group-title">网络测试</h2>
+      <div class="settings-card">
+        <div class="settings-row settings-row-stack">
+          <label for="settings-latency-url" class="settings-row-copy">
+            <strong>默认测速地址</strong>
+            <span>没有单独指定测试地址的代理组会使用这里的 URL。</span>
+          </label>
+          <input
+            id="settings-latency-url"
+            v-model="config.latencyTestUrl"
+            type="text"
+            class="input input-sm input-bordered settings-mono"
+            placeholder="https://www.gstatic.com/generate_204"
+          />
+        </div>
+
+        <div class="settings-row settings-row-stack">
+          <button
+            type="button"
+            class="settings-disclosure"
+            :aria-expanded="groupTestUrlsExpanded"
+            @click="groupTestUrlsExpanded = !groupTestUrlsExpanded"
+          >
+            <span class="settings-row-copy">
+              <strong>代理组专用地址</strong>
+              <span>{{ groupTestUrlEntries.length ? `已配置 ${groupTestUrlEntries.length} 个代理组` : '暂未配置' }}</span>
+            </span>
+            <svg viewBox="0 0 20 20" fill="none" :class="{ 'rotate-180': groupTestUrlsExpanded }" aria-hidden="true">
+              <path d="m5 8 5 5 5-5" />
+            </svg>
+          </button>
+
+          <Transition name="settings-reveal">
+            <div v-show="groupTestUrlsExpanded" class="settings-mapping-list">
+              <div v-for="[group, url] in groupTestUrlEntries" :key="group" class="settings-mapping-row">
+                <template v-if="editingGroupTestUrl === group">
+                  <select v-model="editGroupTestUrlGroup" class="select select-sm select-bordered" aria-label="代理组">
+                    <option v-for="name in editAvailableGroups" :key="name" :value="name">{{ name }}</option>
+                  </select>
+                  <span class="settings-mapping-arrow" aria-hidden="true">→</span>
+                  <input
+                    v-model="editGroupTestUrlValue"
+                    type="text"
+                    class="input input-sm input-bordered settings-mono"
+                    aria-label="测速地址"
+                    @keyup.enter="saveEditGroupTestUrl"
+                    @keyup.escape="editingGroupTestUrl = null"
+                  />
+                  <button class="btn btn-ghost btn-sm btn-square settings-icon-btn" @click="saveEditGroupTestUrl" title="保存" aria-label="保存测速地址">
+                    <svg class="settings-button-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m4 10 4 4 8-9" /></svg>
+                  </button>
+                </template>
+                <template v-else>
+                  <span class="settings-group-badge" :title="group">{{ group }}</span>
+                  <span class="settings-mapping-arrow" aria-hidden="true">→</span>
+                  <span class="settings-mapping-url settings-mono" :title="url">{{ url }}</span>
+                  <button class="btn btn-ghost btn-sm btn-square settings-icon-btn" @click="startEditGroupTestUrl(group)" title="编辑" aria-label="编辑测速地址">
+                    <svg class="settings-button-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m13.8 3.7 2.5 2.5M4 16l.7-3.3L13.9 3.5a1.8 1.8 0 0 1 2.6 0l.1.1a1.8 1.8 0 0 1 0 2.6l-9.2 9.2L4 16Z" /></svg>
+                  </button>
+                </template>
+                <button class="btn btn-ghost btn-sm btn-square settings-icon-btn settings-danger-action" @click="removeGroupTestUrl(group)" title="删除" aria-label="删除测速地址">
+                  <svg class="settings-button-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M5 6h10m-7-3h4l1 3H7l1-3Zm-1 6 .5 7m5.5-7-.5 7M6 6l1 11h6l1-11" /></svg>
                 </button>
               </div>
-            </div>
 
-            <div class="settings-behavior-list">
-              <label class="settings-toggle-row">
-                <span class="settings-row-copy">
-                  <strong>关闭到系统托盘</strong>
-                  <span>关闭主窗口时让面板继续在后台运行。</span>
-                </span>
-                <input v-model="config.closeToTray" type="checkbox" class="toggle toggle-sm toggle-primary" />
-              </label>
-              <label class="settings-toggle-row">
-                <span class="settings-row-copy">
-                  <strong>开机启动面板</strong>
-                  <span>登录 Windows 后自动启动 singboard。</span>
-                </span>
-                <input type="checkbox" class="toggle toggle-sm toggle-primary" :checked="autoLaunchEnabled" @change="toggleAutoLaunch" />
-              </label>
+              <div class="settings-mapping-row settings-mapping-new">
+                <select v-model="newGroupTestUrl.group" class="select select-sm select-bordered" aria-label="代理组">
+                  <option value="" disabled hidden>选择代理组</option>
+                  <option v-for="name in availableGroups" :key="name" :value="name">{{ name }}</option>
+                </select>
+                <span class="settings-mapping-arrow" aria-hidden="true">→</span>
+                <input
+                  v-model="newGroupTestUrl.url"
+                  type="text"
+                  class="input input-sm input-bordered settings-mono"
+                  placeholder="测速地址"
+                  aria-label="测速地址"
+                  @keyup.enter="addGroupTestUrl"
+                />
+                <button class="btn btn-sm settings-btn" @click="addGroupTestUrl">添加</button>
+              </div>
             </div>
-          </div>
-        </section>
+          </Transition>
+        </div>
 
-        <section id="settings-updates" class="settings-section">
-          <div class="settings-section-heading">
-            <span class="settings-section-icon settings-section-icon-update" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none">
-                <path d="M20 7v5h-5M4 17v-5h5" />
-                <path d="M18.2 9A7 7 0 0 0 6.5 6.5L4 9m2 6a7 7 0 0 0 11.5 2.5L20 15" />
-              </svg>
-            </span>
-            <div>
-              <h2>更新</h2>
-              <p>管理 sing-box 核心与 singboard 面板版本。</p>
-            </div>
-          </div>
-
-          <div class="settings-update-stack">
-            <CoreUpdateCard />
-            <PanelUpdateCard />
-          </div>
-        </section>
+        <label class="settings-row settings-toggle-row">
+          <span class="settings-row-copy">
+            <strong>IPv6 连通性测试</strong>
+            <span>测速时额外检查节点的 IPv6 可用性。</span>
+          </span>
+          <input v-model="config.ipv6TestEnabled" type="checkbox" class="toggle toggle-sm toggle-primary" />
+        </label>
       </div>
-    </div>
+    </section>
+
+    <section class="settings-group">
+      <h2 class="settings-group-title">DNS 查询</h2>
+      <DnsQueryTool />
+    </section>
+
+    <section class="settings-group">
+      <h2 class="settings-group-title">应用</h2>
+      <div class="settings-card">
+        <div class="settings-row">
+          <div class="settings-row-copy">
+            <strong id="settings-theme-label">界面主题</strong>
+          </div>
+          <div class="settings-segmented" role="radiogroup" aria-labelledby="settings-theme-label">
+            <button
+              v-for="theme in themeOptions"
+              :key="theme.value"
+              type="button"
+              role="radio"
+              :class="{ 'is-active': config.theme === theme.value }"
+              :aria-checked="config.theme === theme.value"
+              @click="updateConfig({ theme: theme.value })"
+            >
+              {{ theme.label }}
+            </button>
+          </div>
+        </div>
+        <label class="settings-row settings-toggle-row">
+          <span class="settings-row-copy">
+            <strong>关闭到系统托盘</strong>
+            <span>关闭主窗口时让面板继续在后台运行。</span>
+          </span>
+          <input v-model="config.closeToTray" type="checkbox" class="toggle toggle-sm toggle-primary" />
+        </label>
+        <label class="settings-row settings-toggle-row">
+          <span class="settings-row-copy">
+            <strong>开机启动面板</strong>
+            <span>登录 Windows 后自动启动 singboard。</span>
+          </span>
+          <input type="checkbox" class="toggle toggle-sm toggle-primary" :checked="autoLaunchEnabled" @change="toggleAutoLaunch" />
+        </label>
+      </div>
+    </section>
+
+    <section class="settings-group">
+      <h2 class="settings-group-title">更新</h2>
+      <CoreUpdateCard />
+      <PanelUpdateCard />
+    </section>
   </div>
 </template>

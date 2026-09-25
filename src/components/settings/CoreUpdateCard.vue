@@ -226,61 +226,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="settings-card settings-update-card">
-    <header class="settings-update-header">
-      <span class="settings-update-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none">
-          <path d="M8 3h8l4 4v10l-4 4H8l-4-4V7l4-4Z" />
-          <circle cx="12" cy="12" r="3" />
-        </svg>
-      </span>
-      <div>
-        <h3>sing-box 核心</h3>
-        <p>选择上游来源和版本通道，检查或替换核心。</p>
-      </div>
-      <span class="settings-update-version settings-mono">{{ singboxVersion || '未检测' }}</span>
-    </header>
-
-    <div class="settings-update-body">
-      <div class="settings-update-source-grid">
-        <label class="settings-field">
-          <span>更新源</span>
-        <select v-model="config.coreUpdateSource" class="select select-sm select-bordered">
-          <option value="official">官方核心 (SagerNet/sing-box)</option>
-          <option value="ref1nd">reF1nd 核心</option>
-          <option value="custom">自定义仓库</option>
-        </select>
-        </label>
-        <label class="settings-field">
-          <span>版本通道</span>
-        <select v-model="config.coreUpdateChannel" class="select select-sm select-bordered">
-          <option value="stable">稳定版</option>
-          <option value="testing">测试版</option>
-        </select>
-        </label>
-      </div>
-
-      <label v-if="config.coreUpdateSource === 'custom'" class="settings-field">
-        <span>GitHub 仓库</span>
-        <input
-          v-model="config.coreUpdateCustomRepo"
-          type="text"
-          class="input input-sm input-bordered settings-mono"
-          placeholder="owner/repo"
-        />
-      </label>
-
-      <label class="settings-field">
-        <span>下载镜像前缀 <small>可选</small></span>
-        <input
-          v-model="config.coreUpdateMirror"
-          type="text"
-          class="input input-sm input-bordered settings-mono"
-          placeholder="https://ghproxy.com/（留空直连，仅用于下载）"
-        />
-      </label>
-
-      <div class="settings-update-footer">
+  <div class="settings-card">
+    <div class="settings-row">
+      <div class="settings-row-copy">
+        <strong>sing-box 核心<span class="settings-version-tag settings-mono">{{ currentVersionNumber || '未检测' }}</span></strong>
         <div class="settings-update-status" role="status" aria-live="polite" aria-atomic="true">
           <span v-if="verifying">正在校验上游版本…</span>
           <span v-else-if="checking">正在检查上游版本…</span>
@@ -290,28 +239,75 @@ onUnmounted(() => {
           <span v-else>尚未检查上游版本</span>
           <span v-if="latest?.prerelease" class="badge badge-warning badge-xs">预发布</span>
         </div>
-        <button
-          type="button"
-          class="btn btn-sm btn-route"
-          :disabled="checking || updating"
-          :aria-busy="checking"
-          @click="handleCheck"
-        >
-          <span v-if="checking" class="loading loading-spinner loading-xs settings-update-spinner" aria-hidden="true"></span>
-          <span>{{ checking ? '检查中' : '检查更新' }}</span>
-        </button>
       </div>
+      <button
+        type="button"
+        class="btn btn-sm btn-route"
+        :disabled="checking || updating"
+        :aria-busy="checking"
+        @click="handleCheck"
+      >
+        <span v-if="checking" class="loading loading-spinner loading-xs settings-update-spinner" aria-hidden="true"></span>
+        <span>{{ checking ? '检查中' : '检查更新' }}</span>
+      </button>
+    </div>
 
-      <div v-if="updating || verifying" class="settings-update-progress">
-        <div>{{ phaseText }}</div>
-        <progress
-          v-if="progress?.phase === 'download' && progress.total > 0"
-          class="progress progress-primary w-full"
-          :value="progress.downloaded"
-          :max="progress.total"
-        />
-        <progress v-else class="progress progress-primary w-full" />
-      </div>
+    <div v-if="updating || verifying" class="settings-row settings-row-stack settings-update-progress">
+      <div>{{ phaseText }}</div>
+      <progress
+        v-if="progress?.phase === 'download' && progress.total > 0"
+        class="progress progress-primary w-full"
+        :value="progress.downloaded"
+        :max="progress.total"
+      />
+      <progress v-else class="progress progress-primary w-full" />
+    </div>
+
+    <label class="settings-row">
+      <span class="settings-row-copy">
+        <strong>更新源</strong>
+      </span>
+      <select v-model="config.coreUpdateSource" class="select select-sm select-bordered settings-row-control">
+        <option value="official">官方核心 (SagerNet/sing-box)</option>
+        <option value="ref1nd">reF1nd 核心</option>
+        <option value="custom">自定义仓库</option>
+      </select>
+    </label>
+
+    <label v-if="config.coreUpdateSource === 'custom'" class="settings-row">
+      <span class="settings-row-copy">
+        <strong>GitHub 仓库</strong>
+      </span>
+      <input
+        v-model="config.coreUpdateCustomRepo"
+        type="text"
+        class="input input-sm input-bordered settings-mono settings-row-control"
+        placeholder="owner/repo"
+      />
+    </label>
+
+    <label class="settings-row">
+      <span class="settings-row-copy">
+        <strong>版本通道</strong>
+      </span>
+      <select v-model="config.coreUpdateChannel" class="select select-sm select-bordered settings-row-control">
+        <option value="stable">稳定版</option>
+        <option value="testing">测试版</option>
+      </select>
+    </label>
+
+    <div class="settings-row settings-row-stack">
+      <label for="core-update-mirror" class="settings-row-copy">
+        <strong>下载镜像前缀</strong>
+        <span>可选，仅用于下载；留空则直连 GitHub。</span>
+      </label>
+      <input
+        id="core-update-mirror"
+        v-model="config.coreUpdateMirror"
+        type="text"
+        class="input input-sm input-bordered settings-mono"
+        placeholder="https://ghproxy.com/"
+      />
     </div>
 
     <ConfirmDialog ref="dialogRef" />
