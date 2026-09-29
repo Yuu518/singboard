@@ -356,7 +356,7 @@ watch(isRunning, (running) => {
             <div
               v-for="nodeName in group.all"
               :key="nodeName"
-              class="flex h-[70px] min-w-[180px] flex-col items-start gap-2 p-2.5 rounded-[var(--radius-tile)] text-xs transition-all duration-150 cursor-pointer overflow-hidden active:scale-[0.98]"
+              class="flex h-[76px] min-w-[180px] flex-col items-start gap-1 p-2.5 rounded-[var(--radius-tile)] text-xs transition-all duration-150 cursor-pointer overflow-hidden active:scale-[0.98]"
               :class="
                 group.now === nodeName
                   ? 'bg-primary/15 text-primary ring-1 ring-inset ring-primary/40'
@@ -364,10 +364,10 @@ watch(isRunning, (running) => {
               "
               @click.stop="handleSelect(group.name, nodeName)"
             >
-              <div class="w-full flex-1 text-sm leading-tight break-all" :title="nodeName">
+              <div class="w-full min-h-0 flex-1 line-clamp-2 break-words text-sm leading-tight" :title="nodeName">
                 {{ nodeName }}
               </div>
-              <div class="flex h-4 w-full items-center justify-between">
+              <div class="flex h-4 w-full shrink-0 items-center justify-between gap-2">
                 <span
                   class="truncate text-xs tracking-tight"
                   :class="group.now === nodeName ? 'text-primary/70' : 'text-base-content/60'"
@@ -450,12 +450,12 @@ watch(isRunning, (running) => {
             <div
               v-for="node in provider.proxies"
               :key="node.name"
-              class="surface-fill flex h-[70px] min-w-[180px] flex-col items-start gap-2 p-2.5 rounded-[var(--radius-tile)] text-xs overflow-hidden"
+              class="surface-fill flex h-[76px] min-w-[180px] flex-col items-start gap-1 p-2.5 rounded-[var(--radius-tile)] text-xs overflow-hidden"
             >
-              <div class="w-full flex-1 text-sm leading-tight break-all" :title="node.name">
+              <div class="w-full min-h-0 flex-1 line-clamp-2 break-words text-sm leading-tight" :title="node.name">
                 {{ node.name }}
               </div>
-              <div class="flex h-4 w-full items-center justify-between">
+              <div class="flex h-4 w-full shrink-0 items-center justify-between gap-2">
                 <span class="truncate text-xs tracking-tight text-base-content/60">
                   {{ getTypeDescription(node.name) }}
                 </span>
