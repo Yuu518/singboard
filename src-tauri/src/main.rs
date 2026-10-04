@@ -11,6 +11,8 @@ static LAUNCHED_HIDDEN: AtomicBool = AtomicBool::new(false);
 
 const AUTO_LAUNCH_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const AUTO_LAUNCH_NAME: &str = "singboard";
+const AUTO_LAUNCH_APPROVED_KEY: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
 
 #[tauri::command]
 fn set_close_to_tray(enabled: bool) {
@@ -22,29 +24,78 @@ fn is_launched_hidden() -> bool {
     LAUNCHED_HIDDEN.load(Ordering::Relaxed)
 }
 
-#[tauri::command]
-fn get_auto_launch() -> bool {
+fn auto_launch_command() -> Result<String, String> {
+    let exe = env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
+    Ok(format!("\"{}\" --hidden", exe.display()))
+}
+
+fn registered_auto_launch() -> Option<String> {
     winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
         .open_subkey(AUTO_LAUNCH_KEY)
         .and_then(|key| key.get_value::<String, _>(AUTO_LAUNCH_NAME))
-        .is_ok()
+        .ok()
+}
+
+fn auto_launch_disabled_by_system() -> bool {
+    winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .open_subkey(AUTO_LAUNCH_APPROVED_KEY)
+        .and_then(|key| key.get_raw_value(AUTO_LAUNCH_NAME))
+        .is_ok_and(|value| value.bytes.first().is_some_and(|flag| flag & 1 == 1))
+}
+
+fn clear_auto_launch_approval() {
+    if let Ok((key, _)) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .create_subkey(AUTO_LAUNCH_APPROVED_KEY)
+    {
+        let _ = key.delete_value(AUTO_LAUNCH_NAME);
+    }
+}
+
+fn write_auto_launch(command: &str) -> Result<(), String> {
+    let (key, _) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .create_subkey(AUTO_LAUNCH_KEY)
+        .map_err(|e| format!("打开注册表失败: {}", e))?;
+    key.set_value(AUTO_LAUNCH_NAME, &command)
+        .map_err(|e| format!("写入注册表失败: {}", e))
+}
+
+fn repair_auto_launch_path() {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let (Some(registered), Ok(expected)) = (registered_auto_launch(), auto_launch_command())
+    else {
+        return;
+    };
+    if !registered.eq_ignore_ascii_case(&expected) {
+        let _ = write_auto_launch(&expected);
+    }
+}
+
+#[tauri::command]
+fn get_auto_launch() -> bool {
+    let (Some(registered), Ok(expected)) = (registered_auto_launch(), auto_launch_command())
+    else {
+        return false;
+    };
+    registered.eq_ignore_ascii_case(&expected) && !auto_launch_disabled_by_system()
 }
 
 #[tauri::command]
 fn set_auto_launch(enabled: bool) -> Result<(), String> {
-    let (key, _) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-        .create_subkey(AUTO_LAUNCH_KEY)
-        .map_err(|e| format!("打开注册表失败: {}", e))?;
     if enabled {
-        let exe = env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
-        let value = format!("\"{}\" --hidden", exe.display());
-        key.set_value(AUTO_LAUNCH_NAME, &value)
-            .map_err(|e| format!("写入注册表失败: {}", e))?;
-    } else if let Err(e) = key.delete_value(AUTO_LAUNCH_NAME) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(format!("删除注册表值失败: {}", e));
+        write_auto_launch(&auto_launch_command()?)?;
+    } else {
+        let (key, _) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+            .create_subkey(AUTO_LAUNCH_KEY)
+            .map_err(|e| format!("打开注册表失败: {}", e))?;
+        if let Err(e) = key.delete_value(AUTO_LAUNCH_NAME) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(format!("删除注册表值失败: {}", e));
+            }
         }
     }
+    clear_auto_launch_approval();
     Ok(())
 }
 
@@ -144,6 +195,7 @@ fn main() {
     }
 
     singboard_lib::commands::self_update::cleanup_staging();
+    repair_auto_launch_path();
 
     run_gui();
 }
