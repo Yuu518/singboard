@@ -896,26 +896,53 @@ fn bolt_leaf_lookup(page: &[u8], count: usize, key: &[u8]) -> Option<(bool, Vec<
 }
 
 // ---- SavedBinary parser ----
-// v1: version + hash + content + timestamp + etag
-// v2: same prefix, with URL hash appended after etag
+
+const SAVED_BINARY_VERSION_CURRENT: u8 = 3;
+
+fn read_length_prefixed<'a>(data: &'a [u8], pos: &mut usize) -> io::Result<&'a [u8]> {
+    let mut cur = Cursor::new(&data[*pos..]);
+    let len = read_uvarint(&mut cur)?;
+    let start = *pos + cur.position() as usize;
+    if len > (data.len() - start) as u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid SavedBinary field length: {}", len),
+        ));
+    }
+    let end = start + len as usize;
+    *pos = end;
+    Ok(&data[start..end])
+}
+
+fn read_saved_binary_content(data: &[u8], leading_hash: bool) -> io::Result<Vec<u8>> {
+    let mut pos = 1usize;
+    if leading_hash {
+        read_length_prefixed(data, &mut pos)?;
+    }
+    Ok(read_length_prefixed(data, &mut pos)?.to_vec())
+}
 
 fn parse_saved_binary_content(data: &[u8]) -> io::Result<Vec<u8>> {
-    let mut cur = Cursor::new(data);
-    let ver = read_u8(&mut cur)?;
-    if !matches!(ver, 1 | 2) {
+    let ver = *data.first().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::UnexpectedEof, "empty SavedBinary")
+    })?;
+    if !(1..=SAVED_BINARY_VERSION_CURRENT).contains(&ver) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("unexpected SavedBinary version: {}", ver),
         ));
     }
-    // skip hash (md5 = 16 bytes, stored as uvarint(16) + 16 bytes)
-    let hash_len = read_uvarint(&mut cur)? as usize;
-    skip_exact(&mut cur, hash_len)?;
-    // read content
-    let content_len = read_uvarint(&mut cur)? as usize;
-    let mut content = vec![0u8; content_len];
-    cur.read_exact(&mut content)?;
-    Ok(content)
+    let content = read_saved_binary_content(data, false);
+    if ver >= 3 {
+        return content;
+    }
+    match content {
+        Ok(content) if content.starts_with(b"SRS") => Ok(content),
+        content => match read_saved_binary_content(data, true) {
+            Ok(legacy) if legacy.starts_with(b"SRS") => Ok(legacy),
+            _ => content,
+        },
+    }
 }
 
 // ---- cache.db auto-discovery ----
@@ -1812,6 +1839,21 @@ mod tests {
         u128::from_be_bytes(Ipv6Addr::from_str(s).unwrap().octets())
     }
 
+    fn saved_binary_content_first_fixture(version: u8, content: &[u8]) -> Vec<u8> {
+        let mut data = vec![version, content.len() as u8];
+        data.extend_from_slice(content);
+        data.extend_from_slice(&1_700_000_000i64.to_be_bytes());
+        data.extend_from_slice(&[4, b'e', b't', b'a', b'g']);
+        if version >= 2 {
+            data.extend_from_slice(&[3, 0x12, 0x34, 0x56]);
+        }
+        if version >= 3 {
+            data.push(16);
+            data.extend_from_slice(&[0xAB; 16]);
+        }
+        data
+    }
+
     #[test]
     fn saved_binary_v2_extracts_srs_content() {
         let content = b"SRS\x02compressed-rule-set";
@@ -1820,6 +1862,33 @@ mod tests {
             parse_saved_binary_content(&saved_binary_fixture(2, content)).unwrap(),
             content
         );
+    }
+
+    #[test]
+    fn saved_binary_content_first_layouts_extract_srs_content() {
+        let content = b"SRS\x03compressed-rule-set";
+
+        for version in 1..=3 {
+            assert_eq!(
+                parse_saved_binary_content(&saved_binary_content_first_fixture(version, content))
+                    .unwrap(),
+                content,
+                "SavedBinary version {} should be supported",
+                version
+            );
+        }
+    }
+
+    #[test]
+    fn saved_binary_rejects_unknown_version_and_bad_length() {
+        let content = b"SRS\x03compressed-rule-set";
+
+        let error = parse_saved_binary_content(&saved_binary_content_first_fixture(4, content))
+            .unwrap_err();
+        assert_eq!(error.to_string(), "unexpected SavedBinary version: 4");
+
+        assert!(parse_saved_binary_content(&[3, 200, b'S', b'R', b'S']).is_err());
+        assert!(parse_saved_binary_content(&[]).is_err());
     }
 
     #[test]
