@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undefined) }))
 
+const MAP = { x: 0, y: 0, width: 200, height: 120, href: 'data:image/png;base64,' }
+
 describe('liquid lens displacement map', () => {
   const pixel = (data: Uint8ClampedArray, width: number, x: number, y: number) => {
     const i = (y * width + x) * 4
@@ -35,10 +37,68 @@ describe('liquid lens displacement map', () => {
   })
 })
 
+describe('liquid lens map tiles', () => {
+  const compose = async (width: number, height: number, radius: number, band: number) => {
+    const { buildDisplacementMap, mapTiles } = await import('./useLiquidLens')
+    const out = new Uint8ClampedArray(width * height * 4)
+    for (let i = 0; i < out.length; i += 4) out.set([128, 128, 0, 255], i)
+    const tiles = mapTiles(width, height, radius, band)
+    for (const tile of tiles) {
+      const { source } = tile
+      const data = buildDisplacementMap(source.mapWidth, source.mapHeight, radius, band, 24, source)
+      for (let y = 0; y < tile.height; y++) {
+        for (let x = 0; x < tile.width; x++) {
+          const sx = Math.min(source.width - 1, Math.floor((x * source.width) / tile.width))
+          const sy = Math.min(source.height - 1, Math.floor((y * source.height) / tile.height))
+          const s = (sy * source.width + sx) * 4
+          out.set(data.subarray(s, s + 4), ((tile.y + y) * width + tile.x + x) * 4)
+        }
+      }
+    }
+    return { out, tiles, full: buildDisplacementMap(width, height, radius, band, 24) }
+  }
+
+  it('rebuilds a large map from small corner and edge tiles', async () => {
+    const { out, tiles, full } = await compose(640, 300, 18, 24)
+    expect(tiles).toHaveLength(8)
+    expect(Math.max(...tiles.map((tile) => tile.source.width * tile.source.height))).toBeLessThan(40 * 40)
+    let worst = 0
+    for (let i = 0; i < full.length; i++) worst = Math.max(worst, Math.abs(full[i] - out[i]))
+    expect(worst).toBeLessThanOrEqual(1)
+  })
+
+  it('shares the same tiles across sizes', async () => {
+    const { mapTiles } = await import('./useLiquidLens')
+    const sources = (width: number, height: number) => mapTiles(width, height, 18).map((tile) => JSON.stringify(tile.source))
+    expect(sources(640, 300)).toEqual(sources(1090, 78))
+  })
+
+  it('falls back to one full map for small surfaces', async () => {
+    const { out, tiles, full } = await compose(60, 50, 18, 24)
+    expect(tiles).toHaveLength(1)
+    expect([...out]).toEqual([...full])
+  })
+})
+
 describe('liquid lens filter', () => {
+  it('lays the map tiles over a neutral base', async () => {
+    const { buildLensFilter } = await import('./useLiquidLens')
+    const tiles = [MAP, { ...MAP, x: 10, width: 20, href: 'data:image/png;base64,AA' }]
+    const filter = buildLensFilter(200, 120, tiles, 'tiled-lens', { chroma: false })
+    const images = [...filter.querySelectorAll('feImage')]
+    expect(images.map((node) => [node.getAttribute('x'), node.getAttribute('width'), node.getAttribute('href')])).toEqual([
+      ['0', '200', MAP.href],
+      ['10', '20', 'data:image/png;base64,AA'],
+    ])
+    const merge = filter.querySelector('feMerge')!
+    expect(merge.getAttribute('result')).toBe('map')
+    expect([...merge.children].map((node) => node.getAttribute('in'))).toEqual(['map-base', 'map-0', 'map-1'])
+    expect(filter.querySelector('feFlood')!.getAttribute('result')).toBe('map-base')
+  })
+
   it('splits the refraction into three channels with rising strength', async () => {
     const { buildLensFilter, REFRACTION_AMOUNT, CHROMA_SPREAD } = await import('./useLiquidLens')
-    const filter = buildLensFilter(200, 120, 'data:image/png;base64,', 'lens-test')
+    const filter = buildLensFilter(200, 120, [MAP], 'lens-test')
     const base = REFRACTION_AMOUNT * 2
 
     const shifts = [...filter.querySelectorAll('feDisplacementMap')]
@@ -81,7 +141,7 @@ describe('liquid lens targets', () => {
 describe('card lens filter', () => {
   it('uses a single displacement pass without colour fringing', async () => {
     const { buildLensFilter, REFRACTION_AMOUNT } = await import('./useLiquidLens')
-    const filter = buildLensFilter(200, 120, 'data:image/png;base64,', 'card-lens', { chroma: false })
+    const filter = buildLensFilter(200, 120, [MAP], 'card-lens', { chroma: false })
     const shifts = [...filter.querySelectorAll('feDisplacementMap')]
     expect(shifts).toHaveLength(1)
     expect(Number(shifts[0].getAttribute('scale'))).toBe(REFRACTION_AMOUNT * 2)
@@ -93,7 +153,7 @@ describe('card lens filter', () => {
 describe('popover lens filter', () => {
   it('keeps the rim sharp and frosts the middle', async () => {
     const { buildLensFilter } = await import('./useLiquidLens')
-    const filter = buildLensFilter(200, 120, 'data:image/png;base64,', 'pop-lens', { frost: 20 })
+    const filter = buildLensFilter(200, 120, [MAP], 'pop-lens', { frost: 20 })
     const blur = filter.querySelector('feGaussianBlur')!
     expect(blur.getAttribute('in')).toBe('SourceGraphic')
     expect(blur.getAttribute('stdDeviation')).toBe('20')
@@ -120,7 +180,7 @@ describe('popover lens filter', () => {
 describe('lens strength', () => {
   it('scales every displacement pass with the requested amount', async () => {
     const { buildLensFilter, CHROMA_SPREAD } = await import('./useLiquidLens')
-    const filter = buildLensFilter(200, 120, 'data:image/png;base64,', 'soft-lens', { amount: 12, frost: 4 })
+    const filter = buildLensFilter(200, 120, [MAP], 'soft-lens', { amount: 12, frost: 4 })
     expect([...filter.querySelectorAll('feDisplacementMap')].map((node) => Number(node.getAttribute('scale')))).toEqual([
       24,
       24 * (1 + CHROMA_SPREAD),

@@ -12,6 +12,7 @@ const POPOVER_REFRACTION_HEIGHT = 14
 const POPOVER_REFRACTION_AMOUNT = 12
 const RIM_SOFTEN = 0.75
 const SVG_NS = 'http://www.w3.org/2000/svg'
+const NEUTRAL_MAP = 'rgb(128, 128, 0)'
 const CHANNELS = [
   { name: 'r', matrix: '1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0' },
   { name: 'g', matrix: '0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 1 0' },
@@ -44,22 +45,30 @@ function gradRoundedRect(x: number, y: number, halfW: number, halfH: number, rad
   return cx >= cy ? [sx, 0] : [0, sy]
 }
 
+export interface MapRegion {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export function buildDisplacementMap(
   width: number,
   height: number,
   radius: number,
   refractionHeight = REFRACTION_HEIGHT,
   refractionAmount = REFRACTION_AMOUNT,
+  region: MapRegion = { x: 0, y: 0, width, height },
 ): Uint8ClampedArray {
-  const data = new Uint8ClampedArray(width * height * 4)
+  const data = new Uint8ClampedArray(region.width * region.height * 4)
   const halfW = width / 2
   const halfH = height / 2
   const r = Math.min(radius, halfW, halfH)
   const gradRadius = Math.min(r * 1.5, halfW, halfH)
-  for (let py = 0; py < height; py++) {
-    for (let px = 0; px < width; px++) {
-      const x = px + 0.5 - halfW
-      const y = py + 0.5 - halfH
+  for (let py = 0; py < region.height; py++) {
+    for (let px = 0; px < region.width; px++) {
+      const x = region.x + px + 0.5 - halfW
+      const y = region.y + py + 0.5 - halfH
       let dx = 0
       let dy = 0
       let edge = 0
@@ -72,7 +81,7 @@ export function buildDisplacementMap(
         dy = -d * gy
         edge = t * t * (3 - 2 * t)
       }
-      const i = (py * width + px) * 4
+      const i = (py * region.width + px) * 4
       data[i] = 255 * (0.5 + dx / (2 * refractionAmount))
       data[i + 1] = 255 * (0.5 + dy / (2 * refractionAmount))
       data[i + 2] = 255 * edge
@@ -80,6 +89,42 @@ export function buildDisplacementMap(
     }
   }
   return data
+}
+
+export interface MapTile extends MapRegion {
+  source: MapRegion & { mapWidth: number; mapHeight: number }
+}
+
+export function mapTiles(width: number, height: number, radius: number, refractionHeight = REFRACTION_HEIGHT): MapTile[] {
+  const r = Math.min(radius, width / 2, height / 2)
+  const inset = Math.ceil(Math.max(r * 1.5, refractionHeight)) + 1
+  if (width <= inset * 2 + 2 || height <= inset * 2 + 2) {
+    return [{ x: 0, y: 0, width, height, source: { mapWidth: width, mapHeight: height, x: 0, y: 0, width, height } }]
+  }
+  const size = inset * 2 + 3
+  const far = size - inset
+  const middle = inset + 1
+  const right = width - inset
+  const bottom = height - inset
+  const spanX = width - inset * 2 + 2
+  const spanY = height - inset * 2 + 2
+  const tile = (x: number, y: number, w: number, h: number, sx: number, sy: number, sw: number, sh: number): MapTile => ({
+    x,
+    y,
+    width: w,
+    height: h,
+    source: { mapWidth: size, mapHeight: size, x: sx, y: sy, width: sw, height: sh },
+  })
+  return [
+    tile(inset - 1, 0, spanX, inset, middle, 0, 1, inset),
+    tile(inset - 1, bottom, spanX, inset, middle, far, 1, inset),
+    tile(0, inset - 1, inset, spanY, 0, middle, inset, 1),
+    tile(right, inset - 1, inset, spanY, far, middle, inset, 1),
+    tile(0, 0, inset, inset, 0, 0, inset, inset),
+    tile(right, 0, inset, inset, far, 0, inset, inset),
+    tile(0, bottom, inset, inset, 0, far, inset, inset),
+    tile(right, bottom, inset, inset, far, far, inset, inset),
+  ]
 }
 
 export function lensSelector(withCards: boolean): string {
@@ -98,10 +143,14 @@ export interface LensOptions {
   amount?: number
 }
 
+export interface MapImage extends MapRegion {
+  href: string
+}
+
 export function buildLensFilter(
   width: number,
   height: number,
-  href: string,
+  images: MapImage[],
   id: string,
   { chroma = true, frost = 0, amount = REFRACTION_AMOUNT }: LensOptions = {},
 ): SVGFilterElement {
@@ -115,7 +164,24 @@ export function buildLensFilter(
     width,
     height,
   }) as SVGFilterElement
-  filter.append(svgElement('feImage', { x: 0, y: 0, width, height, preserveAspectRatio: 'none', result: 'map', href }))
+  const merge = svgElement('feMerge', { result: 'map' })
+  filter.append(svgElement('feFlood', { x: 0, y: 0, width, height, 'flood-color': NEUTRAL_MAP, result: 'map-base' }))
+  merge.append(svgElement('feMergeNode', { in: 'map-base' }))
+  images.forEach((image, index) => {
+    filter.append(
+      svgElement('feImage', {
+        x: image.x,
+        y: image.y,
+        width: image.width,
+        height: image.height,
+        preserveAspectRatio: 'none',
+        result: `map-${index}`,
+        href: image.href,
+      }),
+    )
+    merge.append(svgElement('feMergeNode', { in: `map-${index}` }))
+  })
+  filter.append(merge)
   if (chroma) appendChromaticRefraction(filter, amount)
   else {
     filter.append(
@@ -180,6 +246,7 @@ export function useLiquidLens() {
   const { config } = useConfigStore()
   const { hasBackground } = useBackgroundStore()
   const entries = new Map<HTMLElement, LensEntry>()
+  const tileCache = new Map<string, Promise<string>>()
   const reducedTransparency = window.matchMedia('(prefers-reduced-transparency: reduce)')
   let svg: SVGSVGElement | null = null
   let mutationObserver: MutationObserver | null = null
@@ -200,21 +267,40 @@ export function useLiquidLens() {
     return svg
   }
 
-  function renderMap(width: number, height: number, radius: number, band: number, amount: number): string {
-    const canvas = document.createElement('canvas')
-    canvas.width = width
-    canvas.height = height
-    const context = canvas.getContext('2d')
-    if (!context) return ''
-    context.putImageData(new ImageData(buildDisplacementMap(width, height, radius, band, amount), width, height), 0, 0)
-    return canvas.toDataURL()
+  function renderTile(source: MapTile['source'], radius: number, band: number, amount: number): Promise<string> {
+    const key = `${source.mapWidth}x${source.mapHeight}:${source.x},${source.y},${source.width},${source.height}@${radius}~${band}~${amount}`
+    let href = tileCache.get(key)
+    if (!href) {
+      href = decodeTile(source, radius, band, amount)
+      tileCache.set(key, href)
+    }
+    return href
   }
 
-  async function createFilter(width: number, height: number, href: string, options: LensOptions): Promise<SVGFilterElement> {
+  async function decodeTile(source: MapTile['source'], radius: number, band: number, amount: number): Promise<string> {
+    const canvas = document.createElement('canvas')
+    canvas.width = source.width
+    canvas.height = source.height
+    const context = canvas.getContext('2d')
+    if (!context) return ''
+    const data = buildDisplacementMap(source.mapWidth, source.mapHeight, radius, band, amount, source)
+    context.putImageData(new ImageData(data, source.width, source.height), 0, 0)
+    const href = canvas.toDataURL()
     const preload = new Image()
     preload.src = href
     await preload.decode().catch(() => {})
-    const filter = buildLensFilter(width, height, href, `liquid-lens-${++counter}`, options)
+    return href
+  }
+
+  async function renderMap(width: number, height: number, radius: number, band: number, amount: number): Promise<MapImage[]> {
+    const tiles = mapTiles(width, height, radius, band)
+    const hrefs = await Promise.all(tiles.map((tile) => renderTile(tile.source, radius, band, amount)))
+    if (hrefs.some((href) => !href)) return []
+    return tiles.map(({ x, y, width, height }, index) => ({ x, y, width, height, href: hrefs[index] }))
+  }
+
+  async function createFilter(width: number, height: number, images: MapImage[], options: LensOptions): Promise<SVGFilterElement> {
+    const filter = buildLensFilter(width, height, images, `liquid-lens-${++counter}`, options)
     ensureSvg().appendChild(filter)
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
     return filter
@@ -243,15 +329,15 @@ export function useLiquidLens() {
     const key = `${width}x${height}@${radius}~${options.frost}`
     let entry = entries.get(element)
     if (entry?.key === key) return
-    const href = renderMap(width, height, radius, band, options.amount ?? REFRACTION_AMOUNT)
-    if (!href) return
     if (!entry) {
       entry = { filter: null, key }
       entries.set(element, entry)
       resizeObserver?.observe(element)
     }
     entry.key = key
-    const filter = await createFilter(width, height, href, options)
+    const images = await renderMap(width, height, radius, band, options.amount ?? REFRACTION_AMOUNT)
+    if (entries.get(element) !== entry || entry.key !== key || !images.length) return
+    const filter = await createFilter(width, height, images, options)
     if (entries.get(element) !== entry || entry.key !== key) {
       filter.remove()
       return
