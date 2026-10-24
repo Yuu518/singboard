@@ -210,6 +210,16 @@ fn pick_windows_asset(release: &GhRelease, suffix: &str) -> Result<CoreUpdateInf
     })
 }
 
+fn newest_release(releases: Vec<GhRelease>) -> Option<GhRelease> {
+    releases.into_iter().filter(|r| !r.draft).rev().max_by_key(|r| {
+        (
+            super::self_update::parse_version(&r.tag_name),
+            !r.prerelease,
+            r.published_at.clone().unwrap_or_default(),
+        )
+    })
+}
+
 #[tauri::command]
 pub async fn check_core_update(repo: String, channel: String) -> Result<CoreUpdateInfo, String> {
     let repo = repo.trim().to_string();
@@ -223,10 +233,7 @@ pub async fn check_core_update(repo: String, channel: String) -> Result<CoreUpda
             .json()
             .await
             .map_err(|e| format!("解析 GitHub API 响应失败: {}", e))?;
-        releases
-            .into_iter()
-            .find(|r| !r.draft)
-            .ok_or("该仓库暂无发布版本")?
+        newest_release(releases).ok_or("该仓库暂无发布版本")?
     } else {
         let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
         github_get(&url)
@@ -723,6 +730,49 @@ mod tests {
         fn drop(&mut self) {
             std::fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    fn release(tag: &str, prerelease: bool, draft: bool, published_at: &str) -> GhRelease {
+        GhRelease {
+            tag_name: tag.to_string(),
+            prerelease,
+            draft,
+            published_at: Some(published_at.to_string()),
+            assets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn testing_channel_prefers_the_highest_version_over_the_latest_published() {
+        let releases = vec![
+            release("v1.14.3-reF1nd", false, false, "2026-10-10T00:49:24Z"),
+            release("v1.15.0-alpha.11-reF1nd", true, false, "2026-10-09T15:01:33Z"),
+            release("v1.15.0-alpha.10-reF1nd", true, false, "2026-10-06T00:31:30Z"),
+            release("v1.14.2-reF1nd", false, false, "2026-09-25T19:29:39Z"),
+        ];
+        assert_eq!(
+            newest_release(releases).unwrap().tag_name,
+            "v1.15.0-alpha.11-reF1nd"
+        );
+    }
+
+    #[test]
+    fn testing_channel_prefers_stable_over_prereleases_of_the_same_version() {
+        let releases = vec![
+            release("v1.15.0-rc.1", true, false, "2026-11-02T00:00:00Z"),
+            release("v1.15.0", false, false, "2026-11-01T00:00:00Z"),
+            release("v1.16.0-alpha.1", true, true, "2026-11-03T00:00:00Z"),
+        ];
+        assert_eq!(newest_release(releases).unwrap().tag_name, "v1.15.0");
+    }
+
+    #[test]
+    fn unparsable_tags_fall_back_to_the_most_recent_release() {
+        let releases = vec![
+            release("nightly-b", true, false, "2026-10-02T00:00:00Z"),
+            release("nightly-a", true, false, "2026-10-01T00:00:00Z"),
+        ];
+        assert_eq!(newest_release(releases).unwrap().tag_name, "nightly-b");
     }
 
     #[test]

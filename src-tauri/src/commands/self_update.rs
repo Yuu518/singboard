@@ -35,7 +35,7 @@ fn staging_dir() -> PathBuf {
     std::env::temp_dir().join("singboard-panel")
 }
 
-fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
     let text = text.trim().trim_start_matches(['v', 'V']);
     let mut parts = text.split('.');
     let major = parts.next()?.parse().ok()?;
