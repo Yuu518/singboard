@@ -324,17 +324,22 @@ watch(isRunning, (running) => {
                 {{ getLatencyLabel(group.now) }}
               </span>
             </div>
-            <div v-show="!expandedGroups.has(group.name)" class="flex flex-wrap gap-1.5">
-              <span
-                v-for="nodeName in group.all"
-                :key="nodeName"
-                class="w-3.5 h-3.5 rounded-full cursor-pointer transition-transform hover:scale-125 hover:ring-1 hover:ring-base-content/30 flex items-center justify-center"
-                :class="dotColor(getLatency(nodeName))"
-                :title="nodeName + ': ' + formatLatency(getLatency(nodeName))"
-                @click.stop="handleSelect(group.name, nodeName)"
-              >
-                <span v-if="group.now === nodeName" class="w-1.5 h-1.5 rounded-full bg-white"></span>
-              </span>
+            <div class="proxy-dots -mx-0.5 -mb-0.5 -mt-2" :class="{ 'is-open': !expandedGroups.has(group.name) }">
+              <div class="proxy-collapse-inner">
+                <div class="flex flex-wrap gap-1.5 px-0.5 pb-0.5 pt-2">
+                  <span
+                    v-for="(nodeName, index) in group.all"
+                    :key="nodeName"
+                    class="proxy-dot w-3.5 h-3.5 rounded-full cursor-pointer hover:scale-125 hover:ring-1 hover:ring-base-content/30 flex items-center justify-center"
+                    :class="dotColor(getLatency(nodeName))"
+                    :style="{ '--i': index }"
+                    :title="nodeName + ': ' + formatLatency(getLatency(nodeName))"
+                    @click.stop="handleSelect(group.name, nodeName)"
+                  >
+                    <span v-if="group.now === nodeName" class="w-1.5 h-1.5 rounded-full bg-white"></span>
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
           <div class="flex flex-col items-end gap-0.5 shrink-0">
@@ -351,8 +356,9 @@ watch(isRunning, (running) => {
           </div>
         </div>
 
-        <div v-show="expandedGroups.has(group.name)" class="px-5 pb-4">
-          <div class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr))">
+        <div class="proxy-collapse" :class="{ 'is-open': expandedGroups.has(group.name) }">
+          <div class="proxy-collapse-inner">
+          <div class="grid gap-2 px-5 pb-4" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr))">
             <div
               v-for="nodeName in group.all"
               :key="nodeName"
@@ -383,6 +389,7 @@ watch(isRunning, (running) => {
               </div>
             </div>
           </div>
+          </div>
         </div>
       </div>
       </div>
@@ -410,14 +417,19 @@ watch(isRunning, (running) => {
               <div>{{ formatUsage(provider.subscriptionInfo) }}</div>
             </div>
             <div class="text-xs text-base-content/40">更新于 {{ formatDate(provider.updatedAt) }}</div>
-            <div v-show="!expandedProviders.has(provider.name)" class="flex flex-wrap gap-1.5">
-              <span
-                v-for="node in provider.proxies"
-                :key="node.name"
-                class="w-3.5 h-3.5 rounded-full"
-                :class="dotColor(getLatency(node.name))"
-                :title="node.name + ': ' + formatLatency(getLatency(node.name))"
-              ></span>
+            <div class="proxy-dots -mt-2" :class="{ 'is-open': !expandedProviders.has(provider.name) }">
+              <div class="proxy-collapse-inner">
+                <div class="flex flex-wrap gap-1.5 pt-2">
+                  <span
+                    v-for="(node, index) in provider.proxies"
+                    :key="node.name"
+                    class="proxy-dot w-3.5 h-3.5 rounded-full"
+                    :class="dotColor(getLatency(node.name))"
+                    :style="{ '--i': index }"
+                    :title="node.name + ': ' + formatLatency(getLatency(node.name))"
+                  ></span>
+                </div>
+              </div>
             </div>
           </div>
           <div class="flex items-center gap-1 shrink-0">
@@ -445,8 +457,9 @@ watch(isRunning, (running) => {
           </div>
         </div>
 
-        <div v-show="expandedProviders.has(provider.name)" class="px-5 pb-4">
-          <div class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr))">
+        <div class="proxy-collapse" :class="{ 'is-open': expandedProviders.has(provider.name) }">
+          <div class="proxy-collapse-inner">
+          <div class="grid gap-2 px-5 pb-4" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr))">
             <div
               v-for="node in provider.proxies"
               :key="node.name"
@@ -470,9 +483,85 @@ watch(isRunning, (running) => {
               </div>
             </div>
           </div>
+          </div>
         </div>
       </div>
     </div>
     </template>
   </div>
 </template>
+
+<style scoped>
+.proxy-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    grid-template-rows 260ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 180ms ease,
+    visibility 0s linear 260ms;
+}
+
+.proxy-collapse.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    grid-template-rows 260ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 220ms ease 40ms,
+    visibility 0s;
+}
+
+.proxy-collapse-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.proxy-dots {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition:
+    grid-template-rows 230ms cubic-bezier(0.4, 0, 0.2, 1) 90ms,
+    visibility 0s linear 320ms;
+}
+
+.proxy-dots.is-open {
+  grid-template-rows: 1fr;
+  visibility: visible;
+  transition:
+    grid-template-rows 260ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s;
+}
+
+.proxy-dot {
+  opacity: 0;
+  scale: 0.3;
+  transition:
+    opacity 140ms ease-in,
+    scale 150ms ease-in,
+    transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.proxy-dots.is-open .proxy-dot {
+  --delay: calc(60ms + min(var(--i), 30) * 12ms);
+  opacity: 1;
+  scale: 1;
+  transition:
+    opacity 200ms ease-out var(--delay),
+    scale 340ms cubic-bezier(0.34, 1.56, 0.64, 1) var(--delay),
+    transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .proxy-collapse,
+  .proxy-collapse.is-open,
+  .proxy-dots,
+  .proxy-dots.is-open,
+  .proxy-dot,
+  .proxy-dots.is-open .proxy-dot {
+    transition: none;
+  }
+}
+</style>
