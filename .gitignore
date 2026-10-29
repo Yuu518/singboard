@@ -32,6 +32,7 @@ Desktop.ini
 .vscode/
 .claude/
 .agents/
+.impeccable/
 
 # Temporary files
 *.tmp
