@@ -39,6 +39,19 @@ const filteredConnections = computed(() => {
   return connections.value.filter((c) => matchesFilter(c, q))
 })
 
+export const chainSpeeds = computed(() => {
+  const map: Record<string, { down: number; up: number }> = {}
+  for (const conn of connections.value) {
+    if (!conn.chains) continue
+    for (const chain of conn.chains) {
+      if (!map[chain]) map[chain] = { down: 0, up: 0 }
+      map[chain].down += conn.downloadSpeed ?? 0
+      map[chain].up += conn.uploadSpeed ?? 0
+    }
+  }
+  return map
+})
+
 const filteredClosedConnections = computed(() => {
   if (!filterText.value) return closedConnections.value
   const q = filterText.value.toLowerCase()

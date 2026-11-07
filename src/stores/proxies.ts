@@ -1,12 +1,15 @@
 import { ref, computed } from 'vue'
-import { fetchProxies, fetchProxy, fetchProxyProviders, selectProxy, testLatency } from '@/api'
+import { fetchProxies, fetchProxyProviders, selectProxy, testLatency } from '@/api'
 import { useConfigStore } from '@/stores/config'
 import { getCoreStartTimestamp, serviceStatus } from '@/stores/service'
 import type { LatencyHistory, Proxy, ProxyGroup, ProxyProvider } from '@/types'
+import { getRequestErrorReason } from '@/utils/requestError'
 
 const proxyMap = ref<Record<string, Proxy>>({})
 const providerList = ref<ProxyProvider[]>([])
 const loading = ref(false)
+const loaded = ref(false)
+const loadError = ref('')
 
 function loadIPv6Map(): Record<string, boolean> {
   try {
@@ -22,6 +25,7 @@ function saveIPv6Map() {
 const ipv6Map = ref<Record<string, boolean>>(loadIPv6Map())
 
 let fetchTime = 0
+const recentSwitches = new Map<string, { name: string; at: number }>()
 const LATENCY_TIMEOUT = 5000
 const IPV6_TEST_URL = 'https://ipv6.google.com/generate_204'
 const IPV6_TEST_TIMEOUT = 2000
@@ -58,6 +62,11 @@ function isDeletedByCore(localHistory: LatencyHistory[], coreStartTs: number | n
   if (coreStartTs === null) return false
   const lastTs = Date.parse(getLastHistoryTime(localHistory))
   return Number.isFinite(lastTs) && lastTs > coreStartTs + CORE_START_TOLERANCE_MS
+}
+
+function withCoreFailure(history: LatencyHistory[]): LatencyHistory[] {
+  if (history[history.length - 1]?.delay === 0) return history
+  return [...history, { time: new Date().toISOString(), delay: 0 }].slice(-10)
 }
 
 function pickNewerHistory(a?: LatencyHistory[], b?: LatencyHistory[]): LatencyHistory[] {
@@ -205,7 +214,7 @@ export function useProxiesStore() {
     return proxyNode?.testUrl || defaultUrl
   }
 
-  async function loadProxies(fresh = false) {
+  async function loadProxies(fresh = false, background = false) {
     loading.value = true
     const nowTime = Date.now()
     fetchTime = nowTime
@@ -256,14 +265,25 @@ export function useProxiesStore() {
           if (!previous && !storedHistory) continue
 
           const localHistory = pickNewerHistory(previous?.history, storedHistory)
-          if (!proxy.history?.length && isDeletedByCore(localHistory, coreStartTs)) continue
+          if (!proxy.history?.length && isDeletedByCore(localHistory, coreStartTs)) {
+            merged[name] = { ...proxy, history: withCoreFailure(localHistory) }
+            continue
+          }
           merged[name] = {
             ...proxy,
             history: pickNewerHistory(proxy.history, localHistory),
           }
         }
       }
+      for (const [group, recent] of recentSwitches) {
+        if (recent.at > nowTime && merged[group]) {
+          merged[group] = { ...merged[group], now: recent.name }
+        } else {
+          recentSwitches.delete(group)
+        }
+      }
       proxyMap.value = merged
+      loadError.value = ''
       if (fresh) {
         flushLatencyHistoryMap()
       } else {
@@ -277,18 +297,22 @@ export function useProxiesStore() {
         }
       }
       saveIPv6Map()
-    } catch {
+    } catch (error) {
       if (fetchTime !== nowTime) return
+      if (background && Object.keys(proxyMap.value).length > 0) return
       proxyMap.value = {}
+      loadError.value = getRequestErrorReason(error)
     } finally {
       if (fetchTime === nowTime) {
         loading.value = false
+        loaded.value = true
       }
     }
   }
 
   async function switchProxy(group: string, name: string) {
     await selectProxy(group, name)
+    recentSwitches.set(group, { name, at: Date.now() })
     if (proxyMap.value[group]) {
       proxyMap.value[group].now = name
     }
@@ -309,7 +333,7 @@ export function useProxiesStore() {
     }
   }
 
-  async function testNodeLatency(name: string, groupName?: string): Promise<number> {
+  async function testNodeLatency(name: string, groupName?: string): Promise<{ delay: number; reason?: string }> {
     const { config } = useConfigStore()
 
     if (config.value.ipv6TestEnabled) {
@@ -320,10 +344,10 @@ export function useProxiesStore() {
       const { data } = await testLatency(name, getTestUrl(groupName), LATENCY_TIMEOUT)
       const delay = data.delay
       appendProxyHistory(resolveNowNodeName(name), delay)
-      return delay
-    } catch {
+      return { delay }
+    } catch (error) {
       appendProxyHistory(resolveNowNodeName(name), 0)
-      return 0
+      return { delay: 0, reason: getRequestErrorReason(error) }
     }
   }
 
@@ -359,7 +383,7 @@ export function useProxiesStore() {
     if (config.value.ipv6TestEnabled) saveIPv6Map()
 
     flushLatencyHistoryMap()
-    await loadProxies()
+    await loadProxies(false, true)
   }
 
   async function testAllNodes(names: string[]) {
@@ -415,14 +439,19 @@ export function useProxiesStore() {
   function getLatency(name: string): number {
     const resolved = resolveNowNodeName(name)
     const proxy = proxyMap.value[resolved]
-    if (!proxy) return 0
+    if (!proxy) return -1
 
     if (proxy.history?.length) {
       const last = proxy.history[proxy.history.length - 1]
       return last.delay
     }
 
-    return 0
+    return -1
+  }
+
+  function getLatencyTime(name: string): string {
+    const history = proxyMap.value[resolveNowNodeName(name)]?.history
+    return history?.length ? history[history.length - 1].time : ''
   }
 
   function resolveNowNodeName(name: string): string {
@@ -451,24 +480,7 @@ export function useProxiesStore() {
       if (serviceStatus.value.state !== 'running') return
       const startTs = getCoreStartTimestamp() ?? observedAt
       if (Date.now() - startTs > CORE_WARMUP_WINDOW_MS) return
-      await loadProxies()
-    }
-  }
-
-  async function pollAutoGroups() {
-    const autoTypes = ['fallback', 'urltest']
-    const autoGroups = proxyGroups.value.filter(g =>
-      autoTypes.includes(g.type.toLowerCase())
-    )
-
-    for (const group of autoGroups) {
-      try {
-        const { data } = await fetchProxy(group.name)
-        if (data.now && data.now !== proxyMap.value[group.name]?.now) {
-          proxyMap.value[group.name].now = data.now
-          testGroupNodes(group.name)
-        }
-      } catch {}
+      await loadProxies(false, true)
     }
   }
 
@@ -476,9 +488,10 @@ export function useProxiesStore() {
     proxyMap,
     proxyGroups,
     loading,
+    loaded,
+    loadError,
     loadProxies,
     switchProxy,
-    pollAutoGroups,
     refreshDuringCoreWarmup,
     testNodeLatency,
     testGroupNodes,
@@ -487,6 +500,7 @@ export function useProxiesStore() {
     resumePendingTests,
     getProxy,
     getLatency,
+    getLatencyTime,
     getTestUrl,
     isIPv6,
   }

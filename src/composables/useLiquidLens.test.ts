@@ -96,6 +96,26 @@ describe('liquid lens filter', () => {
     expect(filter.querySelector('feFlood')!.getAttribute('result')).toBe('map-base')
   })
 
+  it('follows a resized surface without rebuilding the filter', async () => {
+    const { buildLensFilter, mapTiles, reshapeLensFilter } = await import('./useLiquidLens')
+    const images = (width: number, height: number) =>
+      mapTiles(width, height, 18).map(({ x, y, width, height }, index) => ({ x, y, width, height, href: `tile-${index}` }))
+    const filter = buildLensFilter(640, 120, images(640, 120), 'growing-lens', { chroma: false })
+
+    expect(reshapeLensFilter(filter, 640, 300, images(640, 300))).toBe(true)
+    expect([filter.getAttribute('width'), filter.getAttribute('height')]).toEqual(['640', '300'])
+    expect(filter.querySelector('feFlood')!.getAttribute('height')).toBe('300')
+    const bottom = images(640, 300)[1]
+    const node = filter.querySelectorAll('feImage')[1]
+    expect([node.getAttribute('y'), node.getAttribute('height'), node.getAttribute('href')]).toEqual([
+      String(bottom.y),
+      String(bottom.height),
+      bottom.href,
+    ])
+
+    expect(reshapeLensFilter(filter, 60, 50, images(60, 50))).toBe(false)
+  })
+
   it('splits the refraction into three channels with rising strength', async () => {
     const { buildLensFilter, REFRACTION_AMOUNT, CHROMA_SPREAD } = await import('./useLiquidLens')
     const filter = buildLensFilter(200, 120, [MAP], 'lens-test')

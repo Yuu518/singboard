@@ -75,7 +75,7 @@ const statusPillClass = computed(() => {
         class="glass-press flex w-full items-center gap-3 rounded-xl px-3 py-2 text-[13px]"
         :class="
           currentPath === item.path
-            ? 'bg-primary/15 font-semibold text-primary'
+            ? 'bg-primary/15 font-semibold text-[color:var(--selection-ink)]'
             : 'text-base-content/75 hover:bg-base-content/[0.06] hover:text-base-content'
         "
         :aria-current="currentPath === item.path ? 'page' : undefined"

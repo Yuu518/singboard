@@ -41,6 +41,16 @@
   --toggle-off: #e5e5ea;
   --scrim: rgb(255 255 255 / 0.22);
   --scrim-blur: 3px;
+
+  --latency-ok-ink: #18712f;
+  --latency-slow-ink: #9a4d00;
+  --latency-fail-ink: #b5150b;
+  --selection-ink: #0057bd;
+  --primary-fill: #0071eb;
+  --primary-fill-hover: #0068d9;
+  --danger-fill: #d92b20;
+  --danger-fill-hover: #c8241a;
+  --danger-ink: #b5150b;
 }
 
 [data-theme='dark'] {
@@ -79,6 +89,12 @@
   --segment-thumb: #636366;
   --toggle-off: #39393d;
   --scrim: rgb(0 0 0 / 0.35);
+
+  --latency-ok-ink: #30d158;
+  --latency-slow-ink: #ffb340;
+  --latency-fail-ink: #ff8f87;
+  --selection-ink: #62afff;
+  --danger-ink: #ff8f87;
 }
 
 :root,
@@ -167,12 +183,6 @@
   --glass-glow: 1;
   box-shadow: var(--glass-highlight), var(--glass-edge-hover), var(--glass-card-shadow-hover);
   transform: translateY(var(--glass-lift));
-}
-
-.glass-hover:active {
-  --glass-glow: 1.6;
-  box-shadow: var(--glass-highlight), var(--glass-edge), var(--glass-card-shadow);
-  transform: none;
 }
 
 .surface-fill {
@@ -465,6 +475,28 @@ html .select option {
   color: oklch(var(--bc));
 }
 
+html .btn-primary {
+  border-color: var(--primary-fill);
+  background-color: var(--primary-fill);
+  color: #ffffff;
+}
+
+html .btn-primary:hover {
+  border-color: var(--primary-fill-hover);
+  background-color: var(--primary-fill-hover);
+}
+
+html .btn-error {
+  border-color: var(--danger-fill);
+  background-color: var(--danger-fill);
+  color: #ffffff;
+}
+
+html .btn-error:hover {
+  border-color: var(--danger-fill-hover);
+  background-color: var(--danger-fill-hover);
+}
+
 html .btn-ghost:hover {
   border-color: transparent;
   background-color: var(--fill-strong);
@@ -592,7 +624,7 @@ html .btn.btn-glass:hover {
 
 html .btn.btn-glass.btn-glass-danger {
   background-color: oklch(var(--er) / 0.12);
-  color: oklch(var(--er));
+  color: var(--danger-ink);
 }
 
 html .btn.btn-glass.btn-glass-danger:hover {

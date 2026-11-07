@@ -15,7 +15,8 @@ export function formatSpeed(bytes: number): string {
 }
 
 export function formatLatency(delay: number): string {
-  if (delay === 0) return 'N/A'
+  if (delay < 0) return '未测'
+  if (delay === 0) return '失败'
   return delay + 'ms'
 }
 
@@ -51,14 +52,16 @@ export function formatDate(dateStr: string): string {
 }
 
 export function latencyColor(delay: number): string {
-  if (delay === 0) return 'bg-base-content/10 text-base-content/50'
-  if (delay < 300) return 'bg-success/15 text-success'
-  if (delay < 800) return 'bg-warning/15 text-warning'
-  return 'bg-error/15 text-error'
+  if (delay < 0) return 'bg-base-content/[0.06] text-base-content/65'
+  if (delay === 0) return 'bg-error/15 text-[color:var(--latency-fail-ink)]'
+  if (delay < 300) return 'bg-success/15 text-[color:var(--latency-ok-ink)]'
+  if (delay < 800) return 'bg-warning/15 text-[color:var(--latency-slow-ink)]'
+  return 'bg-error/15 text-[color:var(--latency-fail-ink)]'
 }
 
 export function dotColor(delay: number): string {
-  if (delay === 0) return 'bg-base-content/20'
+  if (delay < 0) return 'border border-base-content/50'
+  if (delay === 0) return 'bg-error'
   if (delay < 300) return 'bg-success'
   if (delay < 800) return 'bg-warning'
   return 'bg-error'

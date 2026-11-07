@@ -9,7 +9,7 @@ function accentClass(type?: 'error' | 'info') {
 </script>
 
 <template>
-  <div class="fixed right-4 top-14 z-[60] pointer-events-none space-y-2">
+  <div class="fixed right-4 bottom-4 z-[60] pointer-events-none space-y-2" role="status" aria-live="polite">
     <TransitionGroup name="toast">
       <div
         v-for="toast in toasts"
@@ -63,7 +63,7 @@ function accentClass(type?: 'error' | 'info') {
 .toast-enter-from,
 .toast-leave-to {
   opacity: 0;
-  transform: translateY(-8px) scale(0.96);
+  transform: translateY(8px) scale(0.96);
 }
 
 @media (prefers-reduced-motion: reduce) {

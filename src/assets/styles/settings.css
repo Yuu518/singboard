@@ -172,15 +172,14 @@
 }
 
 .settings-page .btn-route {
-  border-color: oklch(var(--p));
-  background: oklch(var(--p));
-  color: oklch(var(--pc));
+  border-color: var(--primary-fill);
+  background: var(--primary-fill);
+  color: #ffffff;
 }
 
 .settings-page .btn-route:hover:not(:disabled) {
-  border-color: oklch(var(--p));
-  background: oklch(var(--p));
-  filter: brightness(1.08);
+  border-color: var(--primary-fill-hover);
+  background: var(--primary-fill-hover);
 }
 
 .settings-page .btn-route:disabled {
@@ -222,7 +221,7 @@
 }
 
 .settings-page .settings-danger-action:not(:disabled) {
-  color: oklch(var(--er));
+  color: var(--danger-ink);
 }
 
 .settings-page :is(button, input, select):focus-visible {
