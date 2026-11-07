@@ -56,6 +56,7 @@ export interface Connection {
   downloadSpeed: number
   uploadSpeed: number
   closedAt?: number
+  closedInBackground?: boolean
 }
 
 export interface ConnectionMetadata {

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { matchesFilter, useConnectionsStore } from '@/stores/connections'
+import { useConfigStore } from '@/stores/config'
 import { useToastStore } from '@/stores/toast'
 import { formatBytes, formatSpeed, formatDuration } from '@/utils/format'
 import { getRequestErrorReason } from '@/utils/requestError'
@@ -17,13 +19,16 @@ const {
   uploadTotal,
   filterText,
   socketState,
+  socketFailures,
   start,
   closeConnection,
   closeConnections,
   closeAllConnections,
 } = useConnectionsStore()
+const { clashApiUrl } = useConfigStore()
 const { pushToast } = useToastStore()
 const { serviceState, isRunning } = useSettledServiceState()
+const router = useRouter()
 
 const confirmDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null)
 const activeTab = ref<'active' | 'closed'>('active')
@@ -44,6 +49,8 @@ function announce(message: string) {
   })
 }
 
+const apiUnreachable = computed(() => socketFailures.value >= 3)
+
 const paused = ref(false)
 const pausedSnapshot = ref<{ active: Connection[]; closed: Connection[]; down: number; up: number } | null>(null)
 
@@ -51,12 +58,12 @@ watch(paused, (on) => {
   pausedSnapshot.value = on
     ? { active: connections.value, closed: closedConnections.value, down: downloadTotal.value, up: uploadTotal.value }
     : null
-  announce(on ? '已暂停刷新' : '已恢复刷新')
 })
 
 const shownDownTotal = computed(() => pausedSnapshot.value?.down ?? downloadTotal.value)
 const shownUpTotal = computed(() => pausedSnapshot.value?.up ?? uploadTotal.value)
 
+const CLOSING_TIMEOUT_MS = 4000
 const closingIds = ref<Set<string>>(new Set())
 
 watch(connections, (list) => {
@@ -66,6 +73,13 @@ watch(connections, (list) => {
     if (!present.has(id)) closingIds.value.delete(id)
   }
 })
+
+function markClosing(ids: string[]) {
+  for (const id of ids) closingIds.value.add(id)
+  setTimeout(() => {
+    for (const id of ids) closingIds.value.delete(id)
+  }, CLOSING_TIMEOUT_MS)
+}
 
 const query = computed(() => filterText.value.trim().toLowerCase())
 
@@ -89,83 +103,108 @@ watch(sortKey, (key) => {
   localStorage.setItem(SORT_STORAGE_KEY, key)
 })
 
+const sortOptions = computed(() =>
+  activeTab.value === 'closed'
+    ? SORT_OPTIONS.filter((o) => o.value !== 'download' && o.value !== 'upload')
+    : SORT_OPTIONS
+)
+
+const effectiveSort = computed<SortKey>(() =>
+  sortOptions.value.some((o) => o.value === sortKey.value) ? sortKey.value : 'recent'
+)
+
 function startTime(conn: Connection): number {
   return new Date(conn.start).getTime() || 0
 }
 
-function compareConnections(a: Connection, b: Connection, closed: boolean): number {
-  switch (sortKey.value) {
-    case 'recent': {
-      const diff = closed ? (b.closedAt ?? 0) - (a.closedAt ?? 0) : startTime(b) - startTime(a)
-      if (diff) return diff
-      break
-    }
-    case 'duration': {
-      const diff = startTime(a) - startTime(b)
-      if (diff) return diff
-      break
-    }
-    case 'download': {
-      const diff = (b.downloadSpeed ?? 0) - (a.downloadSpeed ?? 0)
-      if (diff) return diff
-      break
-    }
-    case 'upload': {
-      const diff = (b.uploadSpeed ?? 0) - (a.uploadSpeed ?? 0)
-      if (diff) return diff
-      break
-    }
-    case 'downloadTotal': {
-      const diff = (b.download ?? 0) - (a.download ?? 0)
-      if (diff) return diff
-      break
-    }
-    case 'uploadTotal': {
-      const diff = (b.upload ?? 0) - (a.upload ?? 0)
-      if (diff) return diff
-      break
-    }
-    case 'host': {
-      const diff = getHost(a).localeCompare(getHost(b))
-      if (diff) return diff
-      break
-    }
-  }
-  return startTime(b) - startTime(a) || a.id.localeCompare(b.id)
+function durationMs(conn: Connection): number {
+  return (conn.closedAt ?? Date.now()) - startTime(conn)
 }
 
+function compareConnections(a: Connection, b: Connection, closed: boolean): number {
+  let diff = 0
+  switch (effectiveSort.value) {
+    case 'recent': diff = closed ? (b.closedAt ?? 0) - (a.closedAt ?? 0) : startTime(b) - startTime(a); break
+    case 'duration': diff = durationMs(b) - durationMs(a); break
+    case 'download': diff = (b.downloadSpeed ?? 0) - (a.downloadSpeed ?? 0); break
+    case 'upload': diff = (b.uploadSpeed ?? 0) - (a.uploadSpeed ?? 0); break
+    case 'downloadTotal': diff = (b.download ?? 0) - (a.download ?? 0); break
+    case 'uploadTotal': diff = (b.upload ?? 0) - (a.upload ?? 0); break
+    case 'host': diff = getHost(a).localeCompare(getHost(b)); break
+  }
+  return diff || startTime(b) - startTime(a) || a.id.localeCompare(b.id)
+}
+
+type RowState = 'live' | 'closing' | 'ended'
+
+interface Row {
+  conn: Connection
+  state: RowState
+}
+
+const listEl = ref<HTMLElement | null>(null)
 const listHovered = ref(false)
 const listFocused = ref(false)
-const frozenIds = ref<string[] | null>(null)
+const frozenRows = ref<Map<string, Connection> | null>(null)
 
-function prepareList(source: Connection[], closed: boolean): Connection[] {
+function prepareList(source: Connection[], closed: boolean): Row[] {
   const q = query.value
-  const filtered = source.filter((c) => !closingIds.value.has(c.id) && (!q || matchesFilter(c, q)))
-  const sorted = filtered.sort((a, b) => compareConnections(a, b, closed))
-  if (!frozenIds.value) return sorted
-  const order = new Map(frozenIds.value.map((id, index) => [id, index]))
-  return sorted
-    .map((conn, index) => ({ conn, rank: order.get(conn.id) ?? frozenIds.value!.length + index }))
-    .sort((a, b) => a.rank - b.rank)
-    .map((item) => item.conn)
+  const live = source
+    .filter((c) => !closingIds.value.has(c.id) && (!q || matchesFilter(c, q)))
+    .sort((a, b) => compareConnections(a, b, closed))
+  const frozen = frozenRows.value
+  if (!frozen) return live.map((conn) => ({ conn, state: 'live' }))
+  const pending = new Map(live.map((conn) => [conn.id, conn]))
+  const rows: Row[] = []
+  for (const [id, snapshot] of frozen) {
+    const conn = pending.get(id)
+    if (conn) {
+      rows.push({ conn, state: 'live' })
+      pending.delete(id)
+    } else {
+      rows.push({ conn: snapshot, state: closingIds.value.has(id) ? 'closing' : 'ended' })
+    }
+  }
+  for (const conn of live) {
+    if (pending.has(conn.id)) rows.push({ conn, state: 'live' })
+  }
+  return rows
 }
 
-const activeList = computed(() => prepareList(pausedSnapshot.value?.active ?? connections.value, false))
-const closedList = computed(() => prepareList(pausedSnapshot.value?.closed ?? closedConnections.value, true))
-const visibleList = computed(() => (activeTab.value === 'active' ? activeList.value : closedList.value))
+const activeRows = computed(() => prepareList(pausedSnapshot.value?.active ?? connections.value, false))
+const closedRows = computed(() => prepareList(pausedSnapshot.value?.closed ?? closedConnections.value, true))
+const visibleRows = computed(() => (activeTab.value === 'active' ? activeRows.value : closedRows.value))
+const activeLive = computed(() => activeRows.value.filter((row) => row.state === 'live').map((row) => row.conn))
+const closedCount = computed(() => closedRows.value.filter((row) => row.state === 'live').length)
+
+function snapshotRows(): Map<string, Connection> {
+  return new Map(visibleRows.value.filter((row) => row.state === 'live').map((row) => [row.conn.id, row.conn]))
+}
 
 watch([listHovered, listFocused], ([hovered, focused]) => {
   if (!hovered && !focused) {
-    frozenIds.value = null
-  } else if (!frozenIds.value) {
-    frozenIds.value = visibleList.value.map((c) => c.id)
+    frozenRows.value = null
+  } else if (!frozenRows.value) {
+    frozenRows.value = snapshotRows()
   }
 })
 
-watch([activeTab, sortKey, query], () => {
-  if (!frozenIds.value) return
-  frozenIds.value = null
-  frozenIds.value = visibleList.value.map((c) => c.id)
+watch([activeTab, effectiveSort, query], () => {
+  if (!frozenRows.value) return
+  frozenRows.value = null
+  frozenRows.value = snapshotRows()
+})
+
+watch(visibleRows, (rows) => {
+  if (rows.length === 0) {
+    listHovered.value = false
+    listFocused.value = false
+    return
+  }
+  if (!listFocused.value) return
+  void nextTick(() => {
+    if (listFocused.value && !listEl.value?.contains(document.activeElement)) listFocused.value = false
+  })
 })
 
 function onListFocusOut(e: FocusEvent) {
@@ -176,35 +215,41 @@ function onListFocusOut(e: FocusEvent) {
 const focusedRowId = ref<string | null>(null)
 
 const rowTabTarget = computed(() => {
-  const list = visibleList.value
-  if (focusedRowId.value && list.some((c) => c.id === focusedRowId.value)) return focusedRowId.value
-  return list[0]?.id ?? null
+  const rows = visibleRows.value
+  if (focusedRowId.value && rows.some((row) => row.conn.id === focusedRowId.value)) return focusedRowId.value
+  return rows[0]?.conn.id ?? null
 })
+
+function focusCurrentRow() {
+  listEl.value?.querySelector<HTMLElement>('[data-conn-row][tabindex="0"]')?.focus()
+}
 
 function onListKeydown(e: KeyboardEvent) {
   const list = e.currentTarget as HTMLElement
-  const rows = Array.from(list.querySelectorAll<HTMLElement>('[data-conn-row]'))
-  const index = rows.indexOf(e.target as HTMLElement)
+  const buttons = Array.from(list.querySelectorAll<HTMLElement>('[data-conn-row]'))
+  const index = buttons.indexOf(e.target as HTMLElement)
   if (index < 0) return
-  if (e.key === 'Delete' && activeTab.value === 'active') {
+  if (e.key === 'Delete') {
     e.preventDefault()
-    const conn = visibleList.value[index]
-    if (conn) {
-      rows[Math.min(index + 1, rows.length - 1)]?.focus()
-      void disconnect(conn)
-    }
+    const row = visibleRows.value[index]
+    if (e.repeat || activeTab.value !== 'active' || !row || row.state !== 'live') return
+    const neighbour = index < buttons.length - 1 ? index + 1 : index - 1
+    if (neighbour >= 0) buttons[neighbour].focus()
+    void disconnect(row.conn)
     return
   }
   let next: number
   switch (e.key) {
     case 'ArrowDown': next = index + 1; break
     case 'ArrowUp': next = index - 1; break
+    case 'PageDown': next = index + 10; break
+    case 'PageUp': next = index - 10; break
     case 'Home': next = 0; break
-    case 'End': next = rows.length - 1; break
+    case 'End': next = buttons.length - 1; break
     default: return
   }
   e.preventDefault()
-  rows[Math.min(Math.max(next, 0), rows.length - 1)].focus()
+  buttons[Math.min(Math.max(next, 0), buttons.length - 1)].focus()
 }
 
 function getHost(conn: Connection): string {
@@ -234,36 +279,37 @@ function formatChains(chains?: string[]): string {
   return [...chains].reverse().join(' → ')
 }
 
-function routeLine(conn: Connection): string {
-  return `${conn.rule || '默认出站'} → ${formatChains(conn.chains)}`
+function ruleText(conn: Connection): string {
+  return conn.rule || 'final'
 }
 
 function connectionDuration(conn: Connection): string {
-  return formatDuration(conn.start, conn.closedAt)
+  const text = formatDuration(conn.start, conn.closedAt)
+  return conn.closedInBackground ? `≥ ${text}` : text
 }
 
-function rowLabel(conn: Connection): string {
-  const process = getProcess(conn)
-  const parts = [
+function rowStateText(row: Row): string {
+  if (row.state === 'closing') return '正在断开…'
+  if (row.state === 'ended') return '已结束'
+  return ''
+}
+
+function rowLabel(row: Row): string {
+  const conn = row.conn
+  return [
     `${conn.metadata.network.toUpperCase()} ${withPort(getHost(conn), conn.metadata.destinationPort)}`,
-    process,
-    routeLine(conn),
-  ]
-  if (!conn.closedAt) parts.push(`下载 ${formatSpeed(conn.downloadSpeed)}，上传 ${formatSpeed(conn.uploadSpeed)}`)
-  parts.push(`持续 ${connectionDuration(conn)}`)
-  return parts.filter(Boolean).join('，')
+    getProcess(conn),
+    formatChains(conn.chains),
+    `规则 ${ruleText(conn)}`,
+    rowStateText(row),
+  ].filter(Boolean).join('，')
 }
 
 function isIPAddress(str: string): boolean {
   return /^[\d.]+$/.test(str) || str.includes(':')
 }
 
-function isPublicIP(ip: string): boolean {
-  if (ip.includes(':')) {
-    const lower = ip.toLowerCase()
-    return !(lower === '::1' || lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea')
-      || lower.startsWith('feb') || lower.startsWith('fc') || lower.startsWith('fd'))
-  }
+function isPublicIPv4(ip: string): boolean {
   const [a, b] = ip.split('.').map((part) => parseInt(part, 10))
   if (Number.isNaN(a) || Number.isNaN(b)) return false
   return !(a === 0 || a === 10 || a === 127 || a >= 224
@@ -274,9 +320,16 @@ function isPublicIP(ip: string): boolean {
     || (a === 198 && (b === 18 || b === 19)))
 }
 
+function isPublicIP(ip: string): boolean {
+  if (!ip.includes(':')) return isPublicIPv4(ip)
+  const lower = ip.toLowerCase()
+  if (lower.startsWith('::ffff:') && lower.includes('.')) return isPublicIPv4(lower.slice(7))
+  return !(lower === '::' || lower === '::1' || /^f[c-f]/.test(lower))
+}
+
 async function disconnect(conn: Connection) {
   if (closingIds.value.has(conn.id)) return
-  closingIds.value.add(conn.id)
+  markClosing([conn.id])
   const host = getHost(conn)
   try {
     await closeConnection(conn.id)
@@ -288,11 +341,11 @@ async function disconnect(conn: Connection) {
 }
 
 const disconnectLabel = computed(() =>
-  query.value ? `断开筛选结果 (${activeList.value.length})` : '断开全部'
+  query.value ? `断开筛选结果 (${activeLive.value.length})` : '断开全部'
 )
 
 async function handleDisconnectMany() {
-  const targets = activeList.value
+  const targets = activeLive.value
   if (targets.length === 0) return
   const filtered = !!query.value
   const confirmed = await confirmDialog.value?.show({
@@ -305,17 +358,19 @@ async function handleDisconnectMany() {
   })
   if (!confirmed) return
   const ids = targets.map((c) => c.id)
-  for (const id of ids) closingIds.value.add(id)
+  markClosing(ids)
   try {
     if (filtered) {
       const failed = await closeConnections(ids)
-      if (failed > 0) {
-        pushToast({ type: 'error', message: `有 ${failed} 个连接没能断开，可能已经结束或核心拒绝了请求。` })
+      for (const id of failed) closingIds.value.delete(id)
+      if (failed.length > 0) {
+        pushToast({ type: 'error', message: `有 ${failed.length} 个连接没能断开，已重新显示在列表里。` })
       }
+      announce(`已断开 ${ids.length - failed.length} 个连接`)
     } else {
       await closeAllConnections()
+      announce(`已断开 ${ids.length} 个连接`)
     }
-    announce(`已断开 ${ids.length} 个连接`)
   } catch (error) {
     for (const id of ids) closingIds.value.delete(id)
     pushToast({ type: 'error', message: `断开连接失败\n原因: ${getRequestErrorReason(error)}` })
@@ -337,6 +392,7 @@ function onSearchEscape(e: KeyboardEvent) {
 const selectedId = ref<string | null>(null)
 const lastSelected = ref<Connection | null>(null)
 let detailOpener: HTMLElement | null = null
+const detailDialog = ref<HTMLElement | null>(null)
 const detailCloseButton = ref<HTMLButtonElement | null>(null)
 
 const selectedLive = computed(() => {
@@ -355,6 +411,10 @@ const selectedConnection = computed(() => (selectedId.value ? selectedLive.value
 const selectedIsOpen = computed(() => !!selectedConnection.value && !selectedConnection.value.closedAt
   && (pausedSnapshot.value?.active ?? connections.value).some((c) => c.id === selectedId.value))
 
+watch(selectedIsOpen, (open, wasOpen) => {
+  if (selectedId.value && wasOpen && !open) announce('这个连接已经结束')
+})
+
 function openDetail(conn: Connection) {
   detailOpener = document.activeElement as HTMLElement | null
   lastSelected.value = conn
@@ -367,7 +427,10 @@ function closeDetail() {
   lastSelected.value = null
   const opener = detailOpener
   detailOpener = null
-  void nextTick(() => opener?.focus())
+  void nextTick(() => {
+    if (opener?.isConnected) opener.focus()
+    else focusCurrentRow()
+  })
 }
 
 async function disconnectSelected() {
@@ -375,6 +438,21 @@ async function disconnectSelected() {
   if (!conn) return
   await disconnect(conn)
   if (closingIds.value.has(conn.id) || !selectedIsOpen.value) closeDetail()
+}
+
+function trapDetailFocus(e: KeyboardEvent) {
+  const focusables = Array.from(detailDialog.value?.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input, select, [tabindex]:not([tabindex="-1"])',
+  ) ?? [])
+  if (focusables.length === 0) return
+  const index = focusables.indexOf(document.activeElement as HTMLElement)
+  if (e.shiftKey && index <= 0) {
+    e.preventDefault()
+    focusables[focusables.length - 1].focus()
+  } else if (!e.shiftKey && (index === -1 || index === focusables.length - 1)) {
+    e.preventDefault()
+    focusables[0].focus()
+  }
 }
 
 function getDestIP(conn: Connection): string | null {
@@ -390,19 +468,19 @@ function destination(conn: Connection): string {
 
 const geoInfo = ref<IPGeoInfo | null>(null)
 const geoLoading = ref(false)
-const geoError = ref(false)
+const geoError = ref('')
 let geoRequest = 0
 
 async function loadGeo(ip: string) {
   const request = ++geoRequest
   geoInfo.value = null
-  geoError.value = false
+  geoError.value = ''
   geoLoading.value = true
   try {
     const info = await getGeoIPForIP(ip)
     if (request === geoRequest) geoInfo.value = info
-  } catch {
-    if (request === geoRequest) geoError.value = true
+  } catch (error) {
+    if (request === geoRequest) geoError.value = getRequestErrorReason(error)
   } finally {
     if (request === geoRequest) geoLoading.value = false
   }
@@ -411,7 +489,7 @@ async function loadGeo(ip: string) {
 watch(selectedId, () => {
   geoRequest++
   geoInfo.value = null
-  geoError.value = false
+  geoError.value = ''
   geoLoading.value = false
   const conn = selectedConnection.value
   const ip = conn ? getDestIP(conn) : null
@@ -419,13 +497,17 @@ watch(selectedId, () => {
 })
 
 function onGlobalKeydown(e: KeyboardEvent) {
-  if (selectedId.value && e.key === 'Escape') {
-    e.preventDefault()
-    closeDetail()
+  if (selectedId.value) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeDetail()
+    } else if (e.key === 'Tab') {
+      trapDetailFocus(e)
+    }
     return
   }
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'f') return
-  if (!isRunning.value || selectedId.value) return
+  if (!isRunning.value || document.querySelector('[role="alertdialog"]')) return
   e.preventDefault()
   searchInput.value?.focus()
   searchInput.value?.select()
@@ -468,7 +550,7 @@ onBeforeUnmount(() => {
             :tabindex="activeTab === 'active' ? 0 : -1"
             @click="activeTab = 'active'"
           >
-            活跃 ({{ activeList.length }})
+            活跃<span class="ml-1 tabular-nums" aria-hidden="true">({{ activeLive.length }})</span>
           </button>
           <button
             id="connections-tab-closed"
@@ -481,7 +563,7 @@ onBeforeUnmount(() => {
             :tabindex="activeTab === 'closed' ? 0 : -1"
             @click="activeTab = 'closed'"
           >
-            已关闭 ({{ closedList.length }})
+            已关闭<span class="ml-1 tabular-nums" aria-hidden="true">({{ closedCount }})</span>
           </button>
         </div>
       </div>
@@ -507,10 +589,11 @@ onBeforeUnmount(() => {
           </svg>
         </button>
         <button
-          v-if="activeTab === 'active'"
           type="button"
           class="btn btn-sm btn-glass btn-glass-danger shrink-0"
-          :disabled="activeList.length === 0"
+          :class="{ invisible: activeTab !== 'active' }"
+          :disabled="activeTab !== 'active' || activeLive.length === 0"
+          :aria-hidden="activeTab !== 'active'"
           @click="handleDisconnectMany"
         >
           {{ disconnectLabel }}
@@ -539,7 +622,7 @@ onBeforeUnmount(() => {
         <button
           v-if="filterText"
           type="button"
-          class="absolute right-1.5 z-[1] flex h-5 w-5 items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          class="absolute right-1 z-[1] flex h-6 w-6 items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
           aria-label="清除搜索"
           @click="clearSearch"
         >
@@ -548,19 +631,28 @@ onBeforeUnmount(() => {
           </svg>
         </button>
       </div>
-      <select v-model="sortKey" class="select select-sm select-bordered w-auto shrink-0" aria-label="排序方式">
-        <option v-for="option in SORT_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+      <select
+        class="select select-sm select-bordered w-auto shrink-0"
+        aria-label="排序方式"
+        :value="effectiveSort"
+        @change="sortKey = ($event.target as HTMLSelectElement).value as SortKey"
+      >
+        <option v-for="option in sortOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
       </select>
     </div>
 
     <div
-      v-if="paused || (socketState === 'connecting' && connections.length > 0)"
-      class="flex items-center gap-2 rounded-[var(--radius-control)] bg-[var(--fill)] px-3 py-1.5 text-xs text-base-content/80"
+      v-if="paused || (socketState === 'reconnecting' && connections.length > 0)"
+      class="surface-card flex items-center gap-2 px-3 py-1.5 text-xs"
       role="status"
     >
       <template v-if="paused">
         <span>已暂停刷新，显示的是暂停时的连接。</span>
         <button type="button" class="btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]" @click="paused = false">继续刷新</button>
+      </template>
+      <template v-else-if="apiUnreachable">
+        <span>无法连接 Clash API，正在重试；下面是中断前的数据。</span>
+        <button type="button" class="btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]" @click="router.push('/settings')">检查 API 配置</button>
       </template>
       <template v-else>
         <span class="loading loading-spinner loading-xs" aria-hidden="true"></span>
@@ -576,7 +668,8 @@ onBeforeUnmount(() => {
     >
       <div class="card-scroll min-h-0 flex-1 overflow-auto">
         <ul
-          v-if="visibleList.length > 0"
+          v-if="visibleRows.length > 0"
+          ref="listEl"
           class="py-1"
           :aria-label="activeTab === 'active' ? '活跃连接' : '已关闭连接'"
           @mouseenter="listHovered = true"
@@ -586,59 +679,85 @@ onBeforeUnmount(() => {
           @keydown="onListKeydown"
         >
           <li
-            v-for="conn in visibleList"
-            :key="conn.id"
-            class="conn-row relative mx-1 grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 rounded-[var(--radius-control)] px-3 py-2 transition-colors hover:bg-base-content/[0.05]"
+            v-for="row in visibleRows"
+            :key="row.conn.id"
+            class="conn-row relative mx-1 grid grid-cols-[minmax(0,1fr)_13rem_1.5rem] items-center gap-x-3 rounded-[var(--radius-control)] px-3 py-2 transition-[background-color,opacity] hover:bg-base-content/[0.05]"
+            :class="{ 'opacity-50': row.state !== 'live' }"
           >
             <button
               type="button"
               data-conn-row
               class="absolute inset-0 rounded-[inherit] focus-visible:outline-none"
-              :tabindex="rowTabTarget === conn.id ? 0 : -1"
-              :aria-label="rowLabel(conn)"
-              @focus="focusedRowId = conn.id"
-              @click="openDetail(conn)"
+              :tabindex="rowTabTarget === row.conn.id ? 0 : -1"
+              :aria-label="rowLabel(row)"
+              :aria-keyshortcuts="activeTab === 'active' ? 'Enter Delete' : 'Enter'"
+              @focus="focusedRowId = row.conn.id"
+              @click="openDetail(row.conn)"
             ></button>
-            <div class="pointer-events-none min-w-0">
+            <div class="pointer-events-none min-w-0" aria-hidden="true">
               <div class="flex min-w-0 items-center gap-1.5 text-sm">
                 <span
-                  class="shrink-0 rounded-full px-1.5 py-px text-[11px] font-medium uppercase leading-4"
-                  :class="conn.metadata.network === 'tcp'
+                  class="shrink-0 rounded-full px-1.5 text-xs font-medium uppercase leading-5"
+                  :class="row.conn.metadata.network === 'tcp'
                     ? 'bg-info/15 text-[color:var(--tcp-ink)]'
                     : 'bg-accent/15 text-[color:var(--udp-ink)]'"
-                >{{ conn.metadata.network }}</span>
-                <span class="min-w-0 truncate">{{ withPort(getHost(conn), conn.metadata.destinationPort) }}</span>
-                <span v-if="getProcess(conn)" class="min-w-0 max-w-[45%] shrink-[2] truncate text-xs text-base-content/65">· {{ getProcess(conn) }}</span>
+                >{{ row.conn.metadata.network }}</span>
+                <span class="min-w-0 truncate">{{ withPort(getHost(row.conn), row.conn.metadata.destinationPort) }}</span>
+                <span v-if="getProcess(row.conn)" class="min-w-0 max-w-[45%] shrink-[2] truncate text-xs text-base-content/65">· {{ getProcess(row.conn) }}</span>
               </div>
-              <div class="mt-0.5 truncate text-xs text-base-content/65">{{ routeLine(conn) }}</div>
+              <div class="mt-0.5 flex min-w-0 gap-1.5 text-xs text-base-content/65">
+                <span class="max-w-[70%] shrink-0 truncate">{{ formatChains(row.conn.chains) }}</span>
+                <span class="min-w-0 truncate">· {{ ruleText(row.conn) }}</span>
+              </div>
             </div>
-            <div class="pointer-events-none text-right text-xs tabular-nums leading-5">
-              <div v-if="!conn.closedAt" class="whitespace-nowrap">↓ {{ formatSpeed(conn.downloadSpeed) }} · ↑ {{ formatSpeed(conn.uploadSpeed) }}</div>
-              <div v-else class="whitespace-nowrap">↓ {{ formatBytes(conn.download) }} · ↑ {{ formatBytes(conn.upload) }}</div>
-              <div class="whitespace-nowrap text-base-content/65">
-                <template v-if="!conn.closedAt">{{ formatBytes(conn.download) }} / {{ formatBytes(conn.upload) }} · </template>{{ connectionDuration(conn) }}
+            <div class="pointer-events-none min-w-0 text-right text-xs tabular-nums leading-5" aria-hidden="true">
+              <div v-if="row.state !== 'live'" class="truncate">{{ rowStateText(row) }}</div>
+              <div v-else-if="!row.conn.closedAt" class="truncate">↓ {{ formatSpeed(row.conn.downloadSpeed) }} · ↑ {{ formatSpeed(row.conn.uploadSpeed) }}</div>
+              <div v-else class="truncate">↓ {{ formatBytes(row.conn.download) }} · ↑ {{ formatBytes(row.conn.upload) }}</div>
+              <div class="truncate text-base-content/65" :title="row.conn.closedInBackground ? '在窗口隐藏期间结束，确切结束时间未知' : undefined">
+                <template v-if="!row.conn.closedAt">{{ formatBytes(row.conn.download) }} / {{ formatBytes(row.conn.upload) }} · </template>{{ connectionDuration(row.conn) }}
               </div>
             </div>
             <button
               v-if="activeTab === 'active'"
               type="button"
               tabindex="-1"
-              class="relative z-[1] btn btn-ghost btn-xs btn-circle text-[color:var(--danger-ink)]"
-              :aria-label="`断开 ${getHost(conn)}`"
+              class="relative z-[1] btn btn-ghost btn-xs btn-circle text-[color:var(--danger-ink)] disabled:bg-transparent"
+              :disabled="row.state !== 'live'"
+              :aria-label="`断开 ${getHost(row.conn)}`"
               title="断开连接 (Delete)"
-              @click="disconnect(conn)"
+              @click="disconnect(row.conn)"
             >
               <svg class="h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
                 <path d="M3 3l6 6M9 3 3 9" />
               </svg>
             </button>
-            <span v-else class="w-6" aria-hidden="true"></span>
+            <span v-else aria-hidden="true"></span>
           </li>
         </ul>
 
         <div v-else-if="query" class="flex flex-col items-center gap-3 px-6 py-12 text-center" role="status">
           <p class="text-sm text-base-content/80">没有匹配“{{ filterText.trim() }}”的{{ activeTab === 'active' ? '活跃' : '已关闭' }}连接</p>
           <button type="button" class="btn btn-sm btn-glass px-5" @click="clearSearch">清除搜索</button>
+        </div>
+        <div
+          v-else-if="activeTab === 'active' && socketState !== 'open' && apiUnreachable"
+          class="mx-auto mt-6 max-w-[520px] px-6 py-5"
+          role="alert"
+        >
+          <p class="text-base font-semibold">无法连接 Clash API</p>
+          <p class="mt-1 text-sm text-base-content/70">
+            请确认 sing-box 配置里开启了 clash_api，并且地址和密钥与当前的 Clash API 配置一致。
+          </p>
+          <dl class="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
+            <dt class="text-base-content/65">地址</dt>
+            <dd class="settings-mono break-all">{{ clashApiUrl || '未配置' }}</dd>
+            <dt class="text-base-content/65">状态</dt>
+            <dd>已连续 {{ socketFailures }} 次连接失败，仍在自动重试</dd>
+          </dl>
+          <div class="mt-4">
+            <button type="button" class="btn btn-sm btn-glass px-5" @click="router.push('/settings')">检查 API 配置</button>
+          </div>
         </div>
         <div
           v-else-if="activeTab === 'active' && socketState !== 'open'"
@@ -666,19 +785,20 @@ onBeforeUnmount(() => {
       @click.self="closeDetail"
     >
       <div
+        ref="detailDialog"
         class="glass-popover w-full max-w-2xl max-h-[80vh] flex flex-col rounded-[var(--radius-panel)]"
         role="dialog"
         aria-modal="true"
         aria-labelledby="connection-detail-title"
       >
-        <div class="flex items-center justify-between px-5 pt-4 pb-3 shrink-0">
-          <h2 id="connection-detail-title" class="font-bold text-lg">
-            连接详情<span v-if="!selectedIsOpen" class="ml-2 text-sm font-normal text-base-content/65">已关闭</span>
+        <div class="flex items-center justify-between gap-3 px-5 pt-4 pb-3 shrink-0">
+          <h2 id="connection-detail-title" class="min-w-0 truncate font-bold text-lg">
+            {{ getHost(selectedConnection) }}<span v-if="!selectedIsOpen" class="ml-2 text-sm font-normal text-base-content/65">已关闭</span>
           </h2>
           <button
             ref="detailCloseButton"
             type="button"
-            class="btn btn-sm btn-circle btn-ghost"
+            class="btn btn-sm btn-circle btn-ghost shrink-0"
             aria-label="关闭详情"
             @click="closeDetail"
           >
@@ -695,11 +815,11 @@ onBeforeUnmount(() => {
               <span class="text-base-content/65">ID</span>
               <span class="settings-mono break-all">{{ selectedConnection.id }}</span>
               <span class="text-base-content/65">类型</span>
-              <span>{{ selectedConnection.metadata.network }} / {{ selectedConnection.metadata.type }}</span>
+              <span>{{ selectedConnection.metadata.network.toUpperCase() }} / {{ selectedConnection.metadata.type }}</span>
               <span class="text-base-content/65">主机</span>
               <span class="break-all">{{ getHost(selectedConnection) }}</span>
               <span class="text-base-content/65">规则</span>
-              <span class="break-words">{{ selectedConnection.rule || '默认出站' }}</span>
+              <span class="break-words">{{ ruleText(selectedConnection) }}</span>
               <span v-if="selectedConnection.rulePayload" class="text-base-content/65">规则载荷</span>
               <span v-if="selectedConnection.rulePayload" class="break-words">{{ selectedConnection.rulePayload }}</span>
               <span class="text-base-content/65">链路</span>
@@ -707,7 +827,9 @@ onBeforeUnmount(() => {
               <span class="text-base-content/65">开始时间</span>
               <span class="tabular-nums">{{ new Date(selectedConnection.start).toLocaleString() }}</span>
               <span class="text-base-content/65">持续时长</span>
-              <span class="tabular-nums">{{ connectionDuration(selectedConnection) }}</span>
+              <span class="tabular-nums">
+                {{ connectionDuration(selectedConnection) }}<template v-if="selectedConnection.closedInBackground">（在窗口隐藏期间结束，确切时间未知）</template>
+              </span>
             </div>
           </div>
 
@@ -734,8 +856,8 @@ onBeforeUnmount(() => {
             <div v-if="geoLoading" class="text-sm text-base-content/65" role="status">
               <span class="loading loading-spinner loading-xs mr-1" aria-hidden="true"></span>正在查询…
             </div>
-            <div v-else-if="geoError" class="flex items-center gap-2 text-sm text-base-content/65">
-              查询失败
+            <div v-else-if="geoError" class="flex flex-wrap items-center gap-2 text-sm text-base-content/65">
+              查询失败：{{ geoError }}
               <button type="button" class="btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]" @click="loadGeo(getDestIP(selectedConnection)!)">重试</button>
             </div>
             <div v-else-if="geoInfo" class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">

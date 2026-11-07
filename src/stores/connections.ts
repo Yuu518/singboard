@@ -12,11 +12,13 @@ const downloadTotal = ref(0)
 const uploadTotal = ref(0)
 const closedConnections = ref<Connection[]>([])
 const filterText = ref('')
-const socketState = ref<'idle' | 'connecting' | 'open'>('idle')
+const socketState = ref<'idle' | 'connecting' | 'resuming' | 'reconnecting' | 'open'>('idle')
+const socketFailures = ref(0)
 
 let ws: ReconnectingWebSocket | null = null
 let prevTraffic = new Map<string, { download: number; upload: number }>()
 let refCount = 0
+let stoppedAt = 0
 
 export function matchesFilter(c: Connection, q: string): boolean {
   const m = c.metadata
@@ -65,19 +67,25 @@ export function useConnectionsStore() {
 
   function start() {
     if (ws) return
-    socketState.value = 'connecting'
+    let backgroundSince = connections.value.length > 0 ? stoppedAt : 0
+    stoppedAt = 0
+    socketState.value = backgroundSince ? 'resuming' : 'connecting'
+    socketFailures.value = 0
     ws = createClashWS('/connections', (data: ConnectionsSnapshot) => {
       socketState.value = 'open'
+      socketFailures.value = 0
       downloadTotal.value = data.downloadTotal
       uploadTotal.value = data.uploadTotal
 
       const currentIds = new Set(data.connections.map((c) => c.id))
       const closed = connections.value.filter((c) => !currentIds.has(c.id))
       if (closed.length) {
-        const closedAt = Date.now()
-        const finished = closed.map((c) => ({ ...c, downloadSpeed: 0, uploadSpeed: 0, closedAt }))
+        const closedAt = backgroundSince || Date.now()
+        const closedInBackground = !!backgroundSince
+        const finished = closed.map((c) => ({ ...c, downloadSpeed: 0, uploadSpeed: 0, closedAt, closedInBackground }))
         closedConnections.value = [...finished, ...closedConnections.value].slice(0, 500)
       }
+      backgroundSince = 0
 
       const newTraffic = new Map<string, { download: number; upload: number }>()
       for (const conn of data.connections) {
@@ -96,20 +104,21 @@ export function useConnectionsStore() {
       connections.value = data.connections
       pushConnectionCount(data.connections.length)
     })
-    ws.addEventListener('open', () => {
-      if (socketState.value === 'connecting') socketState.value = 'open'
-    })
     ws.addEventListener('close', () => {
-      if (ws) socketState.value = 'connecting'
+      if (!ws) return
+      socketFailures.value++
+      socketState.value = 'reconnecting'
     })
   }
 
   function stop() {
     const socket = ws
     ws = null
+    if (socket) stoppedAt = Date.now()
     socket?.close()
     prevTraffic = new Map()
     socketState.value = 'idle'
+    socketFailures.value = 0
   }
 
   refCount++
@@ -148,9 +157,9 @@ export function useConnectionsStore() {
     await disconnectById(id)
   }
 
-  async function closeConnections(ids: string[]): Promise<number> {
+  async function closeConnections(ids: string[]): Promise<string[]> {
     const results = await Promise.allSettled(ids.map((id) => disconnectById(id)))
-    return results.filter((r) => r.status === 'rejected').length
+    return ids.filter((_, index) => results[index].status === 'rejected')
   }
 
   async function closeAllConnections() {
@@ -166,6 +175,7 @@ export function useConnectionsStore() {
     uploadTotal,
     filterText,
     socketState,
+    socketFailures,
     start,
     stop,
     resetOnRestart,
