@@ -7,7 +7,7 @@ export async function batchUpdateProviders<T extends { name: string; vehicleType
   label: string,
 ): Promise<{ failed: number; total: number }> {
   const { pushToast } = useToastStore()
-  const updatable = providers.filter((p) => p.vehicleType !== 'Inline')
+  const updatable = providers.filter((p) => (p.vehicleType || '').toLowerCase() !== 'inline')
   const results = await Promise.allSettled(updatable.map((p) => updateFn(p.name)))
   const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
   if (failed.length > 0) {

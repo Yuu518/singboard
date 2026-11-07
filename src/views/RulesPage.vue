@@ -42,13 +42,35 @@ function isRejectNode(name: string): boolean {
   return name.toLowerCase().includes('reject')
 }
 
+function providerVehicle(provider: RuleProvider): string {
+  return (provider.vehicleType || '').toLowerCase()
+}
+
+function isInlineProvider(provider: RuleProvider): boolean {
+  return providerVehicle(provider) === 'inline'
+}
+
 function canOpenProvider(provider: RuleProvider): boolean {
-  return provider.vehicleType !== 'Inline' && provider.behavior.toLowerCase() !== 'source'
+  return !isInlineProvider(provider) && provider.behavior.toLowerCase() !== 'source'
+}
+
+const VEHICLE_LABELS: Record<string, string> = { remote: '远程', local: '本地', inline: '内联', http: '远程', file: '本地' }
+const FORMAT_LABELS: Record<string, string> = { binary: '二进制', source: '源文件' }
+
+function providerNameParts(name: string): { prefix: string; base: string } {
+  const cut = name.lastIndexOf('/')
+  return cut < 0 ? { prefix: '', base: name } : { prefix: name.slice(0, cut + 1), base: name.slice(cut + 1) }
+}
+
+function providerSource(provider: RuleProvider): string {
+  const vehicle = VEHICLE_LABELS[providerVehicle(provider)] ?? provider.vehicleType
+  const format = FORMAT_LABELS[provider.behavior.toLowerCase()] ?? provider.behavior
+  return [vehicle, format].filter(Boolean).join(' · ')
 }
 
 function providerMeta(provider: RuleProvider): string {
   const updated = formatDate(provider.updatedAt)
-  return [provider.behavior, provider.vehicleType, updated && `${updated}更新`].filter(Boolean).join(' · ') || '—'
+  return [providerSource(provider), updated && `${updated}更新`].filter(Boolean).join(' · ') || '—'
 }
 
 const activeTab = ref<'rules' | 'providers'>('rules')
@@ -189,6 +211,12 @@ const FIELD_LABELS: Record<string, string> = {
   clash_mode: '模式',
   network_type: '网络类型',
   wifi_ssid: 'Wi-Fi',
+  wifi_bssid: 'Wi-Fi BSSID',
+  query_type: 'DNS 查询类型',
+  process_path_regex: '进程路径正则',
+  package_name_regex: '应用正则',
+  network_is_expensive: '计费网络',
+  network_is_constrained: '受限网络',
   user: '用户',
 }
 
@@ -312,6 +340,33 @@ async function loadFinalOutbound() {
 }
 
 const finalChain = computed(() => (finalOutbound.value ? resolveProxyChain(finalOutbound.value) : []))
+
+type ProviderUse = { index: number; target: string; chain: string[] }
+
+const providerUsage = computed(() => {
+  const usage: Record<string, ProviderUse[]> = {}
+  rules.value.forEach((rule, index) => {
+    const tags = ruleSetTags(rule.payload)
+    if (tags.length === 0) return
+    const action = parseRuleAction(rule.proxy)
+    const use: ProviderUse = action.kind === 'route'
+      ? { index, target: action.outbound, chain: action.chain }
+      : { index, target: action.label, chain: [] }
+    for (const tag of new Set(tags)) (usage[tag] ??= []).push(use)
+  })
+  return usage
+})
+
+function providerUsageText(name: string): string {
+  const uses = providerUsage.value[name]
+  if (!uses?.length) return '未被路由规则引用'
+  if (uses.length === 1) return `第 ${uses[0].index + 1} 条 → ${uses[0].target}`
+  return `第 ${uses.map((use) => use.index + 1).join('、')} 条`
+}
+
+function detailTypeLabel(type: string): string {
+  return FIELD_LABELS[type] ?? type
+}
 
 const searchInput = ref<HTMLInputElement | null>(null)
 const ruleQuery = computed(() => filterText.value.trim())
@@ -504,6 +559,8 @@ async function handleUpdateAll() {
 
 // ---- 规则详情弹窗 ----
 const detailProvider = ref<RuleProvider | null>(null)
+const detailUses = computed(() => (detailProvider.value ? providerUsage.value[detailProvider.value.name] ?? [] : []))
+const detailName = computed(() => providerNameParts(detailProvider.value?.name ?? ''))
 const detailLoading = ref(false)
 const detailError = ref('')
 const detailRules = ref<Array<{ type: string; value: string }>>([])
@@ -1172,7 +1229,7 @@ onBeforeUnmount(() => {
 
       <div class="surface-card flex min-h-0 flex-1 flex-col overflow-hidden">
         <div class="rules-table-container card-scroll">
-          <ul v-if="displayedProviders.length > 0" class="py-1" aria-label="规则提供商列表">
+          <ul v-if="displayedProviders.length > 0" class="rules-flow" aria-label="规则提供商列表">
             <li
               v-for="provider in displayedProviders"
               :key="provider.name"
@@ -1180,23 +1237,31 @@ onBeforeUnmount(() => {
               :class="{ 'cursor-pointer': canOpenProvider(provider) }"
               @click="canOpenProvider(provider) && openProviderDetail(provider)"
             >
+              <span class="rules-provider-tile" aria-hidden="true">
+                <svg v-if="providerVehicle(provider) === 'remote' || providerVehicle(provider) === 'http'" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5a3 3 0 0 1-.4-5.97A4 4 0 0 1 11.8 6a2.75 2.75 0 0 1 .2 5.5" /><path d="M8 8.5v5M6.2 11.7 8 13.5l1.8-1.8" /></svg>
+                <svg v-else-if="isInlineProvider(provider)" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3c-1.5 0-2 .6-2 1.8v1.4C4 7.3 3.5 8 2.5 8 3.5 8 4 8.7 4 9.8v1.4C4 12.4 4.5 13 6 13M10 3c1.5 0 2 .6 2 1.8v1.4c0 1.1.5 1.8 1.5 1.8-1 0-1.5.7-1.5 1.8v1.4c0 1.2-.5 1.8-2 1.8" /></svg>
+                <svg v-else viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M4 2.5h5l3 3v8H4z" /><path d="M9 2.5v3h3" /></svg>
+              </span>
               <div class="min-w-0">
                 <button
                   v-if="canOpenProvider(provider)"
                   type="button"
-                  class="rules-line-payload rules-provider-name block w-full rounded-sm text-left"
+                  class="rules-provider-name block w-full rounded-sm text-left"
                   :title="provider.name"
                   :aria-label="`查看规则提供商 ${provider.name} 的详情`"
                   @click.stop="openProviderDetail(provider)"
-                >{{ provider.name }}</button>
-                <div v-else class="rules-line-payload" :title="provider.name">{{ provider.name }}</div>
-                <div class="rules-line-meta">{{ providerMeta(provider) }}</div>
+                ><span v-if="providerNameParts(provider.name).prefix" class="rules-name-prefix">{{ providerNameParts(provider.name).prefix }}</span>{{ providerNameParts(provider.name).base }}</button>
+                <div v-else class="rules-provider-name" :title="provider.name"><span v-if="providerNameParts(provider.name).prefix" class="rules-name-prefix">{{ providerNameParts(provider.name).prefix }}</span>{{ providerNameParts(provider.name).base }}</div>
+                <div class="rules-provider-meta">
+                  {{ providerMeta(provider) }} ·
+                  <span :class="{ 'text-base-content/45': !providerUsage[provider.name] }">{{ providerUsageText(provider.name) }}</span>
+                </div>
               </div>
-              <span class="whitespace-nowrap text-xs tabular-nums text-base-content/65">{{ provider.ruleCount.toLocaleString() }} 条</span>
+              <span class="rules-provider-count"><b>{{ provider.ruleCount.toLocaleString() }}</b> 条</span>
               <button
-                v-if="provider.vehicleType !== 'Inline'"
+                v-if="!isInlineProvider(provider)"
                 type="button"
-                class="btn btn-ghost btn-xs btn-square"
+                class="btn btn-ghost btn-sm btn-circle"
                 :aria-busy="updatingProviders.has(provider.name)"
                 :disabled="updatingProviders.has(provider.name) || updatingAll"
                 @click.stop="handleUpdateProvider(provider.name)"
@@ -1246,17 +1311,26 @@ onBeforeUnmount(() => {
         aria-modal="true"
         aria-labelledby="rule-detail-title"
       >
-        <div class="flex items-start justify-between gap-3 px-5 pt-4 pb-3 shrink-0">
-          <div class="flex min-w-0 flex-col gap-1.5">
-            <div class="flex min-w-0 items-baseline gap-2">
-              <h2 id="rule-detail-title" class="min-w-0 truncate font-semibold text-base">{{ detailProvider.name }}</h2>
-              <span class="shrink-0 text-xs tabular-nums text-base-content/65">{{ detailProvider.ruleCount }} 条规则</span>
-            </div>
-            <div class="flex items-center gap-1.5">
-              <span v-if="detailProvider.behavior" class="rules-badge">{{ detailProvider.behavior }}</span>
-              <span v-if="detailProvider.vehicleType" class="rules-badge">{{ detailProvider.vehicleType }}</span>
-              <span class="text-xs text-base-content/65">{{ formatDate(detailProvider.updatedAt) }}</span>
-            </div>
+        <div class="flex shrink-0 items-start gap-3 px-5 pt-5 pb-3">
+          <span class="rules-provider-tile rules-provider-tile--lg" aria-hidden="true">
+            <svg v-if="providerVehicle(detailProvider) === 'remote' || providerVehicle(detailProvider) === 'http'" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5a3 3 0 0 1-.4-5.97A4 4 0 0 1 11.8 6a2.75 2.75 0 0 1 .2 5.5" /><path d="M8 8.5v5M6.2 11.7 8 13.5l1.8-1.8" /></svg>
+            <svg v-else viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M4 2.5h5l3 3v8H4z" /><path d="M9 2.5v3h3" /></svg>
+          </span>
+          <div class="min-w-0 flex-1">
+            <h2 id="rule-detail-title" class="truncate text-base font-semibold leading-[22px]" :title="detailProvider.name">
+              <span v-if="detailName.prefix" class="rules-name-prefix">{{ detailName.prefix }}</span>{{ detailName.base }}
+            </h2>
+            <p class="mt-0.5 text-xs text-base-content/65">
+              {{ providerSource(detailProvider) }} · <span class="tabular-nums">{{ detailProvider.ruleCount.toLocaleString() }}</span> 条<template v-if="detailProvider.updatedAt"> · {{ formatDate(detailProvider.updatedAt) }}更新</template>
+            </p>
+            <p v-if="detailUses.length === 1" class="rules-usage-pill" :title="[detailUses[0].target, ...detailUses[0].chain.slice(1)].join(' › ')">
+              <span class="text-base-content/65">用于第 {{ detailUses[0].index + 1 }} 条规则 →</span>
+              <span class="font-semibold">{{ detailUses[0].target }}</span>
+              <span v-if="detailUses[0].chain.length > 1" class="min-w-0 truncate text-base-content/65">› {{ detailUses[0].chain[detailUses[0].chain.length - 1] }}</span>
+            </p>
+            <p v-else-if="detailUses.length > 1" class="rules-usage-pill">
+              <span class="text-base-content/65">用于第 {{ detailUses.map((use) => use.index + 1).join('、') }} 条规则</span>
+            </p>
           </div>
           <button
             type="button"
@@ -1305,8 +1379,11 @@ onBeforeUnmount(() => {
             <span
               v-if="detailQuery && !detailMatchSearching && (detailMatchResult !== null || detailMatchError)"
               class="rules-match-pill"
-              :class="{ 'rules-match-pill--hit': detailMatchResult }"
-            >{{ detailMatchError ? '无法查询' : detailMatchResult ? '匹配' : '未匹配' }}</span>
+              :class="{ 'rules-match-pill--hit': detailMatchResult && !detailMatchError }"
+            >
+              <svg v-if="detailMatchResult && !detailMatchError" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7" /></svg>
+              {{ detailMatchError ? '无法查询' : detailMatchResult ? '命中' : '未命中' }}
+            </span>
           </span>
         </div>
 
@@ -1321,14 +1398,9 @@ onBeforeUnmount(() => {
             <button type="button" class="btn btn-sm btn-glass mt-3 px-5" @click="detailProvider && loadDetailRules(detailProvider)">重试</button>
           </div>
           <template v-else>
-            <div class="surface-fill flex text-xs font-semibold text-base-content/65 rounded-[var(--radius-control)] px-2 shrink-0" :style="{ height: ROW_HEIGHT + 'px', lineHeight: ROW_HEIGHT + 'px' }">
-              <span class="w-12 shrink-0">#</span>
-              <span class="w-28 shrink-0">类型</span>
-              <span class="flex-1">内容</span>
-            </div>
             <div
               ref="detailScrollRef"
-              class="flex-1 overflow-auto min-h-0"
+              class="rules-entries card-scroll"
               @scroll="onDetailScroll"
             >
               <p v-if="filteredDetailRules.length === 0" class="py-10 text-center text-sm text-base-content/65">
@@ -1339,14 +1411,12 @@ onBeforeUnmount(() => {
                   <div
                     v-for="(rule, j) in virtualSlice.items"
                     :key="virtualSlice.startIdx + j"
-                    class="flex items-center rounded-lg px-2 text-xs hover:bg-base-content/[0.05]"
+                    class="rules-entry"
                     :style="{ height: ROW_HEIGHT + 'px' }"
                   >
-                    <span class="w-12 shrink-0 tabular-nums text-base-content/65">{{ virtualSlice.startIdx + j + 1 }}</span>
-                    <span class="w-28 shrink-0">
-                      <span class="rules-badge">{{ rule.type }}</span>
-                    </span>
-                    <span class="flex-1 truncate" :title="rule.value">{{ rule.value }}</span>
+                    <span class="rules-entry-index">{{ virtualSlice.startIdx + j + 1 }}</span>
+                    <span class="rules-entry-type">{{ filteredDetailRules[virtualSlice.startIdx + j - 1]?.type === rule.type && j > 0 ? '' : detailTypeLabel(rule.type) }}</span>
+                    <span class="rules-entry-value" :title="`${detailTypeLabel(rule.type)} ${rule.value}`">{{ rule.value }}</span>
                   </div>
                 </div>
               </div>
@@ -1385,12 +1455,6 @@ onBeforeUnmount(() => {
 
 .rules-table-container {
   @apply flex-1 min-h-0 overflow-auto;
-}
-
-.rules-badge {
-  @apply inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-base-content/10 px-2 text-xs text-base-content/70;
-  min-height: 20px;
-  line-height: 16px;
 }
 
 .rules-flow {
@@ -1542,11 +1606,43 @@ button.rules-set-hit:hover {
 }
 
 .rules-provider-line {
-  @apply mx-1 grid grid-cols-[minmax(0,1fr)_auto_1.75rem] items-center gap-x-3 rounded-[var(--radius-control)] px-3 py-2 transition-colors hover:bg-base-content/[0.05];
+  @apply grid items-center gap-x-3 rounded-[var(--radius-tile)] transition-colors hover:bg-base-content/[0.05];
+  grid-template-columns: 30px minmax(0, 1fr) auto 2rem;
+  min-height: 52px;
+  padding: 7px 8px 7px 10px;
 }
 
-.rules-provider-name:hover {
+.rules-provider-tile {
+  @apply flex shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-[var(--fill)] text-base-content/60;
+  width: 30px;
+  height: 30px;
+}
+
+.rules-provider-tile svg {
+  @apply h-4 w-4;
+}
+
+.rules-provider-tile--lg {
+  @apply rounded-[var(--radius-tile)];
+  width: 40px;
+  height: 40px;
+}
+
+.rules-provider-tile--lg svg {
+  @apply h-5 w-5;
+}
+
+.rules-provider-name {
+  @apply truncate text-[13px] font-semibold leading-5 text-base-content transition-colors;
+}
+
+button.rules-provider-name:hover {
   color: var(--selection-ink);
+}
+
+button.rules-provider-name:hover .rules-name-prefix {
+  color: inherit;
+  opacity: 0.6;
 }
 
 .rules-provider-name:focus-visible {
@@ -1554,20 +1650,59 @@ button.rules-set-hit:hover {
   outline-offset: 1px;
 }
 
-.rules-line-payload {
-  @apply truncate text-xs font-medium leading-[18px] text-base-content;
+.rules-name-prefix {
+  @apply font-normal text-base-content/45;
 }
 
-.rules-line-meta {
-  @apply mt-0.5 truncate text-xs leading-[18px] text-base-content/65;
+.rules-provider-meta {
+  @apply truncate text-xs leading-[18px] text-base-content/65;
+}
+
+.rules-provider-count {
+  @apply whitespace-nowrap text-xs tabular-nums text-base-content/55;
+}
+
+.rules-provider-count b {
+  @apply text-[13px] font-semibold text-base-content;
+}
+
+.rules-usage-pill {
+  @apply mt-1.5 inline-flex max-w-full items-baseline gap-[5px] whitespace-nowrap rounded-full bg-[var(--fill)] px-2.5 py-[3px] text-xs;
 }
 
 .rules-match-pill {
-  @apply inline-flex items-center rounded-full bg-base-content/[0.06] px-2.5 py-1 text-xs leading-none text-base-content/65;
+  @apply inline-flex h-[26px] items-center gap-1 rounded-full bg-base-content/[0.06] px-2.5 text-xs text-base-content/65;
+}
+
+.rules-match-pill svg {
+  @apply h-[13px] w-[13px];
 }
 
 .rules-match-pill--hit {
-  @apply bg-base-content/10 font-semibold text-base-content;
+  @apply bg-[#007aff]/15 pl-[9px] font-semibold;
+  color: var(--selection-ink);
+}
+
+.rules-entries {
+  @apply min-h-0 flex-1 overflow-auto rounded-[var(--radius-tile)] bg-[var(--fill)] px-1;
+}
+
+.rules-entry {
+  @apply grid items-center gap-x-2.5 rounded-lg px-2.5 hover:bg-base-content/[0.05];
+  grid-template-columns: 2.5rem 6rem minmax(0, 1fr);
+}
+
+.rules-entry-index {
+  @apply text-right text-[11px] tabular-nums text-base-content/55;
+}
+
+.rules-entry-type {
+  @apply truncate text-xs text-base-content/65;
+}
+
+.rules-entry-value {
+  @apply truncate text-xs;
+  font-family: 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace;
 }
 
 .rules-empty {
