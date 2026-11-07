@@ -51,6 +51,8 @@
   --danger-fill: #d92b20;
   --danger-fill-hover: #c8241a;
   --danger-ink: #b5150b;
+  --tcp-ink: #006a8e;
+  --udp-ink: #8e2fbf;
 }
 
 [data-theme='dark'] {
@@ -95,6 +97,8 @@
   --latency-fail-ink: #ff8f87;
   --selection-ink: #62afff;
   --danger-ink: #ff8f87;
+  --tcp-ink: #64d2ff;
+  --udp-ink: #d38df5;
 }
 
 :root,

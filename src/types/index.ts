@@ -55,6 +55,7 @@ export interface Connection {
   rulePayload: string
   downloadSpeed: number
   uploadSpeed: number
+  closedAt?: number
 }
 
 export interface ConnectionMetadata {

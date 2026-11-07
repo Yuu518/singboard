@@ -1,5 +1,5 @@
 export function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
+  if (!bytes || bytes < 0) return '0 B'
   const k = 1024
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
@@ -7,7 +7,7 @@ export function formatBytes(bytes: number): string {
 }
 
 export function formatSpeed(bytes: number): string {
-  if (bytes <= 0) return '0 B/s'
+  if (!bytes || bytes <= 0) return '0 B/s'
   const k = 1024
   const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
@@ -20,8 +20,8 @@ export function formatLatency(delay: number): string {
   return delay + 'ms'
 }
 
-export function formatDuration(start: string): string {
-  const ms = Date.now() - new Date(start).getTime()
+export function formatDuration(start: string, end = Date.now()): string {
+  const ms = Math.max(0, end - new Date(start).getTime())
   const s = Math.floor(ms / 1000)
   if (s < 60) return s + 's'
   const m = Math.floor(s / 60)

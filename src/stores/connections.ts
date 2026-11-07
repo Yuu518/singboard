@@ -11,20 +11,22 @@ const connections = ref<Connection[]>([])
 const downloadTotal = ref(0)
 const uploadTotal = ref(0)
 const closedConnections = ref<Connection[]>([])
-const paused = ref(false)
 const filterText = ref('')
+const socketState = ref<'idle' | 'connecting' | 'open'>('idle')
 
 let ws: ReconnectingWebSocket | null = null
 let prevTraffic = new Map<string, { download: number; upload: number }>()
 let refCount = 0
 
-function matchesFilter(c: Connection, q: string): boolean {
+export function matchesFilter(c: Connection, q: string): boolean {
   const m = c.metadata
   return (
     (m.host || '').toLowerCase().includes(q) ||
     (m.sniffHost || '').toLowerCase().includes(q) ||
     (m.destinationIP || '').toLowerCase().includes(q) ||
     (m.sourceIP || '').toLowerCase().includes(q) ||
+    String(m.destinationPort ?? '').includes(q) ||
+    (m.network || '').toLowerCase().includes(q) ||
     (m.process || '').toLowerCase().includes(q) ||
     (m.processPath || '').toLowerCase().includes(q) ||
     (c.chains || []).join(' ').toLowerCase().includes(q) ||
@@ -63,15 +65,18 @@ export function useConnectionsStore() {
 
   function start() {
     if (ws) return
+    socketState.value = 'connecting'
     ws = createClashWS('/connections', (data: ConnectionsSnapshot) => {
-      if (paused.value) return
+      socketState.value = 'open'
       downloadTotal.value = data.downloadTotal
       uploadTotal.value = data.uploadTotal
 
       const currentIds = new Set(data.connections.map((c) => c.id))
       const closed = connections.value.filter((c) => !currentIds.has(c.id))
       if (closed.length) {
-        closedConnections.value = [...closed, ...closedConnections.value].slice(0, 500)
+        const closedAt = Date.now()
+        const finished = closed.map((c) => ({ ...c, downloadSpeed: 0, uploadSpeed: 0, closedAt }))
+        closedConnections.value = [...finished, ...closedConnections.value].slice(0, 500)
       }
 
       const newTraffic = new Map<string, { download: number; upload: number }>()
@@ -91,12 +96,20 @@ export function useConnectionsStore() {
       connections.value = data.connections
       pushConnectionCount(data.connections.length)
     })
+    ws.addEventListener('open', () => {
+      if (socketState.value === 'connecting') socketState.value = 'open'
+    })
+    ws.addEventListener('close', () => {
+      if (ws) socketState.value = 'connecting'
+    })
   }
 
   function stop() {
-    ws?.close()
+    const socket = ws
     ws = null
+    socket?.close()
     prevTraffic = new Map()
+    socketState.value = 'idle'
   }
 
   refCount++
@@ -105,6 +118,7 @@ export function useConnectionsStore() {
     () => {
       if (ws) {
         stop()
+        connections.value = []
         start()
       }
     },
@@ -134,6 +148,11 @@ export function useConnectionsStore() {
     await disconnectById(id)
   }
 
+  async function closeConnections(ids: string[]): Promise<number> {
+    const results = await Promise.allSettled(ids.map((id) => disconnectById(id)))
+    return results.filter((r) => r.status === 'rejected').length
+  }
+
   async function closeAllConnections() {
     await disconnectAll()
   }
@@ -145,12 +164,13 @@ export function useConnectionsStore() {
     filteredClosedConnections,
     downloadTotal,
     uploadTotal,
-    paused,
     filterText,
+    socketState,
     start,
     stop,
     resetOnRestart,
     closeConnection,
+    closeConnections,
     closeAllConnections,
   }
 }

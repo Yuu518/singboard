@@ -13,9 +13,9 @@ import { getRequestErrorReason } from '@/utils/requestError'
 import { useToastStore } from '@/stores/toast'
 import { formatBytes, formatLatency, formatDate, latencyColor, dotColor } from '@/utils/format'
 import { batchUpdateProviders } from '@/utils/batchUpdate'
-import { startCore } from '@/utils/coreControl'
-import { isElevationCancelled } from '@/bridge/service'
 import GroupSpeed from '@/components/proxies/GroupSpeed.vue'
+import ServiceNotice from '@/components/common/ServiceNotice.vue'
+import { useSettledServiceState } from '@/composables/useSettledServiceState'
 import { appVisible } from '@/stores/appVisible'
 
 const {
@@ -38,58 +38,15 @@ import { useConfigStore } from '@/stores/config'
 import { useConnectionsStore } from '@/stores/connections'
 const { config, clashApiUrl } = useConfigStore()
 const { pushToast } = useToastStore()
-const { serviceStatus, refresh: refreshService } = useServiceStore()
+const { serviceStatus } = useServiceStore()
 const router = useRouter()
 const { start: startConnections } = useConnectionsStore()
 
-const UNKNOWN_GRACE_MS = 5000
-const serviceState = ref(serviceStatus.value.state)
-let unknownSince = 0
-
-watch(serviceStatus, (status) => {
-  if (status.state !== 'unknown') {
-    unknownSince = 0
-    serviceState.value = status.state
-    return
-  }
-  if (!unknownSince) unknownSince = Date.now()
-  if (Date.now() - unknownSince >= UNKNOWN_GRACE_MS) serviceState.value = 'unknown'
-})
-
-const isRunning = computed(() => serviceState.value === 'running')
+const { serviceState, isRunning } = useSettledServiceState()
 
 const coreWarmingUp = computed(() =>
   serviceStatus.value.state === 'running' && (serviceStatus.value.uptimeSeconds ?? Infinity) < 15
 )
-
-const serviceNotice = computed(() => {
-  switch (serviceState.value) {
-    case 'stopped':
-      return { title: 'sing-box 服务已停止', detail: '启动服务后即可查看代理组和节点延迟。', action: 'start' as const }
-    case 'starting':
-      return { title: '正在启动 sing-box…', detail: '核心启动后会自动加载代理组。', action: null }
-    case 'stopping':
-      return { title: '正在停止 sing-box…', detail: '服务停止后可以在这里重新启动。', action: null }
-    case 'not_installed':
-      return { title: '尚未安装 singboard 服务', detail: '在设置中安装服务后，即可启动 sing-box。', action: 'settings' as const }
-    default:
-      return { title: '无法获取服务状态', detail: '可以在设置中查看服务状态和错误日志。', action: 'settings' as const }
-  }
-})
-
-const startingService = ref(false)
-
-async function handleStartService() {
-  if (startingService.value) return
-  startingService.value = true
-  try {
-    await startCore()
-  } catch (e: any) {
-    if (!isElevationCancelled(e)) pushToast({ message: '启动服务失败: ' + (e?.message || e), type: 'error' }, 6000)
-  }
-  await refreshService()
-  startingService.value = false
-}
 
 const activeTab = ref<'groups' | 'providers'>('groups')
 
@@ -602,37 +559,13 @@ watch(
 <template>
   <div class="flex flex-col h-full gap-3">
     <span class="sr-only" aria-live="polite">{{ announcement }}</span>
-    <template v-if="!isRunning">
-      <h1 class="sr-only">代理</h1>
-      <div class="flex flex-col items-center justify-center flex-1 gap-4 px-6" role="status" aria-live="polite">
-        <span v-if="!serviceNotice.action" class="loading loading-spinner loading-lg text-base-content/40" aria-hidden="true"></span>
-        <svg v-else xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1" stroke="currentColor" class="w-16 h-16 text-base-content/40" aria-hidden="true">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M5.636 5.636a9 9 0 1012.728 0M12 3v9" />
-        </svg>
-        <div class="text-center space-y-1">
-          <p class="text-lg font-medium text-base-content/80">{{ serviceNotice.title }}</p>
-          <p class="text-sm text-base-content/65">{{ serviceNotice.detail }}</p>
-        </div>
-        <button
-          v-if="serviceNotice.action === 'start'"
-          type="button"
-          class="btn btn-sm btn-primary px-5"
-          :disabled="startingService"
-          @click="handleStartService"
-        >
-          <span v-if="startingService" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
-          启动服务
-        </button>
-        <button
-          v-else-if="serviceNotice.action === 'settings'"
-          type="button"
-          class="btn btn-sm btn-glass px-5"
-          @click="router.push('/settings')"
-        >
-          前往设置
-        </button>
-      </div>
-    </template>
+    <ServiceNotice
+      v-if="!isRunning"
+      :state="serviceState"
+      page-title="代理"
+      stopped-detail="启动服务后即可查看代理组和节点延迟。"
+      starting-detail="核心启动后会自动加载代理组。"
+    />
 
     <template v-else>
     <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
