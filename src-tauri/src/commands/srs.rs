@@ -1754,39 +1754,53 @@ pub async fn srs_list_provider(
 /// 1) try cache.db if available
 /// 2) fallback to local `<tag>.srs` under configured sing-box related directories recursively
 #[tauri::command]
-pub fn srs_match_provider(
+pub async fn srs_match_provider(
     working_dir: String,
     config_path: String,
     singbox_path: String,
     tag: String,
     query: String,
 ) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        match_provider_blocking(&working_dir, &config_path, &singbox_path, &tag, &query)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+fn match_provider_blocking(
+    working_dir: &str,
+    config_path: &str,
+    singbox_path: &str,
+    tag: &str,
+    query: &str,
+) -> Result<bool, String> {
     let mut last_cache_error: Option<String> = None;
 
-    if let Some(cache_path) = find_cache_db(&[&working_dir, &config_path, &singbox_path]) {
+    if let Some(cache_path) = find_cache_db(&[working_dir, config_path, singbox_path]) {
         match srs_match_cache(
             cache_path.to_string_lossy().into_owned(),
-            tag.clone(),
-            query.clone(),
+            tag.to_string(),
+            query.to_string(),
         ) {
             Ok(v) => return Ok(v),
             Err(e) => last_cache_error = Some(e),
         }
     }
 
-    if let Some(srs_path) = find_local_srs_from_config(&working_dir, &config_path, &tag) {
+    if let Some(srs_path) = find_local_srs_from_config(working_dir, config_path, tag) {
         let data = std::fs::read(&srs_path)
             .map_err(|e| format!("read '{}': {}", srs_path.to_string_lossy(), e))?;
-        let q = parse_query(&query);
+        let q = parse_query(query);
         return srs_match_bytes(&data, &q);
     }
 
     if let Some(srs_path) =
-        find_local_srs_by_tag(&[&working_dir, &config_path, &singbox_path], &tag)
+        find_local_srs_by_tag(&[working_dir, config_path, singbox_path], tag)
     {
         let data = std::fs::read(&srs_path)
             .map_err(|e| format!("read '{}': {}", srs_path.to_string_lossy(), e))?;
-        let q = parse_query(&query);
+        let q = parse_query(query);
         return srs_match_bytes(&data, &q);
     }
 

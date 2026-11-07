@@ -5,7 +5,7 @@ export async function batchUpdateProviders<T extends { name: string; vehicleType
   providers: T[],
   updateFn: (name: string) => Promise<unknown>,
   label: string,
-): Promise<void> {
+): Promise<{ failed: number; total: number }> {
   const { pushToast } = useToastStore()
   const updatable = providers.filter((p) => p.vehicleType !== 'Inline')
   const results = await Promise.allSettled(updatable.map((p) => updateFn(p.name)))
@@ -17,4 +17,5 @@ export async function batchUpdateProviders<T extends { name: string; vehicleType
       message: `部分${label}更新失败 (${failed.length}/${updatable.length})\n原因: ${reasons.join('；')}`,
     })
   }
+  return { failed: failed.length, total: updatable.length }
 }
