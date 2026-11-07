@@ -9,7 +9,8 @@ import { getRequestErrorReason } from '@/utils/requestError'
 import { useToastStore } from '@/stores/toast'
 import { useConfigStore } from '@/stores/config'
 import { useProxiesStore } from '@/stores/proxies'
-import { srsMatchProvider, srsListProvider, getRunningConfigPath } from '@/bridge/config'
+import { srsMatchProvider, srsListProvider, getRunningConfigPath, readSingboxConfig } from '@/bridge/config'
+import { parseJsonWithComments } from '@/utils/jsonc'
 import { formatDate } from '@/utils/format'
 import { batchUpdateProviders } from '@/utils/batchUpdate'
 import ServiceNotice from '@/components/common/ServiceNotice.vue'
@@ -163,31 +164,154 @@ function ruleSetTags(payload: string): string[] {
   return tags
 }
 
-type PayloadPart = { text: string; provider: RuleProvider | null }
+type ConditionToken =
+  | { kind: 'text' | 'word' | 'mono'; text: string }
+  | { kind: 'set'; text: string; full: string; provider: RuleProvider | null }
 
-function payloadParts(payload: string): PayloadPart[] {
-  const parts: PayloadPart[] = []
-  const pushText = (text: string) => {
-    if (!text) return
-    const last = parts[parts.length - 1]
-    if (last && !last.provider) last.text += text
-    else parts.push({ text, provider: null })
-  }
-  let cursor = 0
-  for (const match of payload.matchAll(RULE_SET_PATTERN)) {
-    const start = match.index ?? 0
-    const bodyStart = start + 'rule_set='.length
-    pushText(payload.slice(cursor, bodyStart))
-    for (const token of match[1].split(/([\s[\]]+)/)) {
-      const provider = providerByName.value[token]
-      if (provider && canOpenProvider(provider)) parts.push({ text: token, provider })
-      else pushText(token)
-    }
-    cursor = start + match[0].length
-  }
-  pushText(payload.slice(cursor))
-  return parts
+const FIELD_LABELS: Record<string, string> = {
+  domain: '域名',
+  domain_suffix: '域名后缀',
+  domain_keyword: '域名关键词',
+  domain_regex: '域名正则',
+  ip_cidr: 'IP 段',
+  source_ip_cidr: '来源 IP 段',
+  default_interface_address: '默认网卡地址',
+  port: '端口',
+  source_port: '来源端口',
+  port_range: '端口范围',
+  source_port_range: '来源端口范围',
+  protocol: '协议',
+  network: '网络',
+  process_name: '进程',
+  process_path: '进程路径',
+  package_name: '应用',
+  inbound: '入站',
+  clash_mode: '模式',
+  network_type: '网络类型',
+  wifi_ssid: 'Wi-Fi',
+  user: '用户',
 }
+
+const MONO_FIELDS = new Set([
+  'ip_cidr',
+  'source_ip_cidr',
+  'default_interface_address',
+  'port',
+  'source_port',
+  'port_range',
+  'source_port_range',
+  'domain',
+  'domain_suffix',
+  'domain_regex',
+  'process_path',
+])
+const UPPER_FIELDS = new Set(['protocol', 'network'])
+const CONDITION_ITEM = /([a-z_]+)=(\[[^\]]*\]|\S+)/g
+
+function conditionValues(raw: string): string[] {
+  return raw.startsWith('[') ? raw.slice(1, -1).split(/\s+/).filter(Boolean) : [raw]
+}
+
+function conditionItemTokens(key: string, raw: string): ConditionToken[] {
+  const list = conditionValues(raw)
+  if (key === 'rule_set') {
+    return list.map((full) => {
+      const provider = providerByName.value[full]
+      return {
+        kind: 'set',
+        full,
+        text: full.slice(full.lastIndexOf('/') + 1),
+        provider: provider && canOpenProvider(provider) ? provider : null,
+      }
+    })
+  }
+  if (key === 'ip_is_private') return [{ kind: 'text', text: raw === 'true' ? '私有 IP' : '非私有 IP' }]
+  if (key === 'ip_version') return [{ kind: 'text', text: `IPv${raw}` }]
+  const label = FIELD_LABELS[key]
+  if (!label) return [{ kind: 'mono', text: `${key}=${raw}` }]
+  const tokens: ConditionToken[] = [{ kind: 'word', text: label }]
+  list.forEach((value, i) => {
+    if (i > 0) tokens.push({ kind: 'word', text: '、' })
+    tokens.push({
+      kind: MONO_FIELDS.has(key) ? 'mono' : 'text',
+      text: UPPER_FIELDS.has(key) ? value.toUpperCase() : value,
+    })
+  })
+  return tokens
+}
+
+function conditionTermTokens(term: string): ConditionToken[] {
+  let body = term.trim()
+  const tokens: ConditionToken[] = []
+  const negated = /^!\((.*)\)$/.exec(body)
+  if (negated) {
+    tokens.push({ kind: 'word', text: '不满足' })
+    body = negated[1]
+  } else if (/^\(.*\)$/.test(body)) {
+    body = body.slice(1, -1)
+  }
+  const items = [...body.matchAll(CONDITION_ITEM)]
+  if (items.length === 0) return [...tokens, { kind: 'mono', text: body }]
+  items.forEach((match, i) => {
+    if (i > 0) tokens.push({ kind: 'word', text: '，' })
+    tokens.push(...conditionItemTokens(match[1], match[2]))
+  })
+  return tokens
+}
+
+function conditionTokens(payload: string): ConditionToken[] {
+  if (!payload) return [{ kind: 'word', text: '所有流量' }]
+  const tokens: ConditionToken[] = []
+  for (const part of payload.split(/\s(&&|\|\|)\s/)) {
+    if (part === '&&') tokens.push({ kind: 'word', text: '且' })
+    else if (part === '||') tokens.push({ kind: 'word', text: '或' })
+    else tokens.push(...conditionTermTokens(part))
+  }
+  return tokens
+}
+
+type RuleIcon = 'ban' | 'dns' | 'sniff' | 'resolve' | 'options'
+
+type RuleAction =
+  | { kind: 'route'; outbound: string; chain: string[] }
+  | { kind: 'reject' | 'stop' | 'pass'; label: string; icon: RuleIcon }
+
+function parseRuleAction(proxy: string): RuleAction {
+  const route = /^route\((.*)\)$/.exec(proxy)
+  if (route) {
+    const outbound = route[1].split(',')[0].trim()
+    return { kind: 'route', outbound, chain: resolveProxyChain(outbound) }
+  }
+  if (proxy === 'reject') return { kind: 'reject', label: '拒绝', icon: 'ban' }
+  if (proxy === 'reject(drop)') return { kind: 'reject', label: '丢弃', icon: 'ban' }
+  if (proxy.startsWith('reject')) return { kind: 'reject', label: '拒绝', icon: 'ban' }
+  if (proxy === 'hijack-dns') return { kind: 'stop', label: '劫持 DNS', icon: 'dns' }
+  if (proxy.startsWith('sniff')) return { kind: 'pass', label: '嗅探', icon: 'sniff' }
+  if (proxy === 'resolve(match_only)') return { kind: 'pass', label: '解析 · 仅匹配', icon: 'resolve' }
+  if (proxy.startsWith('resolve')) return { kind: 'pass', label: '解析', icon: 'resolve' }
+  if (proxy.startsWith('route-options')) return { kind: 'pass', label: '路由选项', icon: 'options' }
+  return { kind: 'route', outbound: proxy, chain: resolveProxyChain(proxy) }
+}
+
+const finalOutbound = ref('')
+let finalRequest = 0
+
+async function loadFinalOutbound() {
+  const request = ++finalRequest
+  let tag = ''
+  try {
+    const source = await readSingboxConfig(await getRunningConfigPath())
+    const parsed = parseJsonWithComments<{ route?: { final?: unknown }; outbounds?: { tag?: unknown }[] }>(source)
+    const final = parsed?.route?.final
+    const first = parsed?.outbounds?.[0]?.tag
+    tag = typeof final === 'string' && final ? final : typeof first === 'string' ? first : ''
+  } catch {
+    tag = ''
+  }
+  if (request === finalRequest) finalOutbound.value = tag
+}
+
+const finalChain = computed(() => (finalOutbound.value ? resolveProxyChain(finalOutbound.value) : []))
 
 const searchInput = ref<HTMLInputElement | null>(null)
 const ruleQuery = computed(() => filterText.value.trim())
@@ -231,8 +355,8 @@ const ruleSetFailureNote = computed(() => {
 type RuleRow = {
   rule: Rule
   index: number
-  parts: PayloadPart[]
-  chain: string[]
+  tokens: ConditionToken[]
+  action: RuleAction
   detailTarget: RuleProvider | null
 }
 
@@ -248,14 +372,14 @@ const ruleRows = computed<RuleRow[]>(() => {
     const setHit = !!matchedSets && matchedSets.size > 0
       && ruleSetTags(rule.payload).some((tag) => matchedSets.has(tag))
     if (!textHit && !setHit) return
-    const parts = payloadParts(rule.payload)
-    const targets = parts.filter((part) => part.provider)
+    const tokens = conditionTokens(rule.payload)
+    const targets = tokens.flatMap((token) => (token.kind === 'set' && token.provider ? [token.provider] : []))
     rows.push({
       rule,
       index,
-      parts,
-      chain: resolveProxyChain(rule.proxy),
-      detailTarget: targets.length === 1 ? targets[0].provider : null,
+      tokens,
+      action: parseRuleAction(rule.proxy),
+      detailTarget: targets.length === 1 ? targets[0] : null,
     })
   })
   return rows
@@ -339,7 +463,7 @@ async function loadProviders(): Promise<string> {
 }
 
 async function loadAll() {
-  await Promise.all([loadRules(), loadProviders()])
+  await Promise.all([loadRules(), loadProviders(), loadFinalOutbound()])
 }
 
 async function refreshAfterUpdate() {
@@ -878,44 +1002,80 @@ onBeforeUnmount(() => {
 
       <div class="surface-card flex min-h-0 flex-1 flex-col overflow-hidden">
         <div class="rules-table-container card-scroll">
-          <ul v-if="ruleRows.length > 0" class="py-1" aria-label="规则列表">
+          <ol v-if="ruleRows.length > 0" class="rules-flow" aria-label="规则列表，从上到下依次匹配">
             <li
               v-for="row in ruleRows"
               :key="row.index"
-              class="rules-line"
-              :class="{ 'cursor-pointer': row.detailTarget }"
+              class="rules-step"
+              :class="[`rules-step--${row.action.kind}`, { 'cursor-pointer': row.detailTarget }]"
+              :title="`${row.rule.payload || '所有流量'} → ${row.rule.proxy}`"
               @click="row.detailTarget && openProviderDetail(row.detailTarget)"
             >
-              <span class="rules-line-index">{{ row.index + 1 }}</span>
-              <div class="min-w-0">
-                <div class="rules-line-payload" :title="row.rule.payload">
-                  <template v-if="row.rule.payload">
-                    <template v-for="(part, k) in row.parts" :key="k">
-                      <button
-                        v-if="part.provider"
-                        type="button"
-                        class="rules-set-link"
-                        :class="{ 'rules-set-hit': matchedRuleSets?.has(part.text) }"
-                        :aria-label="`查看规则提供商 ${part.text} 的详情`"
-                        @click.stop="openProviderDetail(part.provider)"
-                      >{{ part.text }}</button>
-                      <template v-else>{{ part.text }}</template>
-                    </template>
+              <span class="rules-rail" aria-hidden="true"><span class="rules-node"></span></span>
+              <span class="rules-step-index">{{ row.index + 1 }}</span>
+              <span class="rules-cond">
+                <template v-for="(token, k) in row.tokens" :key="k">
+                  <template v-if="token.kind === 'set'">
+                    <button
+                      v-if="token.provider"
+                      type="button"
+                      class="rules-set"
+                      :class="{ 'rules-set-hit': matchedRuleSets?.has(token.full) }"
+                      :aria-label="`查看规则提供商 ${token.full} 的详情`"
+                      @click.stop="openProviderDetail(token.provider)"
+                    >
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.5 13.5 5 8 7.5 2.5 5z" /><path d="m2.5 8 5.5 2.5L13.5 8" /><path d="m2.5 11 5.5 2.5 5.5-2.5" /></svg>
+                      {{ token.text }}
+                    </button>
+                    <span v-else class="rules-set" :class="{ 'rules-set-hit': matchedRuleSets?.has(token.full) }">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.5 13.5 5 8 7.5 2.5 5z" /><path d="m2.5 8 5.5 2.5L13.5 8" /><path d="m2.5 11 5.5 2.5 5.5-2.5" /></svg>
+                      {{ token.text }}
+                    </span>
                   </template>
-                  <template v-else>—</template>
-                </div>
-                <div class="rules-line-meta" :title="`${row.rule.type} · ${row.chain.join(' › ')}`">
-                  {{ row.rule.type }} ·
-                  <template v-for="(node, j) in row.chain" :key="j">
-                    <template v-if="j > 0"> › </template>
-                    <span v-if="isRejectNode(node)" class="rules-reject">{{ node }}</span>
-                    <span v-else-if="j === row.chain.length - 1" class="rules-chain-final">{{ node }}</span>
-                    <template v-else>{{ node }}</template>
-                  </template>
-                </div>
-              </div>
+                  <span v-else-if="token.kind === 'word'" class="rules-word">{{ token.text }}</span>
+                  <span v-else-if="token.kind === 'mono'" class="rules-mono">{{ token.text }}</span>
+                  <span v-else>{{ token.text }}</span>
+                </template>
+              </span>
+              <span
+                v-if="row.action.kind === 'route'"
+                class="rules-dest"
+                :title="row.action.chain.join(' › ')"
+              >
+                <span class="rules-dest-group">{{ row.action.outbound }}</span>
+                <span
+                  v-if="row.action.chain.length > 1"
+                  class="rules-dest-node"
+                  :class="{ 'rules-dest-node--reject': isRejectNode(row.action.chain[row.action.chain.length - 1]) }"
+                >› {{ row.action.chain[row.action.chain.length - 1] }}</span>
+              </span>
+              <span v-else class="rules-act" :class="`rules-act--${row.action.kind}`">
+                <svg v-if="row.action.icon === 'ban'" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="m4.2 11.8 7.6-7.6" /></svg>
+                <svg v-else-if="row.action.icon === 'dns'" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4 3 7l3 3" /><path d="M3 7h6.5a3.5 3.5 0 0 1 0 7H8" /></svg>
+                <svg v-else-if="row.action.icon === 'sniff'" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3" /><circle cx="8" cy="8" r="1.6" /></svg>
+                <svg v-else-if="row.action.icon === 'resolve'" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M2.5 8h11M8 2.5c1.6 1.6 2.3 3.5 2.3 5.5S9.6 11.9 8 13.5C6.4 11.9 5.7 10 5.7 8S6.4 4.1 8 2.5z" /></svg>
+                <svg v-else viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M3 5h10M3 11h10" /><circle cx="6" cy="5" r="1.5" /><circle cx="10" cy="11" r="1.5" /></svg>
+                {{ row.action.label }}<span v-if="row.action.kind === 'pass'" class="sr-only">，处理后继续匹配下一条</span>
+              </span>
             </li>
-          </ul>
+            <li
+              v-if="!ruleQuery && finalChain.length > 0"
+              class="rules-step rules-step--final"
+              :title="finalChain.join(' › ')"
+            >
+              <span class="rules-rail" aria-hidden="true"><span class="rules-node"></span></span>
+              <span class="rules-step-index"></span>
+              <span class="rules-cond"><span class="rules-word">以上都没有命中</span></span>
+              <span class="rules-dest">
+                <span class="rules-dest-group">{{ finalChain[0] }}</span>
+                <span
+                  v-if="finalChain.length > 1"
+                  class="rules-dest-node"
+                  :class="{ 'rules-dest-node--reject': isRejectNode(finalChain[finalChain.length - 1]) }"
+                >› {{ finalChain[finalChain.length - 1] }}</span>
+              </span>
+            </li>
+          </ol>
 
           <div v-if="loading && rules.length === 0" class="rules-empty" role="status">
             <span class="loading loading-spinner loading-md" aria-hidden="true"></span>
@@ -1227,45 +1387,158 @@ onBeforeUnmount(() => {
   @apply flex-1 min-h-0 overflow-auto;
 }
 
-.rules-set-link {
-  border-radius: 2px;
-  text-decoration-line: underline;
-  text-decoration-color: color-mix(in oklab, currentColor 35%, transparent);
-  text-underline-offset: 2px;
-}
-
-.rules-set-link:hover {
-  color: var(--selection-ink);
-  text-decoration-color: currentColor;
-}
-
-.rules-set-link:focus-visible {
-  outline: 2px solid var(--primary-fill);
-  outline-offset: 1px;
-}
-
-.rules-set-hit {
-  @apply font-semibold text-base-content;
-}
-
-.rules-badge,
-.rules-reject {
-  @apply inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2 text-xs;
+.rules-badge {
+  @apply inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-base-content/10 px-2 text-xs text-base-content/70;
   min-height: 20px;
   line-height: 16px;
 }
 
-.rules-badge {
-  @apply bg-base-content/10 text-base-content/70;
+.rules-flow {
+  @apply m-0 list-none p-1.5;
 }
 
-.rules-reject {
-  @apply bg-error/[0.12];
+.rules-step {
+  @apply relative grid items-center gap-x-3 rounded-[var(--radius-tile)] transition-colors hover:bg-base-content/[0.05];
+  grid-template-columns: 14px 1.5rem minmax(0, 1fr) auto;
+  min-height: 42px;
+  padding: 6px 12px 6px 10px;
+}
+
+.rules-rail {
+  @apply relative flex items-center justify-center self-stretch;
+}
+
+.rules-rail::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  left: 50%;
+  width: 1.5px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: oklch(var(--bc) / 0.2);
+}
+
+.rules-flow > .rules-step:first-child .rules-rail::before {
+  top: 50%;
+}
+
+.rules-flow > .rules-step:last-child .rules-rail::before {
+  bottom: 50%;
+}
+
+.rules-flow > .rules-step:only-child .rules-rail::before {
+  display: none;
+}
+
+.rules-node {
+  @apply relative z-[1] rounded-full;
+  width: 9px;
+  height: 9px;
+  background: oklch(var(--bc) / 0.42);
+}
+
+.rules-step--pass .rules-node {
+  background: rgb(var(--glass-rgb));
+  box-shadow: inset 0 0 0 1.5px oklch(var(--bc) / 0.42);
+}
+
+.rules-step--reject .rules-node {
+  background: #ff3b30;
+  box-shadow: 0 0 0 3px rgb(255 59 48 / 0.22);
+}
+
+.rules-step--final {
+  @apply mt-1 bg-[var(--fill)] hover:bg-[var(--fill-strong)];
+}
+
+.rules-step--final .rules-node {
+  width: 11px;
+  height: 11px;
+  border-radius: 4px;
+  background: oklch(var(--bc) / 0.7);
+}
+
+.rules-step-index {
+  @apply text-right text-[11px] tabular-nums text-base-content/55;
+}
+
+.rules-cond {
+  @apply min-w-0 truncate text-[13px] leading-[22px];
+}
+
+.rules-cond > * + * {
+  margin-left: 5px;
+}
+
+.rules-word {
+  @apply text-base-content/60;
+}
+
+.rules-mono {
+  font-family: 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace;
+  @apply text-xs tabular-nums;
+}
+
+.rules-set {
+  @apply inline-flex h-[22px] items-center gap-[5px] rounded-full bg-[var(--fill)] pl-2 pr-2.5 align-top text-xs font-medium text-base-content transition-colors;
+}
+
+.rules-set svg {
+  @apply h-[13px] w-[13px] text-base-content/55;
+}
+
+button.rules-set:hover {
+  @apply bg-[var(--fill-strong)];
+}
+
+button.rules-set:focus-visible {
+  outline: 2px solid var(--primary-fill);
+  outline-offset: 2px;
+}
+
+.rules-set-hit,
+button.rules-set-hit:hover {
+  @apply bg-[#007aff]/15 font-semibold;
+  color: var(--selection-ink);
+}
+
+.rules-set-hit svg {
+  color: currentColor;
+}
+
+.rules-dest {
+  @apply inline-flex min-w-0 max-w-[22rem] items-baseline gap-1.5 justify-self-end whitespace-nowrap text-[13px];
+}
+
+.rules-dest-group {
+  @apply shrink-0 font-semibold;
+}
+
+.rules-dest-node {
+  @apply min-w-0 truncate text-base-content/60;
+}
+
+.rules-dest-node--reject {
   color: var(--danger-ink);
 }
 
-.rules-line {
-  @apply mx-1 grid grid-cols-[2.5rem_minmax(0,1fr)] items-start gap-x-3 rounded-[var(--radius-control)] px-3 py-2 transition-colors hover:bg-base-content/[0.05];
+.rules-act {
+  @apply inline-flex h-6 items-center gap-[5px] justify-self-end whitespace-nowrap rounded-full bg-[var(--fill)] pl-[9px] pr-[11px] text-xs font-medium text-base-content/75;
+}
+
+.rules-act svg {
+  @apply h-[13px] w-[13px];
+}
+
+.rules-act--pass {
+  @apply bg-base-content/[0.04] text-base-content/65;
+}
+
+.rules-act--reject {
+  @apply bg-error/[0.12];
+  color: var(--danger-ink);
 }
 
 .rules-provider-line {
@@ -1281,26 +1554,12 @@ onBeforeUnmount(() => {
   outline-offset: 1px;
 }
 
-.rules-line-index {
-  @apply text-right text-xs tabular-nums leading-[18px] text-base-content/65;
-}
-
 .rules-line-payload {
   @apply truncate text-xs font-medium leading-[18px] text-base-content;
 }
 
 .rules-line-meta {
   @apply mt-0.5 truncate text-xs leading-[18px] text-base-content/65;
-}
-
-.rules-line-meta .rules-reject {
-  min-height: 18px;
-  line-height: 18px;
-  vertical-align: top;
-}
-
-.rules-chain-final {
-  @apply font-medium text-base-content;
 }
 
 .rules-match-pill {
@@ -1320,7 +1579,8 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rules-line,
+  .rules-step,
+  .rules-set,
   .rules-provider-line {
     transition: none;
   }
