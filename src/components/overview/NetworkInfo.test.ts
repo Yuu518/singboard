@@ -1,0 +1,129 @@
+import { describe, expect, it, vi } from 'vitest'
+import { computed, createApp, h, nextTick, ref } from 'vue'
+
+const state = vi.hoisted(() => ({ value: null as any }))
+
+vi.mock('@/stores/network', () => ({ useNetworkStore: () => state.value }))
+
+function makeStore() {
+  const ip = ref({
+    domestic: { status: 'error', ip: '', location: [], error: '请求超时（30 秒）' },
+    abroad: { status: 'done', ip: '2001:0db8:85a3:0000:0000:8a2e:0370:7334', location: ['Japan', 'Example'], error: '' },
+  })
+  const latency = ref({
+    wechat: { status: 'done', ms: 120, error: '' },
+    bilibili: { status: 'error', ms: 0, error: '5 秒内无响应' },
+    github: { status: 'pending', ms: -1, error: '' },
+    cloudflare: { status: 'idle', ms: -1, error: '' },
+    youtube: { status: 'done', ms: 950, error: '' },
+  })
+  const latencyBusy = ref(true)
+  return {
+    ip,
+    latency,
+    ipBusy: computed(() => false),
+    latencyBusy,
+    setLatencyBusy: (value: boolean) => {
+      latencyBusy.value = value
+    },
+    checkIP: vi.fn(),
+    checkLatency: vi.fn(),
+  }
+}
+
+async function mount(props: Record<string, unknown> = {}) {
+  state.value = makeStore()
+  const { default: NetworkInfo } = await import('./NetworkInfo.vue')
+  const host = document.createElement('div')
+  const app = createApp({ render: () => h(NetworkInfo, props) })
+  app.mount(host)
+  await nextTick()
+  return { host, unmount: () => app.unmount() }
+}
+
+describe('NetworkInfo', () => {
+  it('names the exits by what they measure', async () => {
+    const { host, unmount } = await mount()
+    const labels = [...host.querySelectorAll('dt')].map((dt) => {
+      const copy = dt.cloneNode(true) as HTMLElement
+      copy.querySelectorAll('.sr-only').forEach((node) => node.remove())
+      return copy.textContent?.replace(/\s+/g, ' ').trim()
+    })
+    expect(labels.slice(0, 2)).toEqual(['直连出口 ipip.net', '代理出口 ip.sb'])
+    expect(host.querySelector('[data-network-ip-hint]')).toBeNull()
+    expect(host.querySelector('[data-network-latency-hint]')).toBeNull()
+    unmount()
+  })
+
+  it('gives a failure reason and never a fake mask', async () => {
+    const { host, unmount } = await mount()
+    const domestic = host.querySelector('[data-ip-row="domestic"]')!
+    expect(domestic.textContent).toContain('检测失败：请求超时（30 秒）')
+    expect(domestic.textContent).not.toMatch(/[*•]/)
+    expect(domestic.textContent).not.toContain('()')
+    unmount()
+  })
+
+  it('shows addresses in the mono face so long IPv6 wraps instead of hiding under buttons', async () => {
+    const { host, unmount } = await mount()
+    const abroad = host.querySelector('[data-ip-row="abroad"] .settings-mono')!
+    expect(abroad.className).toContain('break-all')
+    expect(abroad.textContent).toMatch(/^[•:]+$/)
+    expect(host.querySelector('.absolute.right-2')).toBeNull()
+    unmount()
+  })
+
+  it('reads latency on the shared scale without stray units', async () => {
+    const { host, unmount } = await mount()
+    const text = (key: string) => host.querySelector(`[data-latency-row="${key}"]`)!.textContent!.replace(/\s+/g, ' ').trim()
+    expect(text('wechat')).toBe('120ms')
+    expect(text('bilibili')).toBe('失败5 秒内无响应')
+    expect(text('github')).toBe('检测中')
+    expect(text('cloudflare')).toBe('未测')
+    expect(host.textContent).not.toContain('超时ms')
+    expect(host.textContent).not.toContain('...ms')
+    const youtube = host.querySelector('[data-latency-row="youtube"] span')!
+    expect(youtube.className).toContain('bg-error/15')
+    unmount()
+  })
+
+  it('names every control after what it acts on', async () => {
+    const { host, unmount } = await mount()
+    const label = (action: string) => host.querySelector(`[data-action="${action}"]`)!.getAttribute('aria-label')
+    expect(label('toggle-ip')).toBe('显示完整出口 IP')
+    expect(label('check-ip')).toBe('重新检测出口 IP')
+    expect(label('check-latency')).toBe('重新检测访问延迟')
+    expect(host.querySelector('[data-action="check-ip"]')!.textContent?.trim()).toBe('重新检测')
+    expect(host.querySelector('[data-action="check-latency"]')!.getAttribute('aria-busy')).toBe('true')
+    unmount()
+  })
+
+  it('announces results when a check finishes', async () => {
+    const { host, unmount } = await mount()
+    const region = host.querySelector('[data-network-announcement]')!
+    expect(region.getAttribute('aria-live')).toBe('polite')
+    state.value.latency.value.github = { status: 'done', ms: 200, error: '' }
+    state.value.latency.value.cloudflare = { status: 'done', ms: 90, error: '' }
+    state.value.setLatencyBusy(false)
+    await nextTick()
+    await nextTick()
+    expect(region.textContent).toContain('访问延迟检测完成：微信 120ms，Bilibili 失败（5 秒内无响应）')
+    unmount()
+  })
+
+  it('stops offering checks and routing claims while the core is stopped', async () => {
+    const { host, unmount } = await mount({ running: false })
+    expect(host.querySelector('[data-action="check-ip"]')).toBeNull()
+    expect(host.querySelector('[data-action="check-latency"]')).toBeNull()
+    expect(host.querySelector('[data-network-ip-hint]')!.textContent).toBe('sing-box 未运行，启动后自动检测。')
+    expect(host.textContent).not.toContain('按 sing-box 路由规则发出')
+    unmount()
+  })
+
+  it('gives screen readers what each exit row measures', async () => {
+    const { host, unmount } = await mount()
+    const dt = host.querySelector('dt')!
+    expect(dt.querySelector('.sr-only')!.textContent).toContain('国内站点 myip.ipip.net 看到的地址')
+    unmount()
+  })
+})

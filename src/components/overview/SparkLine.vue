@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import type { HistoryPoint } from '@/stores/overview'
+import { useConfigStore } from '@/stores/config'
+import { inkColor, readChartInk } from '@/utils/chartTheme'
 
 echarts.use([LineChart, GridComponent, CanvasRenderer])
 
 const props = withDefaults(
   defineProps<{
     data: HistoryPoint[]
-    color: string
     min?: number
     labelFormatter?: (v: number) => string
     rightMargin?: number
@@ -21,15 +22,18 @@ const props = withDefaults(
   },
 )
 
+const { resolvedTheme } = useConfigStore()
 const chartEl = ref<HTMLElement>()
+const ink = ref(readChartInk())
 let chart: echarts.ECharts | null = null
 let resizeOb: ResizeObserver | null = null
 
 const options = computed(() => ({
+  animation: false,
   grid: {
     left: 0,
     top: 8,
-    right: props.labelFormatter ? (props.rightMargin ?? 50) : 0,
+    right: props.labelFormatter ? (props.rightMargin ?? 64) : 0,
     bottom: 0,
   },
   xAxis: {
@@ -43,7 +47,7 @@ const options = computed(() => ({
     position: 'right' as const,
     splitNumber: 2,
     min: 0,
-    max: (value: { max: number }) => Math.max(value.max, props.min),
+    max: (value: { max: number }) => (Number.isFinite(value.max) ? Math.max(value.max, props.min) : props.min),
     axisLine: { show: false },
     axisTick: { show: false },
     splitLine: { show: false },
@@ -51,8 +55,8 @@ const options = computed(() => ({
       ? {
           show: true,
           inside: false,
-          fontSize: 9,
-          color: '#9ca3af',
+          fontSize: 12,
+          color: inkColor(ink.value, 0.6),
           margin: 4,
           formatter: (value: number) => (value === 0 ? '' : props.labelFormatter!(value)),
         }
@@ -63,19 +67,20 @@ const options = computed(() => ({
       type: 'line' as const,
       symbol: 'none',
       smooth: true,
-      lineStyle: { width: 1.5 },
+      lineStyle: { width: 1.5, color: inkColor(ink.value, 0.55) },
       data: props.data,
-      color: props.color,
+      color: inkColor(ink.value, 0.55),
       emphasis: { disabled: true },
-      areaStyle: {
-        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: props.color + '60' },
-          { offset: 1, color: props.color + '10' },
-        ]),
-      },
+      areaStyle: { color: inkColor(ink.value, 0.07) },
     },
   ],
 }))
+
+watch(resolvedTheme, () => {
+  void nextTick(() => {
+    ink.value = readChartInk()
+  })
+})
 
 onMounted(() => {
   if (!chartEl.value) return
@@ -97,5 +102,5 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="chartEl" class="w-full h-full" />
+  <div ref="chartEl" class="w-full h-full" aria-hidden="true" />
 </template>

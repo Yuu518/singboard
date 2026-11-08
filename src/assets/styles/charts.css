@@ -1,0 +1,16 @@
+:root,
+[data-theme='light'] {
+  --chart-ink-rgb: 28 28 30;
+  --chart-topology-1: 88 86 214;
+  --chart-topology-2: 50 173 230;
+  --chart-topology-3: 175 82 222;
+  --chart-topology-4: 255 45 85;
+}
+
+[data-theme='dark'] {
+  --chart-ink-rgb: 242 242 247;
+  --chart-topology-1: 94 92 230;
+  --chart-topology-2: 100 210 255;
+  --chart-topology-3: 191 90 242;
+  --chart-topology-4: 255 55 95;
+}

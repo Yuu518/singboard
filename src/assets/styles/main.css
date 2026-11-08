@@ -1,5 +1,6 @@
 @import './glass.css';
 @import './settings.css';
+@import './charts.css';
 
 @tailwind base;
 @tailwind components;

@@ -12,13 +12,14 @@ const downloadTotal = ref(0)
 const uploadTotal = ref(0)
 const closedConnections = ref<Connection[]>([])
 const filterText = ref('')
-const socketState = ref<'idle' | 'connecting' | 'resuming' | 'reconnecting' | 'open'>('idle')
+const socketState = ref<'idle' | 'connecting' | 'resuming' | 'reconnecting' | 'open' | 'failed'>('idle')
 const socketFailures = ref(0)
 
 let ws: ReconnectingWebSocket | null = null
 let prevTraffic = new Map<string, { download: number; upload: number }>()
 let refCount = 0
 let stoppedAt = 0
+let coreSuspended = false
 
 export function matchesFilter(c: Connection, q: string): boolean {
   const m = c.metadata
@@ -62,16 +63,16 @@ const filteredClosedConnections = computed(() => {
   return closedConnections.value.filter((c) => matchesFilter(c, q))
 })
 
-export function useConnectionsStore() {
-  const { activeClashApiId, clashApiUrl, clashApiSecret } = useConfigStore()
-
-  function start() {
-    if (ws) return
-    let backgroundSince = connections.value.length > 0 ? stoppedAt : 0
-    stoppedAt = 0
-    socketState.value = backgroundSince ? 'resuming' : 'connecting'
-    socketFailures.value = 0
-    ws = createClashWS('/connections', (data: ConnectionsSnapshot) => {
+function start() {
+  if (ws || coreSuspended) return
+  let backgroundSince = connections.value.length > 0 ? stoppedAt : 0
+  stoppedAt = 0
+  socketState.value = backgroundSince ? 'resuming' : 'connecting'
+  socketFailures.value = 0
+  let socket: ReconnectingWebSocket
+  try {
+    socket = createClashWS('/connections', (data: ConnectionsSnapshot) => {
+      if (ws !== socket) return
       socketState.value = 'open'
       socketFailures.value = 0
       downloadTotal.value = data.downloadTotal
@@ -104,22 +105,52 @@ export function useConnectionsStore() {
       connections.value = data.connections
       pushConnectionCount(data.connections.length)
     }, undefined, { latestOnly: true })
-    ws.addEventListener('close', () => {
-      if (!ws) return
-      socketFailures.value++
-      socketState.value = 'reconnecting'
-    })
+  } catch (error) {
+    console.error('Failed to connect to the connection stream:', error)
+    socketState.value = 'failed'
+    return
   }
+  ws = socket
+  socket.addEventListener('close', () => {
+    if (ws !== socket) return
+    socketFailures.value++
+    socketState.value = 'reconnecting'
+  })
+}
 
-  function stop() {
-    const socket = ws
-    ws = null
-    if (socket) stoppedAt = Date.now()
-    socket?.close()
-    prevTraffic = new Map()
-    socketState.value = 'idle'
-    socketFailures.value = 0
-  }
+function stop() {
+  const socket = ws
+  ws = null
+  if (socket) stoppedAt = Date.now()
+  socket?.close()
+  prevTraffic = new Map()
+  socketState.value = 'idle'
+  socketFailures.value = 0
+}
+
+function resetOnRestart() {
+  closedConnections.value = []
+  connections.value = []
+  downloadTotal.value = 0
+  uploadTotal.value = 0
+}
+
+export function suspendConnections() {
+  coreSuspended = true
+  stop()
+}
+
+export function resumeConnections() {
+  coreSuspended = false
+  if (refCount > 0 && appVisible.value) start()
+}
+
+export function resetConnectionsOnRestart() {
+  resetOnRestart()
+}
+
+export function useConnectionsStore() {
+  const { activeClashApiId, clashApiUrl, clashApiSecret } = useConfigStore()
 
   refCount++
   const unwatchApi = watch(
@@ -145,13 +176,6 @@ export function useConnectionsStore() {
     refCount--
     if (refCount === 0) stop()
   })
-
-  function resetOnRestart() {
-    closedConnections.value = []
-    connections.value = []
-    downloadTotal.value = 0
-    uploadTotal.value = 0
-  }
 
   async function closeConnection(id: string) {
     await disconnectById(id)

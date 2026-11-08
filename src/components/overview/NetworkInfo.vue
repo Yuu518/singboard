@@ -1,163 +1,44 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
-import { useServiceStore } from '@/stores/service'
-import { getIPFromIpipnet, getIPFromIpsb } from '@/api/geoip'
-import {
-  getWechatLatency,
-  getBilibiliLatency,
-  getGithubLatency,
-  getCloudflareLatency,
-  getYoutubeLatency,
-} from '@/api/latency'
+import { computed, ref, watch } from 'vue'
+import { useNetworkStore, type IPKey, type LatencyKey } from '@/stores/network'
+import { ipAnnouncement, ipView, latencyAnnouncement, latencyBadge } from '@/utils/networkDisplay'
 
-const CACHE_KEY = 'singboard-network'
+const props = withDefaults(defineProps<{ running?: boolean }>(), { running: true })
 
-interface IPData { ip: string; location: string; locationMasked: string }
-interface LatencyData { wechat: string; bilibili: string; github: string; cloudflare: string; youtube: string }
-interface NetworkCache { chinaIP: IPData; globalIP: IPData; latency: LatencyData }
-
-function loadCache(): NetworkCache | null {
-  try {
-    const saved = sessionStorage.getItem(CACHE_KEY)
-    if (saved) return JSON.parse(saved)
-  } catch {}
-  return null
-}
-
-function saveCache() {
-  sessionStorage.setItem(CACHE_KEY, JSON.stringify({
-    chinaIP: chinaIP.value,
-    globalIP: globalIP.value,
-    latency: latency.value,
-  }))
-}
-
-const { serviceStatus } = useServiceStore()
-const isRunning = computed(() => serviceStatus.value.state === 'running')
-
-const cached = isRunning.value ? loadCache() : null
-
-const chinaIP = ref<IPData>(cached?.chinaIP ?? { ip: '', location: '', locationMasked: '' })
-const globalIP = ref<IPData>(cached?.globalIP ?? { ip: '', location: '', locationMasked: '' })
-const ipLoading = ref(false)
+const { ip, latency, ipBusy, latencyBusy, checkIP, checkLatency } = useNetworkStore()
 const showIP = ref(false)
 
-const latency = ref<LatencyData>(cached?.latency ?? {
-  wechat: '',
-  bilibili: '',
-  github: '',
-  cloudflare: '',
-  youtube: '',
+const ipRows: { key: IPKey; label: string; source: string; hint: string }[] = [
+  { key: 'domestic', label: '直连出口', source: 'ipip.net', hint: '国内站点 myip.ipip.net 看到的地址' },
+  { key: 'abroad', label: '代理出口', source: 'ip.sb', hint: '国外站点 ip.sb 看到的地址' },
+]
+
+const latencyRows: { key: LatencyKey; label: string }[] = [
+  { key: 'wechat', label: '微信' },
+  { key: 'bilibili', label: 'Bilibili' },
+  { key: 'github', label: 'GitHub' },
+  { key: 'cloudflare', label: 'Cloudflare' },
+  { key: 'youtube', label: 'YouTube' },
+]
+
+const ipViews = computed(() => ipRows.map((row) => ({ ...row, view: ipView(ip.value[row.key], showIP.value) })))
+const latencyBadges = computed(() => latencyRows.map((row) => ({ ...row, badge: latencyBadge(latency.value[row.key]) })))
+
+const announcement = ref('')
+
+watch(ipBusy, (busy, wasBusy) => {
+  if (busy || !wasBusy) return
+  const rows = ipRows.map((row) => ({ label: row.label, result: ip.value[row.key] }))
+  if (rows.every((row) => row.result.status === 'done' || row.result.status === 'error')) {
+    announcement.value = ipAnnouncement(rows, showIP.value)
+  }
 })
-const latencyLoading = ref(false)
 
-let ipGen = 0
-let latencyGen = 0
-
-function resetData() {
-  sessionStorage.removeItem(CACHE_KEY)
-  ipGen++
-  latencyGen++
-  ipLoading.value = false
-  latencyLoading.value = false
-  chinaIP.value = { ip: '', location: '', locationMasked: '' }
-  globalIP.value = { ip: '', location: '', locationMasked: '' }
-  latency.value = { wechat: '', bilibili: '', github: '', cloudflare: '', youtube: '' }
-}
-
-function maskIP(ip: string) {
-  if (!ip) return ''
-  return ip.replace(/\d/g, '*').replace(/[a-fA-F]/g, '*')
-}
-
-function latencyTextColor(ms: string) {
-  const n = Number(ms)
-  if (!n || n === 0) return 'text-base-content/40'
-  if (n < 200) return 'text-success'
-  if (n < 500) return 'text-warning'
-  return 'text-error'
-}
-
-async function checkIP() {
-  if (ipLoading.value) return
-  ipLoading.value = true
-  const gen = ++ipGen
-  chinaIP.value = { ip: '', location: '检测中...', locationMasked: '检测中...' }
-  globalIP.value = { ip: '', location: '检测中...', locationMasked: '检测中...' }
-
-  try {
-    const res = await getIPFromIpipnet()
-    if (gen !== ipGen) return
-    const loc = res.location.filter(Boolean)
-    chinaIP.value = {
-      ip: res.ip,
-      location: loc.join(' '),
-      locationMasked: loc.length > 0
-        ? loc[0] + ' ' + loc.slice(1).map(() => '**').join(' ')
-        : '',
-    }
-  } catch {
-    if (gen !== ipGen) return
-    chinaIP.value = { ip: '', location: '检测失败', locationMasked: '检测失败' }
-  }
-
-  try {
-    const res = await getIPFromIpsb()
-    if (gen !== ipGen) return
-    const loc = [res.country, res.organization].filter(Boolean).join(' ')
-    globalIP.value = {
-      ip: res.ip,
-      location: loc,
-      locationMasked: loc,
-    }
-  } catch {
-    if (gen !== ipGen) return
-    globalIP.value = { ip: '', location: '检测失败', locationMasked: '检测失败' }
-  }
-
-  if (gen !== ipGen) return
-  ipLoading.value = false
-  saveCache()
-}
-
-async function checkLatency() {
-  if (latencyLoading.value) return
-  latencyLoading.value = true
-  const gen = ++latencyGen
-  latency.value = { wechat: '...', bilibili: '...', github: '...', cloudflare: '...', youtube: '...' }
-
-  let done = 0
-  const onDone = () => {
-    if (gen !== latencyGen) return
-    done++
-    if (done >= 5) {
-      latencyLoading.value = false
-      saveCache()
-    }
-  }
-
-  const write = (key: keyof LatencyData, ms: number) => {
-    if (gen === latencyGen) latency.value[key] = ms ? ms.toFixed(0) : '超时'
-  }
-
-  getWechatLatency().then((ms) => write('wechat', ms)).finally(onDone)
-  getBilibiliLatency().then((ms) => write('bilibili', ms)).finally(onDone)
-  getGithubLatency().then((ms) => write('github', ms)).finally(onDone)
-  getCloudflareLatency().then((ms) => write('cloudflare', ms)).finally(onDone)
-  getYoutubeLatency().then((ms) => write('youtube', ms)).finally(onDone)
-}
-
-if (!cached && isRunning.value) {
-  checkIP()
-  checkLatency()
-}
-
-watch(() => serviceStatus.value.state, (state, oldState) => {
-  if (state !== 'running' && oldState === 'running') {
-    resetData()
-  } else if (state === 'running' && oldState !== 'running') {
-    checkIP()
-    checkLatency()
+watch(latencyBusy, (busy, wasBusy) => {
+  if (busy || !wasBusy) return
+  const rows = latencyRows.map((row) => ({ label: row.label, result: latency.value[row.key] }))
+  if (rows.every((row) => row.result.status === 'done' || row.result.status === 'error')) {
+    announcement.value = latencyAnnouncement(rows)
   }
 })
 </script>
@@ -165,92 +46,105 @@ watch(() => serviceStatus.value.state, (state, oldState) => {
 <template>
   <div class="surface-card p-4 space-y-3">
     <h2 class="text-sm font-semibold">网络信息</h2>
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-      <div class="surface-fill rounded-[var(--radius-tile)] p-3 space-y-2 relative">
-        <div class="text-xs font-medium text-base-content/60 mb-2">IP 信息</div>
-        <div class="grid grid-cols-[auto_auto_1fr] gap-x-2 gap-y-1 text-sm">
-          <span>ipip.net</span>
-          <span>:</span>
-          <span>
-            <template v-if="chinaIP.location">
-              <template v-if="showIP">
-                {{ chinaIP.location }} <span class="text-base-content/60">({{ chinaIP.ip }})</span>
-              </template>
-              <template v-else>
-                {{ chinaIP.locationMasked }} <span class="text-base-content/60">({{ maskIP(chinaIP.ip) || '***.***.***.***' }})</span>
-              </template>
-            </template>
-            <template v-else>
-              <span class="text-base-content/30">未检测</span>
-            </template>
-          </span>
-          <span>ip.sb</span>
-          <span>:</span>
-          <span>
-            <template v-if="globalIP.location">
-              <template v-if="showIP">
-                {{ globalIP.location }} <span class="text-base-content/60">({{ globalIP.ip }})</span>
-              </template>
-              <template v-else>
-                {{ globalIP.locationMasked }} <span class="text-base-content/60">({{ maskIP(globalIP.ip) || '***.***.***.***' }})</span>
-              </template>
-            </template>
-            <template v-else>
-              <span class="text-base-content/30">未检测</span>
-            </template>
-          </span>
+    <p class="sr-only" aria-live="polite" data-network-announcement>{{ announcement }}</p>
+    <div class="network-info-grid grid grid-cols-1 gap-3">
+      <section class="surface-fill rounded-[var(--radius-tile)] p-3 space-y-2 min-w-0">
+        <div class="flex items-start gap-2">
+          <div class="min-w-0 flex-1">
+            <h3 class="text-xs font-medium text-base-content/70">出口 IP</h3>
+            <p v-if="!props.running" class="text-xs text-base-content/55" data-network-ip-hint>sing-box 未运行，启动后自动检测。</p>
+          </div>
+          <div v-if="props.running" class="flex shrink-0 gap-1">
+            <button
+              type="button"
+              class="btn btn-ghost btn-xs btn-circle"
+              aria-label="显示完整出口 IP"
+              :title="showIP ? '隐藏出口 IP' : '显示完整出口 IP'"
+              :aria-pressed="showIP"
+              data-action="toggle-ip"
+              @click="showIP = !showIP"
+            >
+              <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-3.5 h-3.5">
+                <path v-if="showIP" stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                <path v-if="showIP" stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path v-if="!showIP" stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12c1.292 4.338 5.31 7.5 10.066 7.5.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="btn btn-ghost btn-xs px-2 font-medium"
+              aria-label="重新检测出口 IP"
+              :aria-disabled="ipBusy"
+              :aria-busy="ipBusy"
+              data-action="check-ip"
+              @click="checkIP()"
+            >
+              <span v-if="ipBusy" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+              重新检测
+            </button>
+          </div>
         </div>
-        <div class="absolute right-2 bottom-2 flex gap-1">
-          <button class="btn btn-ghost btn-xs btn-circle" @click="showIP = !showIP">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-3.5 h-3.5">
-              <path v-if="showIP" stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-              <path v-if="showIP" stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path v-if="!showIP" stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12c1.292 4.338 5.31 7.5 10.066 7.5.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
-            </svg>
-          </button>
-          <button
-            class="btn btn-ghost btn-xs btn-circle"
-            :class="{ 'loading': ipLoading }"
-            @click="checkIP"
-          >
-            <svg v-if="!ipLoading" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-3.5 h-3.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
-            </svg>
-          </button>
-        </div>
-      </div>
+        <dl class="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
+          <template v-for="row in ipViews" :key="row.key">
+            <dt class="text-base-content/70" :title="row.hint">
+              {{ row.label }}
+              <span class="block text-xs text-base-content/55">{{ row.source }}</span>
+              <span class="sr-only">，{{ row.hint }}</span>
+            </dt>
+            <dd class="min-w-0" :data-ip-row="row.key">
+              <template v-if="row.view.state === 'found'">
+                <div v-if="row.view.location" class="truncate">{{ row.view.location }}</div>
+                <div class="settings-mono break-all text-base-content/70" :aria-hidden="!showIP">{{ row.view.ip }}</div>
+                <span v-if="!showIP" class="sr-only">IP 已隐藏</span>
+              </template>
+              <span v-else-if="row.view.state === 'failed'" class="text-xs text-[color:var(--danger-ink)] break-words">{{ row.view.message }}</span>
+              <span v-else class="text-base-content/55">{{ row.view.message }}</span>
+            </dd>
+          </template>
+        </dl>
+      </section>
 
-      <div class="surface-fill rounded-[var(--radius-tile)] p-3 space-y-2 relative">
-        <div class="text-xs font-medium text-base-content/60 mb-2">连通性测试</div>
-        <div class="grid grid-cols-[auto_auto_1fr] gap-x-2 gap-y-1 text-sm">
-          <span>微信</span>
-          <span>:</span>
-          <span :class="latencyTextColor(latency.wechat)">{{ latency.wechat ? latency.wechat + 'ms' : '未检测' }}</span>
-          <span>Bilibili</span>
-          <span>:</span>
-          <span :class="latencyTextColor(latency.bilibili)">{{ latency.bilibili ? latency.bilibili + 'ms' : '未检测' }}</span>
-          <span>GitHub</span>
-          <span>:</span>
-          <span :class="latencyTextColor(latency.github)">{{ latency.github ? latency.github + 'ms' : '未检测' }}</span>
-          <span>Cloudflare</span>
-          <span>:</span>
-          <span :class="latencyTextColor(latency.cloudflare)">{{ latency.cloudflare ? latency.cloudflare + 'ms' : '未检测' }}</span>
-          <span>YouTube</span>
-          <span>:</span>
-          <span :class="latencyTextColor(latency.youtube)">{{ latency.youtube ? latency.youtube + 'ms' : '未检测' }}</span>
-        </div>
-        <div class="absolute right-2 bottom-2">
+      <section class="surface-fill rounded-[var(--radius-tile)] p-3 space-y-2 min-w-0">
+        <div class="flex items-start gap-2">
+          <div class="min-w-0 flex-1">
+            <h3 class="text-xs font-medium text-base-content/70">访问延迟</h3>
+            <p v-if="!props.running" class="text-xs text-base-content/55" data-network-latency-hint>sing-box 未运行，启动后自动检测。</p>
+          </div>
           <button
-            class="btn btn-ghost btn-xs btn-circle"
-            :class="{ 'loading': latencyLoading }"
-            @click="checkLatency"
+            v-if="props.running"
+            type="button"
+            class="btn btn-ghost btn-xs shrink-0 px-2 font-medium"
+            aria-label="重新检测访问延迟"
+            :aria-disabled="latencyBusy"
+            :aria-busy="latencyBusy"
+            data-action="check-latency"
+            @click="checkLatency()"
           >
-            <svg v-if="!latencyLoading" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-3.5 h-3.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
-            </svg>
+            <span v-if="latencyBusy" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+            重新检测
           </button>
         </div>
-      </div>
+        <dl class="grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5 text-sm">
+          <template v-for="row in latencyBadges" :key="row.key">
+            <dt class="text-base-content/70">{{ row.label }}</dt>
+            <dd class="flex min-w-0 items-center gap-2" :data-latency-row="row.key">
+              <span class="relative shrink-0 rounded-full px-2 py-0.5 text-xs tabular-nums" :class="row.badge.tone">
+                <span :class="{ invisible: row.badge.busy }">{{ row.badge.text }}</span>
+                <span v-if="row.badge.busy" class="loading loading-spinner absolute inset-0 m-auto h-2.5 w-2.5" aria-hidden="true"></span>
+              </span>
+              <span v-if="row.badge.reason" class="truncate text-xs text-base-content/65" :title="row.badge.reason">{{ row.badge.reason }}</span>
+            </dd>
+          </template>
+        </dl>
+      </section>
     </div>
   </div>
 </template>
+
+<style scoped>
+@container overview (min-width: 640px) {
+  .network-info-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+</style>

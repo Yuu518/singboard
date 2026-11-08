@@ -10,8 +10,8 @@ import PanelUpdateDialog from '@/components/common/PanelUpdateDialog.vue'
 import { useConfigStore } from '@/stores/config'
 import { useServiceStore } from '@/stores/service'
 import { useProxiesStore } from '@/stores/proxies'
-import { useOverviewStore } from '@/stores/overview'
-import { useConnectionsStore } from '@/stores/connections'
+import { resetOverview, resumeOverview, suspendOverview } from '@/stores/overview'
+import { resetConnectionsOnRestart, resumeConnections, suspendConnections } from '@/stores/connections'
 import { syncActiveConfigToRunning } from '@/utils/coreControl'
 import { isLaunchedHidden, setWindowMaterial } from '@/bridge/app'
 import { appVisible } from '@/stores/appVisible'
@@ -25,14 +25,7 @@ import { useSingboxVersionStore } from '@/stores/singboxVersion'
 import { usePanelUpdateStore } from '@/stores/panelUpdate'
 import { useLogsLifecycle } from '@/stores/logs'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { getIPFromIpipnet, getIPFromIpsb } from '@/api/geoip'
-import {
-  getWechatLatency,
-  getBilibiliLatency,
-  getGithubLatency,
-  getCloudflareLatency,
-  getYoutubeLatency,
-} from '@/api/latency'
+import { useNetworkStore } from '@/stores/network'
 
 const currentWindow = getCurrentWindow()
 const isTrayWindow = currentWindow.label === 'tray'
@@ -44,8 +37,7 @@ const { config, resolvedTheme } = useConfigStore()
 const { serviceStatus, ready: serviceReady } = useServiceStore()
 const configAutoUpdate = isTrayWindow ? null : useConfigAutoUpdate()
 const { loadProxies, resumePendingTests, refreshDuringCoreWarmup } = useProxiesStore()
-const { resetHistory: resetOverviewHistory } = useOverviewStore()
-const { resetOnRestart: resetConnections } = useConnectionsStore()
+const network = useNetworkStore()
 const { detectVersion } = useSingboxVersionStore()
 const { checkOnStartup: checkPanelUpdateOnStartup } = usePanelUpdateStore()
 
@@ -86,58 +78,6 @@ if (!isTrayWindow) {
 
 const setupWizardVisible = ref(false)
 const setupWizardRef = ref<InstanceType<typeof SetupWizard> | null>(null)
-
-const NETWORK_CACHE_KEY = 'singboard-network'
-
-function runNetworkAutoTest() {
-  try {
-    const saved = sessionStorage.getItem(NETWORK_CACHE_KEY)
-    if (saved) {
-      const cached = JSON.parse(saved)
-      const hasIP = !!(cached?.chinaIP?.ip || cached?.globalIP?.ip)
-      const hasLatency = !!(cached?.latency?.wechat || cached?.latency?.cloudflare)
-      if (hasIP && hasLatency) return
-    }
-  } catch {}
-
-  const result: any = {
-    chinaIP: { ip: '', location: '', locationMasked: '' },
-    globalIP: { ip: '', location: '', locationMasked: '' },
-    latency: { wechat: '', bilibili: '', github: '', cloudflare: '', youtube: '' },
-  }
-
-  getIPFromIpipnet().then((res) => {
-    const loc = res.location.filter(Boolean)
-    result.chinaIP = {
-      ip: res.ip,
-      location: loc.join(' '),
-      locationMasked: loc.length > 0
-        ? loc[0] + ' ' + loc.slice(1).map(() => '**').join(' ')
-        : '',
-    }
-    sessionStorage.setItem(NETWORK_CACHE_KEY, JSON.stringify(result))
-  }).catch(() => {})
-
-  getIPFromIpsb().then((res) => {
-    const loc = [res.country, res.organization].filter(Boolean).join(' ')
-    result.globalIP = { ip: res.ip, location: loc, locationMasked: loc }
-    sessionStorage.setItem(NETWORK_CACHE_KEY, JSON.stringify(result))
-  }).catch(() => {})
-
-  const latencyTests = [
-    { fn: getWechatLatency, key: 'wechat' },
-    { fn: getBilibiliLatency, key: 'bilibili' },
-    { fn: getGithubLatency, key: 'github' },
-    { fn: getCloudflareLatency, key: 'cloudflare' },
-    { fn: getYoutubeLatency, key: 'youtube' },
-  ]
-  for (const { fn, key } of latencyTests) {
-    fn().then((ms) => {
-      result.latency[key] = ms ? ms.toFixed(0) : '超时'
-      sessionStorage.setItem(NETWORK_CACHE_KEY, JSON.stringify(result))
-    }).catch(() => {})
-  }
-}
 
 onMounted(async () => {
   if (isTrayWindow) return
@@ -183,25 +123,50 @@ watch(
 )
 
 let coreStartedOnce = false
+let lastKnownState: string | null = null
 
 if (!isTrayWindow) {
   watch(
+    () => serviceStatus.value.uptimeSeconds,
+    (uptime, previous) => {
+      if (serviceStatus.value.state !== 'running' || typeof uptime !== 'number' || typeof previous !== 'number') return
+      if (uptime + 2 >= previous) return
+      suspendOverview()
+      suspendConnections()
+      resetOverview()
+      resetConnectionsOnRestart()
+      resumeOverview()
+      resumeConnections()
+      network.scheduleAutoCheck()
+    },
+  )
+  watch(
     () => serviceStatus.value.state,
     (state) => {
+      if (state === 'unknown') return
+      const wasRunning = lastKnownState === 'running'
+      lastKnownState = state
       if (state === 'running') {
+        if (wasRunning) return
         if (coreStartedOnce) {
-          resetOverviewHistory()
-          resetConnections()
-          sessionStorage.removeItem(NETWORK_CACHE_KEY)
+          resetOverview()
+          resetConnectionsOnRestart()
         }
+        resumeOverview()
+        resumeConnections()
         coreStartedOnce = true
         // 核心可能在停止期间被手动替换，启动后重新检测版本
         void detectVersion()
         void refreshDuringCoreWarmup()
-        setTimeout(runNetworkAutoTest, 3000)
-      } else if (coreStartedOnce) {
-        resetOverviewHistory()
-        resetConnections()
+        network.scheduleAutoCheck()
+      } else {
+        network.reset()
+        suspendOverview()
+        suspendConnections()
+        if (coreStartedOnce) {
+          resetOverview()
+          resetConnectionsOnRestart()
+        }
       }
     },
     { immediate: true },

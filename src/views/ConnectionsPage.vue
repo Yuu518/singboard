@@ -49,7 +49,7 @@ function announce(message: string) {
   })
 }
 
-const apiUnreachable = computed(() => socketFailures.value >= 3)
+const apiUnreachable = computed(() => socketState.value === 'failed' || socketFailures.value >= 3)
 
 const paused = ref(false)
 const pausedSnapshot = ref<{ active: Connection[]; closed: Connection[]; down: number; up: number } | null>(null)
@@ -753,7 +753,7 @@ onBeforeUnmount(() => {
             <dt class="text-base-content/65">地址</dt>
             <dd class="settings-mono break-all">{{ clashApiUrl || '未配置' }}</dd>
             <dt class="text-base-content/65">状态</dt>
-            <dd>已连续 {{ socketFailures }} 次连接失败，仍在自动重试</dd>
+            <dd>{{ socketState === 'failed' ? '地址无效，无法建立连接' : `已连续 ${socketFailures} 次连接失败，仍在自动重试` }}</dd>
           </dl>
           <div class="mt-4">
             <button type="button" class="btn btn-sm btn-glass px-5" @click="router.push('/settings')">检查 API 配置</button>
