@@ -27,3 +27,25 @@ it('defaults to blurred glass and mirrors the glass mode onto the root element',
   expect(config.value.glassMode).toBe('blur')
   localStorage.clear()
 })
+
+it('leaves no profile selected after deleting the active one, and keeps it that way after reload', async () => {
+  const { nextTick } = await import('vue')
+  vi.resetModules()
+  localStorage.clear()
+  const { useConfigStore } = await import('./config')
+  const store = useConfigStore()
+  const first = store.addConfigProfile('A', 'local', 'C:/a.json')
+  const second = store.addConfigProfile('B', 'local', 'C:/b.json')
+  store.setActiveConfigProfile(second)
+  await nextTick()
+
+  store.removeConfigProfile(second)
+  await nextTick()
+  expect(store.activeConfigProfileId.value).toBe('')
+  expect(store.configProfiles.value.map((p) => p.id)).toEqual([first])
+
+  vi.resetModules()
+  const reloaded = (await import('./config')).useConfigStore()
+  expect(reloaded.activeConfigProfileId.value).toBe('')
+  localStorage.clear()
+})

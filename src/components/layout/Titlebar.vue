@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { confirmWindowClose } from '@/utils/closeGuard'
 
 defineProps<{
   title: string
@@ -15,6 +16,7 @@ async function toggleMaximize() {
   await appWindow.toggleMaximize()
 }
 async function close() {
+  if (!(await confirmWindowClose())) return
   await appWindow.close()
 }
 </script>

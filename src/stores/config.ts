@@ -8,7 +8,7 @@ function createClashApiId(): string {
   return `api_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-function createConfigProfileId(): string {
+export function createConfigProfileId(): string {
   return `cfg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
@@ -70,7 +70,13 @@ function normalizeConfig(raw: any): AppConfig {
         type: item.type === 'remote' ? 'remote' : 'local',
         source: typeof item.source === 'string' ? normalizeWindowsPath(item.source) : '',
         ...(typeof item.lastUpdated === 'string' ? { lastUpdated: item.lastUpdated } : {}),
-        autoUpdateInterval: typeof item.autoUpdateInterval === 'number' && item.autoUpdateInterval >= 0 ? item.autoUpdateInterval : 0,
+        ...(typeof item.lastFetchError === 'string' && item.lastFetchError ? { lastFetchError: item.lastFetchError } : {}),
+        ...(typeof item.lastFetchFailedAt === 'string' ? { lastFetchFailedAt: item.lastFetchFailedAt } : {}),
+        ...(typeof item.lastLocalChangeAt === 'string' && item.lastLocalChangeAt ? { lastLocalChangeAt: item.lastLocalChangeAt } : {}),
+        ...(typeof item.backupUpdatedAt === 'string' && item.backupUpdatedAt ? { backupUpdatedAt: item.backupUpdatedAt } : {}),
+        autoUpdateInterval: typeof item.autoUpdateInterval === 'number' && item.autoUpdateInterval >= 0
+          ? Math.min(576, Math.round(item.autoUpdateInterval))
+          : 0,
       }))
     : []
 
@@ -88,7 +94,7 @@ function normalizeConfig(raw: any): AppConfig {
 
   const activeConfigProfileId =
     typeof raw?.activeConfigProfileId === 'string'
-    && configProfiles.some((p) => p.id === raw.activeConfigProfileId)
+    && (raw.activeConfigProfileId === '' || configProfiles.some((p) => p.id === raw.activeConfigProfileId))
       ? raw.activeConfigProfileId
       : configProfiles.length > 0 ? configProfiles[0].id : ''
 
@@ -262,9 +268,9 @@ export function useConfigStore() {
     config.value.activeClashApiId = profile.id
   }
 
-  function addConfigProfile(name: string, type: 'local' | 'remote', source: string, autoUpdateInterval = 0): string {
+  function addConfigProfile(name: string, type: 'local' | 'remote', source: string, autoUpdateInterval = 0, id = createConfigProfileId()): string {
     const profile: ConfigProfile = {
-      id: createConfigProfileId(),
+      id,
       name,
       type,
       source,
@@ -280,9 +286,7 @@ export function useConfigStore() {
     if (index === -1) return false
     config.value.configProfiles.splice(index, 1)
     if (config.value.activeConfigProfileId === id) {
-      config.value.activeConfigProfileId = config.value.configProfiles.length > 0
-        ? config.value.configProfiles[0].id
-        : ''
+      config.value.activeConfigProfileId = ''
     }
     return true
   }
@@ -301,6 +305,21 @@ export function useConfigStore() {
     if (typeof partial.type === 'string') profile.type = partial.type
     if (typeof partial.lastUpdated === 'string') profile.lastUpdated = partial.lastUpdated
     if (typeof partial.autoUpdateInterval === 'number') profile.autoUpdateInterval = partial.autoUpdateInterval
+    for (const key of ['lastLocalChangeAt', 'backupUpdatedAt'] as const) {
+      if (!(key in partial)) continue
+      const value = partial[key]
+      if (value) profile[key] = value
+      else delete profile[key]
+    }
+    if ('lastFetchError' in partial) {
+      if (partial.lastFetchError) {
+        profile.lastFetchError = partial.lastFetchError
+        profile.lastFetchFailedAt = partial.lastFetchFailedAt ?? new Date().toISOString()
+      } else {
+        delete profile.lastFetchError
+        delete profile.lastFetchFailedAt
+      }
+    }
   }
 
   return {

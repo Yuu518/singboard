@@ -6,6 +6,7 @@ import {
   validateSingboxConfig,
 } from '@/bridge/config'
 import { startService, restartService } from '@/bridge/service'
+import { recordLoadedConfig } from '@/stores/configOps'
 
 // 激活配置的源文件路径；未选用任何配置时返回 null
 export async function resolveActiveConfigPath(): Promise<string | null> {
@@ -44,7 +45,7 @@ export async function prepareCoreStart(): Promise<void> {
       await validateSingboxConfig(singboxPath, runningConfigPath, workingDir)
     }
   } catch (e: any) {
-    throw new Error('配置文件校验或同步失败:\n' + (e?.message || e))
+    throw new Error('配置文件校验或同步失败：\n' + (e?.message || e))
   }
 }
 
@@ -52,10 +53,12 @@ export async function prepareCoreStart(): Promise<void> {
 export async function startCore(): Promise<void> {
   await prepareCoreStart()
   await startService()
+  await recordLoadedConfig()
 }
 
 // 重启核心：配置校验失败时不停服务，保持当前连接可用
 export async function restartCore(): Promise<void> {
   await prepareCoreStart()
   await restartService()
+  await recordLoadedConfig()
 }

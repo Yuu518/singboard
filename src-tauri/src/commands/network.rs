@@ -60,11 +60,36 @@ pub(crate) fn build_client(timeout: Option<Duration>) -> Result<reqwest::Client,
     .build()
 }
 
+const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn describe_fetch_error(error: reqwest::Error) -> String {
+    let error = error.without_url();
+    if error.is_timeout() {
+        "请求超时（30 秒）".into()
+    } else if error.is_builder() {
+        "地址无效".into()
+    } else if error.is_connect() {
+        "无法连接服务器，请检查网络；如果开着系统代理，确认它指向的程序在运行".into()
+    } else if error.is_decode() || error.is_body() {
+        "下载中断，内容不完整".into()
+    } else {
+        format!("下载失败：{error}")
+    }
+}
+
 #[tauri::command]
-pub async fn fetch_url(url: String) -> Result<String, String> {
-    let client = build_client(None).map_err(|e| e.to_string())?;
-    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
-    resp.text().await.map_err(|e| e.to_string())
+pub async fn fetch_url(url: String, user_agent: Option<String>) -> Result<String, String> {
+    let client = build_client(Some(FETCH_TIMEOUT)).map_err(|e| e.to_string())?;
+    let mut request = client.get(&url);
+    if let Some(agent) = user_agent.filter(|agent| !agent.trim().is_empty()) {
+        request = request.header(reqwest::header::USER_AGENT, agent);
+    }
+    let resp = request.send().await.map_err(describe_fetch_error)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("服务器返回 HTTP {}", status.as_u16()));
+    }
+    resp.text().await.map_err(describe_fetch_error)
 }
 
 #[tauri::command]

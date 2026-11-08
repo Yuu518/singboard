@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref } from 'vue'
+import { nextTick, onBeforeUnmount, ref, useId } from 'vue'
 
+const titleId = useId()
+const messageId = useId()
 const visible = ref(false)
 const title = ref('')
 const message = ref('')
@@ -91,11 +93,11 @@ defineExpose({ show })
       class="glass-popover w-full max-w-sm rounded-[var(--radius-panel)] p-5 space-y-4"
       role="alertdialog"
       aria-modal="true"
-      :aria-labelledby="title ? 'confirm-dialog-title' : undefined"
-      aria-describedby="confirm-dialog-message"
+      :aria-labelledby="title ? titleId : undefined"
+      :aria-describedby="messageId"
     >
-      <h3 v-if="title" id="confirm-dialog-title" class="text-base font-semibold">{{ title }}</h3>
-      <p id="confirm-dialog-message" class="text-sm text-base-content/80 whitespace-pre-line">{{ message }}</p>
+      <h3 v-if="title" :id="titleId" class="text-base font-semibold">{{ title }}</h3>
+      <p :id="messageId" class="text-sm text-base-content/80 whitespace-pre-line">{{ message }}</p>
       <div class="flex justify-end gap-2">
         <button ref="cancelButton" type="button" class="btn btn-sm btn-ghost" @click="cancel">{{ cancelText }}</button>
         <button

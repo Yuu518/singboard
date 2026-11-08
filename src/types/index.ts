@@ -151,12 +151,18 @@ export interface ClashApiProfile {
   secret: string
 }
 
+export type SaveCheck = 'passed' | 'failed' | 'skipped'
+
 export interface ConfigProfile {
   id: string
   name: string
   type: 'local' | 'remote'
   source: string
   lastUpdated?: string
+  lastFetchError?: string
+  lastFetchFailedAt?: string
+  lastLocalChangeAt?: string
+  backupUpdatedAt?: string
   autoUpdateInterval: number // 小时，0 = 不自动更新
 }
 
