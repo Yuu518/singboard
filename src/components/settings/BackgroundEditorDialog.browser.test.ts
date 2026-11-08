@@ -39,7 +39,7 @@ describe('background editor dialog', () => {
 
     await page.getByRole('button', { name: '向右旋转' }).click()
     await page.getByRole('button', { name: '水平镜像' }).click()
-    await page.getByRole('button', { name: '确认' }).click()
+    await page.getByRole('button', { name: '使用这张背景' }).click()
 
     const result = await pending
     expect(result?.type).toBe('image/webp')
@@ -69,7 +69,7 @@ describe('background editor dialog', () => {
     await userEvent.dragAndDrop(document.querySelector<HTMLElement>('.editor-handle-e')!, preview, {
       targetPosition: { x: width / 2, y: height / 2 },
     })
-    await page.getByRole('button', { name: '确认' }).click()
+    await page.getByRole('button', { name: '使用这张背景' }).click()
 
     const bitmap = await createImageBitmap((await pending)!)
     expect(bitmap.width).toBeGreaterThan(180)
@@ -83,10 +83,43 @@ describe('background editor dialog', () => {
     const pending = editor().edit(await sampleImage())
 
     await page.getByRole('radio', { name: '适配窗口' }).click()
-    await page.getByRole('button', { name: '确认' }).click()
+    await page.getByRole('button', { name: '使用这张背景' }).click()
 
     const bitmap = await createImageBitmap((await pending)!)
     expect(bitmap.width / bitmap.height).toBeCloseTo(window.innerWidth / window.innerHeight, 1)
     bitmap.close()
+  })
+
+  it('starts on the crop box and edits it from the keyboard', async () => {
+    const editor = mountEditor()
+    const pending = editor().edit(await sampleImage())
+
+    await expect.poll(() => document.activeElement?.classList.contains('editor-crop')).toBe(true)
+    const crop = document.querySelector<HTMLElement>('.editor-crop')!
+    await userEvent.keyboard('{Shift>}{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}{/Shift}')
+    await expect.poll(() => crop.style.width).toBe('95%')
+    await userEvent.keyboard('{ArrowRight}{ArrowRight}')
+    await expect.poll(() => crop.style.left).toBe('2%')
+    await expect.element(page.getByRole('status')).toHaveTextContent('宽 95%')
+    await userEvent.keyboard('{Enter}')
+
+    const bitmap = await createImageBitmap((await pending)!)
+    expect(bitmap.width).toBe(380)
+    bitmap.close()
+  })
+
+  it('closes on Escape and gives focus back to the opener', async () => {
+    const opener = document.createElement('button')
+    opener.textContent = '更换'
+    document.body.appendChild(opener)
+    opener.focus()
+    const editor = mountEditor()
+    const pending = editor().edit(await sampleImage())
+    await expect.element(page.getByRole('dialog')).toBeVisible()
+
+    await userEvent.keyboard('{Escape}')
+    expect(await pending).toBeNull()
+    await expect.poll(() => document.activeElement).toBe(opener)
+    opener.remove()
   })
 })

@@ -45,3 +45,7 @@ export async function performCoreUpdate(args: {
 }): Promise<CoreUpdateResult> {
   return invoke<CoreUpdateResult>('perform_core_update', args)
 }
+
+export async function openReleasePage(url: string): Promise<void> {
+  return invoke('open_release_page', { url })
+}

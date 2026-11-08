@@ -6,7 +6,8 @@ const props = withDefaults(defineProps<{
   title: string
   busy?: boolean
   dismissOnBackdrop?: boolean
-}>(), { busy: false, dismissOnBackdrop: true })
+  size?: 'md' | 'lg'
+}>(), { busy: false, dismissOnBackdrop: true, size: 'md' })
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -17,7 +18,7 @@ let opener: HTMLElement | null = null
 const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
 
 function focusables(): HTMLElement[] {
-  return Array.from(panel.value?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])
+  return Array.from(panel.value?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []).filter((element) => element.tabIndex >= 0)
 }
 
 function requestClose() {
@@ -85,7 +86,8 @@ onBeforeUnmount(() => {
       >
         <div
           ref="panel"
-          class="glass-popover w-full max-w-md rounded-[var(--radius-panel)] p-5"
+          class="glass-popover w-full rounded-[var(--radius-panel)] p-5"
+          :class="size === 'lg' ? 'max-w-3xl' : 'max-w-md'"
           role="dialog"
           aria-modal="true"
           :aria-labelledby="titleId"

@@ -652,7 +652,7 @@ onBeforeUnmount(() => {
       </template>
       <template v-else-if="apiUnreachable">
         <span>无法连接 Clash API，正在重试；下面是中断前的数据。</span>
-        <button type="button" class="btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]" @click="router.push('/settings')">检查 API 配置</button>
+        <button type="button" class="btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]" @click="router.push({ path: '/settings', hash: '#clash-api' })">检查 API 配置</button>
       </template>
       <template v-else>
         <span class="loading loading-spinner loading-xs" aria-hidden="true"></span>
@@ -756,7 +756,7 @@ onBeforeUnmount(() => {
             <dd>{{ socketState === 'failed' ? '地址无效，无法建立连接' : `已连续 ${socketFailures} 次连接失败，仍在自动重试` }}</dd>
           </dl>
           <div class="mt-4">
-            <button type="button" class="btn btn-sm btn-glass px-5" @click="router.push('/settings')">检查 API 配置</button>
+            <button type="button" class="btn btn-sm btn-glass px-5" @click="router.push({ path: '/settings', hash: '#clash-api' })">检查 API 配置</button>
           </div>
         </div>
         <div

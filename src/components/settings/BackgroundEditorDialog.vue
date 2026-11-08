@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useToastStore } from '@/stores/toast'
+import GlassDialog from '@/components/common/GlassDialog.vue'
+import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import {
   canvasToBlob,
   centeredCrop,
@@ -21,6 +23,11 @@ import {
 const PREVIEW_EDGE = 1600
 const MIN_CROP_PX = 64
 const STAGE_GUTTER = 28
+const KEY_STEP = 0.01
+const ASPECT_OPTIONS = [
+  { value: 'free', label: '自由' },
+  { value: 'window', label: '适配窗口' },
+] as const
 const CORNER_HANDLES: CropHandle[] = ['nw', 'ne', 'sw', 'se']
 const ALL_HANDLES: CropHandle[] = ['n', 's', 'e', 'w', ...CORNER_HANDLES]
 
@@ -36,6 +43,7 @@ const frameSize = ref({ width: 0, height: 0 })
 let resolveFn: ((value: Blob | null) => void) | null = null
 let stageObserver: ResizeObserver | null = null
 let drag: { handle: CropHandle | 'move'; startX: number; startY: number; start: CropRect } | null = null
+const cropAnnouncement = ref('')
 
 const fullSize = computed<[number, number]>(() =>
   bitmap.value ? transformedSize(bitmap.value.width, bitmap.value.height, state.value.rotation) : [1, 1],
@@ -133,8 +141,41 @@ function endDrag() {
   drag = null
 }
 
+const ARROW_DELTAS: Record<string, [number, number]> = {
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+}
+
+function percent(value: number) {
+  return Math.round(value * 100)
+}
+
+function describeCrop(crop: CropRect) {
+  return `裁剪区域：距左 ${percent(crop.x)}%，距上 ${percent(crop.y)}%，宽 ${percent(crop.w)}%，高 ${percent(crop.h)}%`
+}
+
+function onCropKeydown(event: KeyboardEvent) {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    void confirm()
+    return
+  }
+  const delta = ARROW_DELTAS[event.key]
+  if (!delta) return
+  event.preventDefault()
+  const dx = delta[0] * KEY_STEP
+  const dy = delta[1] * KEY_STEP
+  const current = state.value.crop
+  const crop = event.shiftKey ? resizeCrop(current, 'se', dx, dy, cropLimits()) : moveCrop(current, dx, dy)
+  state.value = { ...state.value, crop }
+  cropAnnouncement.value = describeCrop(crop)
+}
+
 function finish(value: Blob | null) {
   visible.value = false
+  cropAnnouncement.value = ''
   busy.value = false
   drag = null
   stageObserver?.disconnect()
@@ -184,17 +225,7 @@ function cancel() {
   if (!busy.value) finish(null)
 }
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') cancel()
-}
-
-watch(visible, (open) => {
-  if (open) window.addEventListener('keydown', onKeydown)
-  else window.removeEventListener('keydown', onKeydown)
-})
-
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKeydown)
   if (resolveFn) finish(null)
 })
 
@@ -202,17 +233,8 @@ defineExpose({ edit })
 </script>
 
 <template>
-  <Teleport to="body">
-  <Transition name="glass-pop">
-  <div v-if="visible" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-    <div
-      class="glass-popover flex w-full max-w-3xl flex-col gap-4 rounded-[var(--radius-panel)] p-5"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="background-editor-title"
-    >
-      <h3 id="background-editor-title" class="text-base font-semibold">编辑背景</h3>
-
+  <GlassDialog :open="visible" title="编辑背景" size="lg" :busy="busy" :dismiss-on-backdrop="false" @close="cancel">
+    <div class="flex flex-col gap-3">
       <div ref="stageRef" class="editor-stage">
         <div
           class="editor-frame"
@@ -225,71 +247,85 @@ defineExpose({ edit })
           <div class="editor-shade" aria-hidden="true">
             <div class="editor-shade-window" :style="cropStyle" />
           </div>
-          <div class="editor-crop" :style="cropStyle" @pointerdown="startDrag($event, 'move')">
+          <div
+            class="editor-crop"
+            :style="cropStyle"
+            tabindex="0"
+            role="group"
+            aria-roledescription="裁剪框"
+            aria-label="裁剪区域"
+            aria-describedby="background-editor-keys"
+            @pointerdown="startDrag($event, 'move')"
+            @keydown="onCropKeydown"
+          >
             <span
               v-for="handle in handles"
               :key="handle"
               class="editor-handle"
               :class="`editor-handle-${handle}`"
+              aria-hidden="true"
               @pointerdown.stop="startDrag($event, handle)"
             />
           </div>
         </div>
       </div>
+      <p class="sr-only" role="status" aria-live="polite">{{ cropAnnouncement }}</p>
 
-      <div class="flex flex-wrap items-center gap-2">
-        <button type="button" class="btn btn-sm btn-ghost btn-square" title="向左旋转" aria-label="向左旋转" @click="rotate(false)">
-          <svg class="editor-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 8h7a5 5 0 1 1-4.6 7" /><path d="m7 5-3 3 3 3" /></svg>
-        </button>
-        <button type="button" class="btn btn-sm btn-ghost btn-square" title="向右旋转" aria-label="向右旋转" @click="rotate(true)">
-          <svg class="editor-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M16 8H9a5 5 0 1 0 4.6 7" /><path d="m13 5 3 3-3 3" /></svg>
-        </button>
-        <button
-          type="button"
-          class="btn btn-sm btn-ghost btn-square"
-          :class="{ 'btn-active': state.flipX }"
-          title="水平镜像"
-          aria-label="水平镜像"
-          :aria-pressed="state.flipX"
-          @click="flip(true)"
-        >
-          <svg class="editor-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3v14" /><path d="M7 6 3 14h4V6Z" /><path d="m13 6 4 8h-4V6Z" /></svg>
-        </button>
-        <button
-          type="button"
-          class="btn btn-sm btn-ghost btn-square"
-          :class="{ 'btn-active': state.flipY }"
-          title="垂直镜像"
-          aria-label="垂直镜像"
-          :aria-pressed="state.flipY"
-          @click="flip(false)"
-        >
-          <svg class="editor-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 10h14" /><path d="M6 7 14 3v4H6Z" /><path d="m6 13 8 4v-4H6Z" /></svg>
-        </button>
-
-        <div class="settings-segmented ml-1" role="radiogroup" aria-label="裁剪比例">
-          <button type="button" role="radio" :class="{ 'is-active': aspectMode === 'free' }" :aria-checked="aspectMode === 'free'" @click="aspectMode = 'free'">
-            自由
-          </button>
-          <button type="button" role="radio" :class="{ 'is-active': aspectMode === 'window' }" :aria-checked="aspectMode === 'window'" @click="aspectMode = 'window'">
-            适配窗口
-          </button>
+      <div class="editor-toolbar">
+        <div class="editor-group" role="group" aria-labelledby="background-editor-transform">
+          <span id="background-editor-transform" class="editor-group-label">旋转与镜像</span>
+          <div class="editor-tools">
+            <button type="button" class="editor-tool" title="向左旋转" aria-label="向左旋转" @click="rotate(false)">
+              <svg class="editor-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 8h7a5 5 0 1 1-4.6 7" /><path d="m7 5-3 3 3 3" /></svg>
+            </button>
+            <button type="button" class="editor-tool" title="向右旋转" aria-label="向右旋转" @click="rotate(true)">
+              <svg class="editor-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M16 8H9a5 5 0 1 0 4.6 7" /><path d="m13 5 3 3-3 3" /></svg>
+            </button>
+            <button
+              type="button"
+              class="editor-tool"
+              :class="{ 'is-active': state.flipX }"
+              title="水平镜像"
+              aria-label="水平镜像"
+              :aria-pressed="state.flipX"
+              @click="flip(true)"
+            >
+              <svg class="editor-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3v14" /><path d="M7 6 3 14h4V6Z" /><path d="m13 6 4 8h-4V6Z" /></svg>
+            </button>
+            <button
+              type="button"
+              class="editor-tool"
+              :class="{ 'is-active': state.flipY }"
+              title="垂直镜像"
+              aria-label="垂直镜像"
+              :aria-pressed="state.flipY"
+              @click="flip(false)"
+            >
+              <svg class="editor-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 10h14" /><path d="M6 7 14 3v4H6Z" /><path d="m6 13 8 4v-4H6Z" /></svg>
+            </button>
+          </div>
         </div>
-
-        <button type="button" class="btn btn-sm btn-ghost" @click="reset">重置</button>
-
-        <div class="ml-auto flex gap-2">
-          <button type="button" class="btn btn-sm btn-ghost" :disabled="busy" @click="cancel">取消</button>
-          <button type="button" class="btn btn-sm btn-primary" :disabled="busy" @click="confirm">
-            <span v-if="busy" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
-            确认
-          </button>
+        <span class="editor-separator" aria-hidden="true"></span>
+        <div class="editor-group">
+          <span id="background-editor-aspect" class="editor-group-label">比例</span>
+          <SegmentedControl v-model="aspectMode" :options="ASPECT_OPTIONS" labelledby="background-editor-aspect" />
         </div>
+        <span class="editor-separator" aria-hidden="true"></span>
+        <button type="button" class="btn btn-sm btn-ghost editor-reset" @click="reset">重置</button>
+      </div>
+
+      <div class="editor-footer">
+        <p id="background-editor-keys" class="editor-keys">
+          裁剪框获得焦点时：<kbd>←↑→↓</kbd> 移动，<kbd>Shift</kbd>+方向键 调整大小，<kbd>Enter</kbd> 使用
+        </p>
+        <button type="button" class="btn btn-sm btn-ghost" :disabled="busy" @click="cancel">取消</button>
+        <button type="button" class="btn btn-sm btn-primary" :disabled="busy" :aria-busy="busy" @click="confirm">
+          <span v-if="busy" class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+          使用这张背景
+        </button>
       </div>
     </div>
-  </div>
-  </Transition>
-  </Teleport>
+  </GlassDialog>
 </template>
 
 <style scoped>
@@ -353,6 +389,98 @@ defineExpose({ edit })
 .editor-handle-s { top: 100%; left: 50%; cursor: ns-resize; }
 .editor-handle-w { top: 50%; left: 0; cursor: ew-resize; }
 .editor-handle-e { top: 50%; left: 100%; cursor: ew-resize; }
+
+.editor-crop:focus-visible {
+  outline: 2px solid oklch(var(--p));
+  outline-offset: 3px;
+}
+
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.editor-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor-group-label {
+  color: oklch(var(--bc) / 0.55);
+  font-size: 12px;
+}
+
+.editor-tools {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9999px;
+  background: var(--fill);
+}
+
+.editor-tool {
+  display: inline-flex;
+  width: 32px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  color: oklch(var(--bc) / 0.7);
+}
+
+.editor-tool:hover {
+  color: oklch(var(--bc));
+}
+
+.editor-tool.is-active {
+  background: var(--segment-thumb);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12), 0 0 0 0.5px rgb(0 0 0 / 0.04);
+  color: oklch(var(--bc));
+}
+
+.editor-tool:focus-visible {
+  outline: 2px solid oklch(var(--p));
+  outline-offset: 2px;
+}
+
+.editor-separator {
+  width: 0.5px;
+  height: 20px;
+  background: var(--hairline);
+}
+
+.editor-reset {
+  color: oklch(var(--bc) / 0.7);
+}
+
+.editor-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--hairline);
+}
+
+.editor-keys {
+  min-width: 0;
+  flex: 1 1 260px;
+  margin: 0;
+  color: oklch(var(--bc) / 0.55);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.editor-keys kbd {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--fill);
+  font-family: inherit;
+  font-size: 11px;
+}
 
 .editor-icon {
   width: 17px;

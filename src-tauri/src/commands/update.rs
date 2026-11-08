@@ -663,9 +663,57 @@ pub async fn perform_core_update(
     Ok(CoreUpdateResult { version, restarted })
 }
 
+fn is_release_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'))
+}
+
+pub fn is_release_page_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://github.com/") else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('/').collect();
+    match parts.as_slice() {
+        [owner, repo, "releases"] => is_release_segment(owner) && is_release_segment(repo),
+        [owner, repo, "releases", "tag", tag] => {
+            is_release_segment(owner) && is_release_segment(repo) && is_release_segment(tag)
+        }
+        _ => false,
+    }
+}
+
+#[tauri::command]
+pub fn open_release_page(url: String) -> Result<(), String> {
+    if !is_release_page_url(&url) {
+        return Err("只能打开 GitHub 发布页".into());
+    }
+    std::process::Command::new("explorer")
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("无法打开浏览器: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_page_urls_are_limited_to_github_releases() {
+        assert!(is_release_page_url("https://github.com/SagerNet/sing-box/releases/tag/v1.13.0-beta.2"));
+        assert!(is_release_page_url("https://github.com/Yuu518/singboard/releases"));
+        assert!(!is_release_page_url("http://github.com/SagerNet/sing-box/releases"));
+        assert!(!is_release_page_url("https://github.com.evil.test/a/b/releases"));
+        assert!(!is_release_page_url("https://github.com/a/b/releases/tag/v1&calc"));
+        assert!(!is_release_page_url("https://github.com/a/b/releases/tag/.."));
+        assert!(!is_release_page_url("https://github.com/a/b/issues"));
+        assert!(!is_release_page_url("https://github.com/a/b/releases/tag/v1/extra"));
+        assert!(!is_release_page_url("https://github.com/a/b/releases/tag/v 1"));
+    }
     use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

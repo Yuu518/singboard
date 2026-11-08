@@ -19,20 +19,23 @@ const latestDisplay = computed(() =>
         <div class="settings-update-status" role="status" aria-live="polite" aria-atomic="true">
           <span v-if="checking">正在检查上游版本…</span>
           <span v-else-if="latest?.hasUpdate">可用版本 <strong class="settings-mono">{{ latestDisplay }}</strong></span>
-          <span v-else-if="latest?.outOfSync" class="badge badge-warning badge-sm">与上游不一致</span>
+          <template v-else-if="latest?.outOfSync">
+            <span>版本号相同</span>
+            <span class="settings-neutral-pill">本地文件和官方发布的不同</span>
+          </template>
           <span v-else-if="latest">已是最新版本 <strong class="settings-mono">{{ latestDisplay }}</strong></span>
           <span v-else>尚未检查上游版本</span>
         </div>
       </div>
       <button
         type="button"
-        class="btn btn-sm btn-route"
+        class="btn btn-sm settings-btn"
         :disabled="checking || updating"
         :aria-busy="checking"
         @click="check(false)"
       >
         <span v-if="checking" class="loading loading-spinner loading-xs settings-update-spinner" aria-hidden="true"></span>
-        <span>{{ checking ? '检查中' : '检查更新' }}</span>
+        <span>{{ checking ? '检查中' : '检查面板更新' }}</span>
       </button>
     </div>
 

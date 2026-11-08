@@ -38,7 +38,7 @@ const { serviceStatus, ready: serviceReady } = useServiceStore()
 const configAutoUpdate = isTrayWindow ? null : useConfigAutoUpdate()
 const { loadProxies, resumePendingTests, refreshDuringCoreWarmup } = useProxiesStore()
 const network = useNetworkStore()
-const { detectVersion } = useSingboxVersionStore()
+const { detectVersion, scheduleDetectVersion } = useSingboxVersionStore()
 const { checkOnStartup: checkPanelUpdateOnStartup } = usePanelUpdateStore()
 
 const route = useRoute()
@@ -118,7 +118,7 @@ onMounted(async () => {
 watch(
   () => config.value.singboxPath,
   () => {
-    if (!isTrayWindow) void detectVersion()
+    if (!isTrayWindow) scheduleDetectVersion()
   },
 )
 

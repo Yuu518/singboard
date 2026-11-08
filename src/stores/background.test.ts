@@ -66,6 +66,20 @@ describe('background store', () => {
     expect(document.documentElement.hasAttribute('data-backdrop')).toBe(false)
   })
 
+  it('hands back the removed image so the removal can be undone', async () => {
+    const { store } = await loadStore()
+    const file = imageFile()
+    await store.setBackground(file)
+
+    const removed = await store.removeBackground()
+    expect(removed).toBe(file)
+    expect(store.hasBackground.value).toBe(false)
+
+    await store.setBackground(removed!)
+    expect(storage.saveBackground).toHaveBeenLastCalledWith(file)
+    expect(store.hasBackground.value).toBe(true)
+  })
+
   it('rejects files that are not usable images', async () => {
     const { store } = await loadStore()
 

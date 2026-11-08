@@ -367,6 +367,7 @@ fn run_gui() {
             singboard_lib::commands::update::check_core_update,
             singboard_lib::commands::update::probe_asset_exe_hash,
             singboard_lib::commands::update::perform_core_update,
+            singboard_lib::commands::update::open_release_page,
             singboard_lib::commands::self_update::check_panel_update,
             singboard_lib::commands::self_update::perform_panel_update,
             singboard_lib::commands::self_update::take_panel_update_error,

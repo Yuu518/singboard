@@ -275,7 +275,7 @@
 
 .settings-service-fields {
   display: grid;
-  grid-template-columns: 128px minmax(0, 1fr);
+  grid-template-columns: 150px minmax(0, 1fr);
   align-items: center;
   gap: 10px 16px;
 }
@@ -283,6 +283,62 @@
 .settings-service-fields > label {
   color: oklch(var(--bc) / 0.6);
   font-size: 12px;
+}
+
+.settings-service-fields > .settings-service-label {
+  align-self: start;
+  padding-top: 7px;
+  color: oklch(var(--bc));
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.settings-service-label > small {
+  display: block;
+  margin-top: 2px;
+  color: oklch(var(--bc) / 0.55);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.settings-delay-control {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-delay-control .settings-button-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-page .settings-quiet-btn {
+  color: oklch(var(--bc) / 0.65);
+  font-weight: 500;
+}
+
+.settings-delay-hint {
+  flex-basis: 100%;
+  margin: 0;
+  color: oklch(var(--bc) / 0.55);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-delay-hint:empty {
+  display: none;
+}
+
+.settings-delay-hint.is-ok {
+  color: var(--latency-ok-ink);
+}
+
+.settings-delay-hint.is-error {
+  color: var(--danger-ink);
 }
 
 .settings-field {
@@ -348,9 +404,48 @@
   display: grid;
   min-width: 0;
   flex: 0 1 360px;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 4px;
+}
+
+.settings-endpoint-dot {
+  --state-color: oklch(var(--bc) / 0.3);
+  width: 8px;
+  height: 8px;
+  margin: 0 6px 0 2px;
+  border-radius: 50%;
+  background: var(--state-color);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--state-color) 20%, transparent);
+}
+
+.settings-endpoint-dot.is-ok {
+  --state-color: oklch(var(--su));
+}
+
+.settings-endpoint-dot.is-pending {
+  --state-color: oklch(var(--wa));
+}
+
+.settings-endpoint-dot.is-error {
+  --state-color: oklch(var(--er));
+}
+
+.settings-page .settings-row-copy > .settings-text-danger {
+  color: var(--danger-ink);
+}
+
+.settings-field > .settings-field-error {
+  color: var(--danger-ink);
+}
+
+.settings-page .input[aria-invalid='true'] {
+  border-color: color-mix(in oklab, var(--danger-ink) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--danger-ink) 16%, transparent);
+}
+
+.settings-group {
+  scroll-margin-top: 56px;
 }
 
 .settings-form-heading > strong {
@@ -428,6 +523,52 @@
 
 .settings-mapping-new {
   grid-template-columns: 140px 14px minmax(0, 1fr) auto;
+}
+
+.settings-mapping-undo {
+  display: flex;
+  min-width: 0;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  background: oklch(var(--bc) / 0.05);
+  color: oklch(var(--bc) / 0.7);
+  font-size: 12px;
+}
+
+.settings-mapping-undo > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-undo {
+  flex: none;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--selection-ink);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.settings-undo:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.settings-undo:focus-visible {
+  outline: 2px solid oklch(var(--p));
+  outline-offset: 2px;
+}
+
+.settings-undo:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .settings-group-badge {
@@ -559,6 +700,45 @@
   margin-top: 0;
   max-height: min(220px, 42vh);
   overflow-y: auto;
+}
+
+.settings-dns-card > .settings-dns-geo {
+  position: relative;
+  margin: 14px -16px -16px;
+}
+
+.settings-dns-card > .settings-dns-geo::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 16px;
+  height: 0.5px;
+  background: var(--hairline);
+  content: '';
+}
+
+.settings-field-feedback {
+  margin: -4px 0 0;
+  color: var(--latency-ok-ink);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-field-feedback:empty {
+  display: none;
+}
+
+.settings-field-feedback.is-error {
+  color: var(--danger-ink);
+}
+
+.settings-neutral-pill {
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: var(--fill);
+  color: oklch(var(--bc) / 0.7);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .settings-dns-results {

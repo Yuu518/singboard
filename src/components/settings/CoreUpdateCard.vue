@@ -1,86 +1,46 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { computed, ref } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { useSingboxVersionStore } from '@/stores/singboxVersion'
+import { useCoreUpdateStore } from '@/stores/coreUpdate'
 import { useToastStore } from '@/stores/toast'
-import { checkCoreUpdate, performCoreUpdate, probeAssetExeHash, type CoreUpdateInfo, type CoreUpdateProgress } from '@/bridge/coreUpdate'
-import { getFileHash } from '@/bridge/config'
-import { isElevationCancelled } from '@/bridge/service'
+import { openReleasePage } from '@/bridge/coreUpdate'
+import { failureMessage } from '@/utils/humanError'
+import { useSettingField, validateMirror, validateRepo } from '@/composables/useSettingField'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
-// "资产 digest → 资产内 sing-box.exe 哈希"的缓存（只留最近一条），
-// 版本号相同时用本地 exe 哈希与之比对，识别上游重建或本地被手动替换
-const INSTALL_RECORD_KEY = 'singboard-core-install-record-v2'
-
-interface InstallRecord {
-  assetDigest: string
-  exeHash: string
-}
-
-function saveInstallRecord(record: InstallRecord) {
-  localStorage.setItem(INSTALL_RECORD_KEY, JSON.stringify(record))
-}
-
-function loadInstallRecord(): InstallRecord | null {
-  try {
-    const record = JSON.parse(localStorage.getItem(INSTALL_RECORD_KEY) ?? '')
-    if (typeof record?.assetDigest === 'string' && typeof record?.exeHash === 'string') {
-      return record
-    }
-  } catch { }
-  return null
-}
-
 const { config } = useConfigStore()
-const { singboxVersion, detectVersion } = useSingboxVersionStore()
+const { singboxVersion } = useSingboxVersionStore()
 const { pushToast } = useToastStore()
-
-const REPOS: Record<string, string> = {
-  official: 'SagerNet/sing-box',
-  ref1nd: 'reF1nd/sing-box-releases',
-}
+const { checking, verifying, updating, latest, outOfSync, progress, releaseUrl, currentRepo, check, update } = useCoreUpdateStore()
 
 const dialogRef = ref<InstanceType<typeof ConfirmDialog> | null>(null)
-const checking = ref(false)
-const verifying = ref(false)
-const updating = ref(false)
-const latest = ref<CoreUpdateInfo | null>(null)
-const outOfSync = ref(false)
-const progress = ref<CoreUpdateProgress | null>(null)
-
-const repo = computed(() =>
-  config.value.coreUpdateSource === 'custom'
-    ? config.value.coreUpdateCustomRepo.trim()
-    : REPOS[config.value.coreUpdateSource],
-)
 
 const latestDisplay = computed(() => latest.value?.version.replace(/^v/, '') ?? '')
+const currentVersionNumber = computed(() => singboxVersion.value.match(/\d+\.\d+\S*/)?.[0] ?? '')
+const hasUpdate = computed(() => !!latest.value && latestDisplay.value !== currentVersionNumber.value)
+const busy = computed(() => checking.value || updating.value || verifying.value)
 
-// 从版本检测输出（如 "sing-box 1.13.14 ..."）里提取版本号
-const currentVersionNumber = computed(() => {
-  const match = singboxVersion.value.match(/\d+\.\d+\S*/)
-  return match ? match[0] : ''
+const repoField = useSettingField({
+  source: computed({
+    get: () => config.value.coreUpdateCustomRepo,
+    set: (value: string) => { config.value.coreUpdateCustomRepo = value },
+  }),
+  validate: validateRepo,
 })
-
-// 不做 semver 比较：不一致即视为可更新（允许换源/降级）
-const hasUpdate = computed(() =>
-  !!latest.value && latestDisplay.value !== currentVersionNumber.value,
-)
-
-// 换源/换通道后旧的检查结果失效（只清除，不自动重新检查）
-watch(
-  () => [config.value.coreUpdateSource, config.value.coreUpdateCustomRepo, config.value.coreUpdateChannel],
-  () => {
-    latest.value = null
-    outOfSync.value = false
-  },
-)
+const mirrorField = useSettingField({
+  source: computed({
+    get: () => config.value.coreUpdateMirror,
+    set: (value: string) => { config.value.coreUpdateMirror = value },
+  }),
+  validate: validateMirror,
+  savedText: (value) => (value ? '已保存，核心和面板更新都会经过这个镜像' : '已清空，改为直连 GitHub'),
+})
 
 const phaseText = computed(() => {
   const p = progress.value
-  const prefix = verifying.value ? '正在校验与上游一致性，' : ''
-  if (!p) return verifying.value ? '正在校验与上游一致性…' : '准备中…'
+  const prefix = verifying.value ? '正在核对本地核心和官方发布的文件，' : ''
+  if (!p) return verifying.value ? '正在核对本地核心和官方发布的文件…' : '准备中…'
   switch (p.phase) {
     case 'download': {
       const mb = (n: number) => (n / 1048576).toFixed(1)
@@ -95,160 +55,72 @@ const phaseText = computed(() => {
   }
 })
 
-// 版本号相同时判断本地核心与上游最新资产是否不一致（上游重建或本地被手动替换）。
-// 缓存命中直接比对；未命中则下载资产解压计算 exe 哈希（每个 digest 只下载一次）
-async function isLocalOutOfSync(info: CoreUpdateInfo): Promise<boolean> {
-  const path = config.value.singboxPath.trim()
-  // 源未提供资产 digest 时无法缓存校验结果，跳过检测避免每次检查都下载
-  if (!info.assetDigest || !path) return false
-  let localHash: string
-  try {
-    localHash = await getFileHash(path)
-  } catch {
-    return false
-  }
-  const record = loadInstallRecord()
-  if (record && record.assetDigest === info.assetDigest) {
-    return localHash !== record.exeHash
-  }
-  verifying.value = true
-  try {
-    const exeHash = await probeAssetExeHash({
-      assetUrl: info.assetUrl,
-      assetSize: info.assetSize,
-      assetDigest: info.assetDigest,
-      mirror: config.value.coreUpdateMirror,
-    })
-    saveInstallRecord({ assetDigest: info.assetDigest, exeHash })
-    return localHash !== exeHash
-  } finally {
-    verifying.value = false
-    progress.value = null
-  }
+function openChangelog() {
+  const url = releaseUrl.value
+  if (!url) return
+  openReleasePage(url).catch((error) => {
+    pushToast({ message: failureMessage('打开更新日志失败', error), type: 'error' })
+  })
 }
 
 async function handleCheck() {
-  if (checking.value || updating.value) return
-  if (!repo.value || !/^[\w.-]+\/[\w.-]+$/.test(repo.value)) {
-    pushToast({ message: '请填写正确的仓库地址（owner/repo）', type: 'error' })
-    return
-  }
-  checking.value = true
-  try {
-    // 核心文件可能在面板运行期间被替换过，先重新检测当前版本再比较
-    const [info] = await Promise.all([
-      checkCoreUpdate(repo.value, config.value.coreUpdateChannel),
-      detectVersion(),
-    ])
-    const checkedVersion = info.version.replace(/^v/, '')
-    const updateAvailable = checkedVersion !== currentVersionNumber.value
-    const checkedOutOfSync = updateAvailable ? false : await isLocalOutOfSync(info)
-    latest.value = info
-    outOfSync.value = checkedOutOfSync
-    if (!updateAvailable && !checkedOutOfSync) {
-      pushToast({ message: `当前已是最新版本（${checkedVersion}）`, type: 'info' })
-      return
-    }
-    const channelLabel = config.value.coreUpdateChannel === 'testing' ? '测试版' : '稳定版'
-    const publishedAt = latest.value.publishedAt
-      ? new Date(latest.value.publishedAt).toLocaleString()
-      : '未知'
-    const message = outOfSync.value
-      ? `当前版本：${singboxVersion.value || '未检测到'}\n最新版本：${latest.value.version}（${channelLabel}）\n发布时间：${publishedAt}\n\n版本号相同，但本地核心与上游最新资产不一致（可能上游重新构建或本地被手动替换）。\n重新安装将覆盖本地核心，自动停止并重启核心服务，是否继续？`
-      : `当前版本：${singboxVersion.value || '未检测到'}\n最新版本：${latest.value.version}（${channelLabel}）\n发布时间：${publishedAt}\n\n更新将自动停止并重启核心服务，是否立即更新？`
-    const confirmed = await dialogRef.value?.show({
-      title: outOfSync.value ? '本地核心与上游不一致' : '发现新核心版本',
-      message,
-      confirmText: outOfSync.value ? '重新安装' : '立即更新',
-      cancelText: '取消',
-    })
-    if (confirmed) {
-      await handleUpdate()
-    }
-  } catch (e) {
-    pushToast({ message: `检查更新失败: ${e}`, type: 'error' })
-  } finally {
-    checking.value = false
-  }
-}
-
-async function handleUpdate() {
-  if (!latest.value || updating.value) return
-  if (!config.value.singboxPath.trim()) {
-    pushToast({ message: '请先在服务配置中设置 sing-box 路径', type: 'error' })
-    return
-  }
-  updating.value = true
-  progress.value = null
-  const assetDigest = latest.value.assetDigest
-  try {
-    const result = await performCoreUpdate({
-      assetUrl: latest.value.assetUrl,
-      assetSize: latest.value.assetSize,
-      assetDigest,
-      mirror: config.value.coreUpdateMirror,
-      singboxPath: config.value.singboxPath,
-    })
-    pushToast({
-      message: `核心已更新至 ${result.version}${result.restarted ? '，服务已重启' : ''}`,
-      type: 'info',
-    })
-    latest.value = null
-    outOfSync.value = false
-    // 安装后本地 exe 即该资产内的 exe，直接记录哈希作为校验缓存
-    try {
-      if (assetDigest) {
-        const exeHash = await getFileHash(config.value.singboxPath)
-        saveInstallRecord({ assetDigest, exeHash })
-      } else {
-        localStorage.removeItem(INSTALL_RECORD_KEY)
-      }
-    } catch { }
-    await detectVersion()
-  } catch (e) {
-    if (!isElevationCancelled(e)) pushToast({ message: `更新失败: ${e}`, type: 'error' })
-  } finally {
-    updating.value = false
-    progress.value = null
-  }
-}
-
-let unlisten: UnlistenFn | null = null
-onMounted(async () => {
-  unlisten = await listen<CoreUpdateProgress>('core-update-progress', (event) => {
-    progress.value = event.payload
+  if (busy.value) return
+  const outcome = await check()
+  const info = latest.value
+  if (!info || (outcome !== 'update' && outcome !== 'out-of-sync')) return
+  const channelLabel = config.value.coreUpdateChannel === 'testing' ? '测试版通道' : '稳定版通道'
+  const mirror = config.value.coreUpdateMirror.trim()
+  const confirmed = await dialogRef.value?.show({
+    title: outcome === 'out-of-sync' ? '本地核心和官方发布的不同' : '发现新核心版本',
+    details: [
+      { label: '当前', value: currentVersionNumber.value || '未检测到', mono: true },
+      { label: '最新', value: `${latestDisplay.value}${info.prerelease ? ' · 测试版' : ''}`, mono: true },
+      { label: '发布时间', value: info.publishedAt ? new Date(info.publishedAt).toLocaleString() : '未知' },
+      { label: '来源', value: `${currentRepo()} · ${channelLabel}`, mono: true },
+      ...(mirror ? [{ label: '下载经由', value: mirror, mono: true }] : []),
+    ],
+    message: outcome === 'out-of-sync'
+      ? '版本号相同，但本地的 sing-box.exe 和官方发布的文件不一样，可能是上游重新构建过，或本地文件被替换过。重新安装会先停止核心，替换后自动重启，期间代理短暂中断。'
+      : '更新会先停止核心，替换后自动重启，期间代理短暂中断。',
+    warning: !info.assetDigest && mirror
+      ? '这个版本没有提供文件校验值，经镜像下载时无法确认文件没有被改动。'
+      : '',
+    link: releaseUrl.value ? { label: '查看更新日志', open: openChangelog } : undefined,
+    confirmText: outcome === 'out-of-sync' ? '重新安装' : '立即更新',
+    cancelText: '稍后',
   })
-})
-onUnmounted(() => {
-  unlisten?.()
-  unlisten = null
-})
+  if (confirmed) await update()
+}
 </script>
 
 <template>
   <div class="settings-card">
     <div class="settings-row">
       <div class="settings-row-copy">
-        <strong>sing-box 核心<span class="settings-version-tag settings-mono">{{ currentVersionNumber || '未检测' }}</span></strong>
+        <strong>sing-box 核心</strong>
         <div class="settings-update-status" role="status" aria-live="polite" aria-atomic="true">
-          <span v-if="verifying">正在校验上游版本…</span>
+          <span v-if="updating">正在更新核心…</span>
+          <span v-else-if="verifying">正在核对本地核心和官方发布的文件…</span>
           <span v-else-if="checking">正在检查上游版本…</span>
           <span v-else-if="hasUpdate">可用版本 <strong class="settings-mono">{{ latestDisplay }}</strong></span>
-          <span v-else-if="outOfSync" class="badge badge-warning badge-sm">与上游不一致</span>
+          <template v-else-if="outOfSync">
+            <span>版本号相同</span>
+            <span class="settings-neutral-pill">本地文件和官方发布的不同</span>
+          </template>
           <span v-else-if="latest">已是最新版本 <strong class="settings-mono">{{ latestDisplay }}</strong></span>
           <span v-else>尚未检查上游版本</span>
-          <span v-if="latest?.prerelease" class="badge badge-warning badge-xs">预发布</span>
+          <span v-if="latest?.prerelease && !busy" class="settings-neutral-pill">测试版</span>
         </div>
       </div>
       <button
         type="button"
-        class="btn btn-sm btn-route"
-        :disabled="checking || updating"
+        class="btn btn-sm settings-btn"
+        :disabled="busy"
         :aria-busy="checking"
         @click="handleCheck"
       >
         <span v-if="checking" class="loading loading-spinner loading-xs settings-update-spinner" aria-hidden="true"></span>
-        <span>{{ checking ? '检查中' : '检查更新' }}</span>
+        <span>{{ checking ? '检查中' : '检查核心更新' }}</span>
       </button>
     </div>
 
@@ -259,38 +131,52 @@ onUnmounted(() => {
         class="progress progress-primary w-full"
         :value="progress.downloaded"
         :max="progress.total"
+        aria-label="核心下载进度"
       />
-      <progress v-else class="progress progress-primary w-full" />
+      <progress v-else class="progress progress-primary w-full" aria-label="核心更新进度" />
     </div>
 
     <label class="settings-row">
       <span class="settings-row-copy">
         <strong>更新源</strong>
       </span>
-      <select v-model="config.coreUpdateSource" class="select select-sm select-bordered settings-row-control">
+      <select v-model="config.coreUpdateSource" class="select select-sm select-bordered settings-row-control" :disabled="busy">
         <option value="official">官方核心 (SagerNet/sing-box)</option>
         <option value="ref1nd">reF1nd 核心</option>
         <option value="custom">自定义仓库</option>
       </select>
     </label>
 
-    <label v-if="config.coreUpdateSource === 'custom'" class="settings-row">
-      <span class="settings-row-copy">
+    <div v-if="config.coreUpdateSource === 'custom'" class="settings-row settings-row-stack">
+      <label for="core-update-repo" class="settings-row-copy">
         <strong>GitHub 仓库</strong>
-      </span>
+        <span>写成 owner/repo，从它的 Releases 下载 Windows 版核心。</span>
+      </label>
       <input
-        v-model="config.coreUpdateCustomRepo"
+        id="core-update-repo"
+        v-model="repoField.draft.value"
         type="text"
-        class="input input-sm input-bordered settings-mono settings-row-control"
-        placeholder="owner/repo"
+        class="input input-sm input-bordered settings-mono"
+        placeholder="SagerNet/sing-box"
+        spellcheck="false"
+        :aria-invalid="!!repoField.error.value"
+        aria-describedby="core-update-repo-feedback"
+        @focus="repoField.onFocus"
+        @input="repoField.onInput"
+        @blur="repoField.commit"
+        @keydown.enter.prevent="repoField.commit"
+        @keydown.escape.prevent="repoField.revert"
       />
-    </label>
+      <p id="core-update-repo-feedback" class="settings-field-feedback" :class="{ 'is-error': repoField.error.value }" role="status">
+        {{ repoField.error.value || repoField.notice.value }}
+      </p>
+    </div>
 
     <label class="settings-row">
       <span class="settings-row-copy">
         <strong>版本通道</strong>
       </span>
-      <select v-model="config.coreUpdateChannel" class="select select-sm select-bordered settings-row-control">
+      <select v-model="config.coreUpdateChannel" class="select select-sm select-bordered settings-row-control" :disabled="busy">
         <option value="stable">稳定版</option>
         <option value="testing">测试版</option>
       </select>
@@ -299,15 +185,26 @@ onUnmounted(() => {
     <div class="settings-row settings-row-stack">
       <label for="core-update-mirror" class="settings-row-copy">
         <strong>下载镜像前缀</strong>
-        <span>可选，仅用于下载；留空则直连 GitHub。</span>
+        <span id="core-update-mirror-desc">可选。下载核心和面板更新时都会把它加在 GitHub 地址前面；留空直连 GitHub。镜像能看到并改写下载内容，只填你信任的地址。</span>
       </label>
       <input
         id="core-update-mirror"
-        v-model="config.coreUpdateMirror"
+        v-model="mirrorField.draft.value"
         type="text"
         class="input input-sm input-bordered settings-mono"
-        placeholder="https://ghproxy.com/"
+        placeholder="https://mirror.example.com/"
+        spellcheck="false"
+        :aria-invalid="!!mirrorField.error.value"
+        aria-describedby="core-update-mirror-desc core-update-mirror-feedback"
+        @focus="mirrorField.onFocus"
+        @input="mirrorField.onInput"
+        @blur="mirrorField.commit"
+        @keydown.enter.prevent="mirrorField.commit"
+        @keydown.escape.prevent="mirrorField.revert"
       />
+      <p id="core-update-mirror-feedback" class="settings-field-feedback" :class="{ 'is-error': mirrorField.error.value }" role="status">
+        {{ mirrorField.error.value || mirrorField.notice.value }}
+      </p>
     </div>
 
     <ConfirmDialog ref="dialogRef" />

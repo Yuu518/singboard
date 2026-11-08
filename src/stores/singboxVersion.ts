@@ -5,6 +5,9 @@ import { useConfigStore } from './config'
 
 // 版本号按内核文件哈希缓存：启动时先展示缓存值，哈希变化才重新检测
 const CACHE_KEY = 'singboard-singbox-version'
+const PATH_EDIT_DELAY_MS = 800
+
+export type SingboxVersionStatus = 'cached' | 'detecting' | 'ok' | 'failed' | 'empty'
 
 function loadCache(): { hash: string; version: string } {
   try {
@@ -17,35 +20,82 @@ function loadCache(): { hash: string; version: string } {
 }
 
 const singboxVersion = ref(loadCache().version)
-let detecting = false
+const versionStatus = ref<SingboxVersionStatus>('cached')
+const versionError = ref('')
+let generation = 0
+let latestRun: Promise<void> = Promise.resolve()
+let scheduleTimer: ReturnType<typeof setTimeout> | null = null
 
-async function detectVersion() {
-  if (detecting) return
+function fail(reason: string) {
+  singboxVersion.value = ''
+  versionError.value = reason
+  versionStatus.value = 'failed'
+}
+
+async function runDetect(token: number) {
   const { config } = useConfigStore()
   const path = config.value.singboxPath?.trim()
   if (!path) {
     singboxVersion.value = ''
+    versionError.value = ''
+    versionStatus.value = 'empty'
     return
   }
-  detecting = true
+  versionStatus.value = 'detecting'
+  let hash: string
   try {
-    const hash = await getFileHash(path)
-    const cached = loadCache()
-    if (cached.hash === hash && cached.version) {
-      singboxVersion.value = cached.version
+    hash = await getFileHash(path)
+  } catch {
+    if (token === generation) fail('找不到该文件或无法读取')
+    return
+  }
+  if (token !== generation) return
+  const cached = loadCache()
+  if (cached.hash === hash && cached.version) {
+    singboxVersion.value = cached.version
+    versionError.value = ''
+    versionStatus.value = 'ok'
+    return
+  }
+  try {
+    const version = normalizeVersionText(await getSingboxVersion(path))
+    if (token !== generation) return
+    if (!version) {
+      fail('无法从该文件读取版本号')
       return
     }
-    const raw = await getSingboxVersion(path)
-    const version = normalizeVersionText(raw)
     singboxVersion.value = version
+    versionError.value = ''
+    versionStatus.value = 'ok'
     localStorage.setItem(CACHE_KEY, JSON.stringify({ hash, version }))
   } catch {
-    // 检测失败时保留现有显示
-  } finally {
-    detecting = false
+    if (token === generation) fail('无法运行该文件读取版本号')
   }
 }
 
+async function detectVersion(): Promise<void> {
+  if (scheduleTimer) {
+    clearTimeout(scheduleTimer)
+    scheduleTimer = null
+  }
+  const token = ++generation
+  let awaited = runDetect(token)
+  latestRun = awaited
+  await awaited
+  while (latestRun !== awaited) {
+    awaited = latestRun
+    await awaited
+  }
+}
+
+function scheduleDetectVersion(delayMs = PATH_EDIT_DELAY_MS) {
+  if (scheduleTimer) clearTimeout(scheduleTimer)
+  scheduleTimer = setTimeout(() => {
+    scheduleTimer = null
+    void detectVersion()
+  }, delayMs)
+}
+
 export function useSingboxVersionStore() {
-  return { singboxVersion, detectVersion }
+  return { singboxVersion, versionStatus, versionError, detectVersion, scheduleDetectVersion }
 }

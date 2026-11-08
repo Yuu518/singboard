@@ -408,7 +408,7 @@ function handleScroll() {
       </template>
       <template v-else-if="apiUnreachable">
         <span>{{ socketState === 'failed' ? 'Clash API 地址无效，无法建立连接' : '无法连接 Clash API，正在重试' }}；下面是中断前的日志。</span>
-        <button type="button" class="btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]" @click="router.push('/settings')">检查 API 配置</button>
+        <button type="button" class="btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]" @click="router.push({ path: '/settings', hash: '#clash-api' })">检查 API 配置</button>
       </template>
       <template v-else>
         <span class="loading loading-spinner loading-xs" aria-hidden="true"></span>
@@ -489,7 +489,7 @@ function handleScroll() {
               <dd>{{ socketState === 'failed' ? '地址无效，无法建立连接' : `已连续 ${socketFailures} 次连接失败，仍在自动重试` }}</dd>
             </dl>
             <div class="mt-4">
-              <button type="button" class="btn btn-sm btn-glass px-5" @click="router.push('/settings')">检查 API 配置</button>
+              <button type="button" class="btn btn-sm btn-glass px-5" @click="router.push({ path: '/settings', hash: '#clash-api' })">检查 API 配置</button>
             </div>
           </div>
           <div v-else-if="socketState !== 'open'" class="flex items-center justify-center gap-2 py-12 text-sm text-base-content/65" role="status">

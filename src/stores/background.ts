@@ -7,11 +7,13 @@ export const MAX_BACKGROUND_BYTES = 50 * 1024 * 1024
 const backgroundUrl = ref<string | null>(null)
 const hasBackground = computed(() => backgroundUrl.value !== null)
 const backdropSample = shallowRef<Uint8ClampedArray | null>(null)
+let currentBlob: Blob | null = null
 let revision = 0
 let initialized = false
 
 function applyUrl(blob: Blob | null) {
   const previous = backgroundUrl.value
+  currentBlob = blob
   backgroundUrl.value = blob ? URL.createObjectURL(blob) : null
   if (previous) URL.revokeObjectURL(previous)
   backdropSample.value = null
@@ -67,7 +69,8 @@ async function setBackground(file: Blob) {
   applyUrl(file)
 }
 
-async function removeBackground() {
+async function removeBackground(): Promise<Blob | null> {
+  const removed = currentBlob
   revision++
   try {
     await deleteBackground()
@@ -75,6 +78,7 @@ async function removeBackground() {
     throw new Error('删除背景失败')
   }
   applyUrl(null)
+  return removed
 }
 
 export function useBackgroundStore() {
