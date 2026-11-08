@@ -63,7 +63,7 @@ const filteredClosedConnections = computed(() => {
 })
 
 export function useConnectionsStore() {
-  const { activeClashApiId } = useConfigStore()
+  const { activeClashApiId, clashApiUrl, clashApiSecret } = useConfigStore()
 
   function start() {
     if (ws) return
@@ -103,7 +103,7 @@ export function useConnectionsStore() {
 
       connections.value = data.connections
       pushConnectionCount(data.connections.length)
-    })
+    }, undefined, { latestOnly: true })
     ws.addEventListener('close', () => {
       if (!ws) return
       socketFailures.value++
@@ -123,7 +123,7 @@ export function useConnectionsStore() {
 
   refCount++
   const unwatchApi = watch(
-    () => activeClashApiId.value,
+    () => [activeClashApiId.value, clashApiUrl.value, clashApiSecret.value] as const,
     () => {
       if (ws) {
         stop()

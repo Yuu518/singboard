@@ -13,6 +13,7 @@ export function createClashWS(
   path: string,
   onMessage: (data: any) => void,
   params?: Record<string, string>,
+  options: { latestOnly?: boolean } = {},
 ): ReconnectingWebSocket {
   const { clashApiUrl, clashApiSecret } = useConfigStore()
 
@@ -42,7 +43,7 @@ export function createClashWS(
     } catch {}
   }
 
-  ws.onmessage = debounce(handler, 100)
+  ws.onmessage = options.latestOnly ? debounce(handler, 100) : handler
 
   return ws
 }

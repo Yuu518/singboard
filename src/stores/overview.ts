@@ -35,7 +35,7 @@ export function pushConnectionCount(count: number) {
 }
 
 export function useOverviewStore() {
-  const { activeClashApiId } = useConfigStore()
+  const { activeClashApiId, clashApiUrl, clashApiSecret } = useConfigStore()
 
   function start() {
     if (!trafficWs) {
@@ -52,7 +52,7 @@ export function useOverviewStore() {
           ...downloadSpeedHistory.value,
           { name: ts, value: data.down },
         ].slice(-MAX_POINTS)
-      })
+      }, undefined, { latestOnly: true })
     }
     if (!memoryWs) {
       memoryWs = createClashWS('/memory', (data: MemoryData) => {
@@ -64,7 +64,7 @@ export function useOverviewStore() {
           ...memoryHistory.value,
           { name: ts, value: data.inuse },
         ].slice(-MAX_POINTS)
-      })
+      }, undefined, { latestOnly: true })
     }
   }
 
@@ -77,14 +77,16 @@ export function useOverviewStore() {
 
   refCount++
   const unwatchApi = watch(
-    () => activeClashApiId.value,
-    () => {
+    () => [activeClashApiId.value, clashApiUrl.value, clashApiSecret.value] as const,
+    ([id], [previousId]) => {
       if (trafficWs || memoryWs) {
         stop()
-        uploadSpeedHistory.value = initHistory()
-        downloadSpeedHistory.value = initHistory()
-        memoryHistory.value = initHistory()
-        connectionsHistory.value = initHistory()
+        if (id !== previousId) {
+          uploadSpeedHistory.value = initHistory()
+          downloadSpeedHistory.value = initHistory()
+          memoryHistory.value = initHistory()
+          connectionsHistory.value = initHistory()
+        }
         start()
       }
     },
