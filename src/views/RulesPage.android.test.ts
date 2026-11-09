@@ -131,7 +131,10 @@ describe('RulesPage on Android', () => {
       '/data/adb/singboard/sing-box',
       'geosite-cn',
     )
-    expect(document.body.querySelector('[role="dialog"]')!.classList.toString()).toContain('glass-popover')
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!
+    expect(dialog.classList.toString()).toContain('glass-popover')
+    expect(document.activeElement).toBe(dialog)
+    expect(dialog.querySelector('input')).not.toBeNull()
     expect(document.body.querySelector('.glass-scrim')!.classList).toContain('safe-overlay')
     unmount()
   })

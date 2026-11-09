@@ -866,7 +866,7 @@ function openProviderDetail(provider: RuleProvider) {
   detailProvider.value = provider
   detailFilterText.value = ''
   detailScrollTop.value = 0
-  void nextTick(() => detailSearchInput.value?.focus())
+  void nextTick(() => (IS_ANDROID ? detailDialog.value : detailSearchInput.value)?.focus())
   void loadDetailRules(provider)
 }
 
@@ -1348,8 +1348,9 @@ onBeforeUnmount(() => {
     >
       <div
         ref="detailDialog"
-        class="glass-popover w-full max-w-2xl max-h-[80vh] flex flex-col rounded-[var(--radius-panel)]"
+        class="glass-popover w-full max-w-2xl max-h-[80vh] flex flex-col rounded-[var(--radius-panel)] outline-none"
         role="dialog"
+        tabindex="-1"
         aria-modal="true"
         aria-labelledby="rule-detail-title"
       >
