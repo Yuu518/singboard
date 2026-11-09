@@ -326,18 +326,6 @@ function isSelectable(group: { type: string }): boolean {
   return group.type.toLowerCase() === 'selector'
 }
 
-const dotPreview = ref<{ group: string; name: string } | null>(null)
-
-function previewNode(group: { name: string; now: string }): string {
-  const preview = dotPreview.value
-  if (!preview || preview.group !== group.name || preview.name === group.now) return ''
-  return preview.name
-}
-
-function shownNode(group: { name: string; now: string }): string {
-  return previewNode(group) || group.now
-}
-
 function latencySummary(names: string[]): string {
   let available = 0
   let failed = 0
@@ -787,21 +775,17 @@ if (IS_ANDROID) {
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-3.5 h-3.5 shrink-0" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
               </svg>
-              <template v-if="previewNode(group)">
-                <span v-if="isSelectable(group)" class="shrink-0 text-[color:var(--selection-ink)]">点击切换到</span>
-                <span class="truncate" :class="{ 'text-[color:var(--selection-ink)]': isSelectable(group) }">{{ previewNode(group) }}</span>
-              </template>
-              <span v-else class="truncate">{{ group.now }}</span>
+              <span class="truncate">{{ group.now }}</span>
               <span
-                v-if="shownNode(group) && shouldShowLatencyBadge(shownNode(group))"
+                v-if="group.now && shouldShowLatencyBadge(group.now)"
                 class="shrink-0 text-xs leading-none px-2 py-0.5 rounded-full tabular-nums"
-                :class="getLatencyBadgeClass(shownNode(group))"
-                :title="latencyHint(shownNode(group))"
+                :class="getLatencyBadgeClass(group.now)"
+                :title="latencyHint(group.now)"
               >
-                {{ getLatencyLabel(shownNode(group)) }}
+                {{ getLatencyLabel(group.now) }}
               </span>
               <button
-                v-if="lastSwitch?.group === group.name && !previewNode(group)"
+                v-if="lastSwitch?.group === group.name"
                 type="button"
                 :class="undoAction"
                 @click.stop="undoSwitch"
@@ -815,7 +799,6 @@ if (IS_ANDROID) {
               :class="{ 'is-open': !isExpanded(group.name) }"
               aria-hidden="true"
               @click.stop
-              @mouseleave="dotPreview = null"
             >
               <div class="proxy-collapse-inner">
                 <div class="flex flex-wrap gap-1.5 px-1 pb-1 pt-2">
@@ -830,7 +813,6 @@ if (IS_ANDROID) {
                     ]"
                     :style="{ '--i': index }"
                     :title="`${nodeName}: ${latencyHint(nodeName)}`"
-                    @mouseenter="isSelectable(group) && (dotPreview = { group: group.name, name: nodeName })"
                     @click="isSelectable(group) && handleSelect(group.name, nodeName)"
                   >
                     <span
