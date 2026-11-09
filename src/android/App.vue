@@ -214,6 +214,7 @@ watch(
     <AppHeader :title="pageTitle" :scrolled="scrolled" />
     <MainPager @scrolled="scrolled = $event" />
     <div class="edge-fade is-top" aria-hidden="true" />
+    <div class="edge-fade is-bottom" aria-hidden="true" />
     <BottomNav />
     <ToastHost />
     <SetupWizard ref="setupWizardRef" v-model:visible="setupWizardVisible" />

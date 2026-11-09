@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { navItems } from './navItems'
 import { backdropLensSupported, buildDisplacementMap, buildLensFilter, type MapImage } from '@/composables/useLiquidLens'
 import { Spring } from '@/utils/spring'
-import { pagerIndex } from '@/android/stores/pager'
+import { goToPage, pagerIndex, requestReselect } from '@/android/stores/pager'
 import { useConfigStore } from '@/stores/config'
 
 const BAR_HEIGHT = 64
@@ -12,6 +12,8 @@ const BAR_PADDING = 4
 const PILL_HEIGHT = 56
 const PRESSED_SCALE = 78 / 56
 const RUBBER_BAND = 4
+const TAP_SLOP = 8
+const CLICK_GUARD_MS = 700
 const BAR_LENS = { height: 24, amount: 24 }
 const PILL_LENS = { height: 10, amount: 14, spread: 0.08 }
 
@@ -52,6 +54,8 @@ let lastTime = 0
 let lastPosition = position.value
 let pointerId: number | null = null
 let lastX = 0
+let travel = 0
+let pointerEndedAt = -Infinity
 let current = activeIndex.value
 let releasing = false
 const lensSupported = backdropLensSupported()
@@ -67,9 +71,10 @@ function easeOut(t: number) {
 }
 
 function pressTo(pressed: boolean) {
+  const scale = pressed && !reducedMotion.matches ? PRESSED_SCALE : 1
   press.target = pressed ? 1 : 0
-  scaleX.target = pressed ? PRESSED_SCALE : 1
-  scaleY.target = pressed ? PRESSED_SCALE : 1
+  scaleX.target = scale
+  scaleY.target = scale
 }
 
 function schedule() {
@@ -80,11 +85,12 @@ function tick(now: number) {
   frame = 0
   const dt = lastTime ? Math.min((now - lastTime) / 1000, 1 / 20) : 1 / 60
   lastTime = now
-  if (reducedMotion.matches) {
+  const still = reducedMotion.matches
+  if (still) {
     for (const spring of springs) spring.snap()
   }
   position.step(dt)
-  velocity.target = pointerId !== null || releasing
+  velocity.target = !still && (pointerId !== null || releasing)
     ? (position.value - lastPosition) / dt / Math.max(count - 1, 1)
     : 0
   lastPosition = position.value
@@ -94,6 +100,7 @@ function tick(now: number) {
   if (releasing && Math.abs(position.value - position.target) < (count - 1) * 0.025) {
     releasing = false
     pressTo(false)
+    if (still) press.snap()
   }
   render()
   if (pointerId !== null || releasing || springs.some((spring) => !spring.settled)) {
@@ -108,9 +115,11 @@ function render() {
   const accent = accentRef.value
   const indicator = indicatorRef.value
   if (!body || !accent || !indicator || !width) return
+  const still = reducedMotion.matches
   const p = clamp(press.value, 0, 1)
+  const lift = still ? 0 : p
   const fraction = clamp(offset.value / width, -1, 1)
-  const panel = RUBBER_BAND * Math.sign(fraction) * easeOut(Math.abs(fraction))
+  const panel = still ? 0 : RUBBER_BAND * Math.sign(fraction) * easeOut(Math.abs(fraction))
   const v = velocity.value / 10
   const sx = scaleX.value / (1 - clamp(v * 0.75, -0.2, 0.2))
   const sy = scaleY.value * (1 - clamp(v * 0.25, -0.2, 0.2))
@@ -118,9 +127,9 @@ function render() {
   const center = left + tabWidth / 2
 
   body.style.setProperty('--panel', `${panel.toFixed(2)}px`)
-  body.style.setProperty('--bar-scale', (1 + (16 / width) * p).toFixed(4))
+  body.style.setProperty('--bar-scale', (1 + (16 / width) * lift).toFixed(4))
   body.style.setProperty('--press', p.toFixed(3))
-  body.style.setProperty('--tab-scale', (1 + 0.2 * p).toFixed(3))
+  body.style.setProperty('--tab-scale', (1 + 0.2 * lift).toFixed(3))
   body.style.setProperty('--glow', clamp(glow.value, 0, 1).toFixed(3))
   body.style.setProperty('--glow-x', `${center.toFixed(1)}px`)
   indicator.style.transform = `translate3d(${left.toFixed(2)}px, 0, 0) scale(${sx.toFixed(4)}, ${sy.toFixed(4)})`
@@ -208,7 +217,7 @@ function indexAt(clientX: number) {
 function navigate(index: number) {
   if (index === current) return
   current = index
-  void router.push(navItems[index].path)
+  goToPage(router, navItems[index].path)
 }
 
 function onPointerDown(event: PointerEvent) {
@@ -216,6 +225,7 @@ function onPointerDown(event: PointerEvent) {
   pointerId = event.pointerId
   bodyRef.value?.setPointerCapture(event.pointerId)
   lastX = event.clientX
+  travel = 0
   releasing = false
   position.target = indexAt(event.clientX)
   pressTo(true)
@@ -227,6 +237,7 @@ function onPointerMove(event: PointerEvent) {
   if (event.pointerId !== pointerId) return
   const dx = event.clientX - lastX
   lastX = event.clientX
+  travel += Math.abs(dx)
   if (!dx || !tabWidth) return
   position.target = clamp(position.target + dx / tabWidth, 0, count - 1)
   offset.snap(offset.value + dx)
@@ -236,23 +247,29 @@ function onPointerMove(event: PointerEvent) {
 function finish(event: PointerEvent, commit: boolean) {
   if (event.pointerId !== pointerId) return
   pointerId = null
+  pointerEndedAt = performance.now()
   const target = commit ? clamp(Math.round(position.target), 0, count - 1) : current
   position.target = target
   offset.target = 0
   glow.target = 0
   releasing = true
-  if (commit) navigate(target)
+  if (commit && target === current && travel < TAP_SLOP) requestReselect()
+  else if (commit) navigate(target)
   schedule()
 }
 
-function onKeyboardActivate(event: MouseEvent, index: number) {
-  if (event.detail !== 0) return
+function onItemClick(index: number) {
+  if (performance.now() - pointerEndedAt < CLICK_GUARD_MS) return
+  if (index === current) {
+    requestReselect()
+    return
+  }
   navigate(index)
-  animateTo(index)
+  animateTo(index, true)
 }
 
-function animateTo(index: number) {
-  pressTo(true)
+function animateTo(index: number, pressed: boolean) {
+  if (pressed) pressTo(true)
   position.target = index
   releasing = true
   schedule()
@@ -261,7 +278,7 @@ function animateTo(index: number) {
 watch(activeIndex, (index) => {
   if (index === current) return
   current = index
-  animateTo(index)
+  animateTo(index, false)
 })
 
 function onTransparencyChange() {
@@ -300,16 +317,14 @@ onBeforeUnmount(() => {
     >
       <div class="liquid-nav-glass" :style="lensReady ? { filter: `url(#${barLensId})` } : undefined" />
       <div class="liquid-nav-rim" aria-hidden="true" />
-      <div ref="rowRef" class="liquid-nav-row" role="tablist">
+      <div ref="rowRef" class="liquid-nav-row">
         <button
           v-for="(item, index) in navItems"
           :key="item.path"
           type="button"
-          role="tab"
           class="liquid-nav-item"
-          :aria-selected="activeIndex === index"
           :aria-current="activeIndex === index ? 'page' : undefined"
-          @click="onKeyboardActivate($event, index)"
+          @click="onItemClick(index)"
         >
           <svg class="liquid-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path v-for="(d, i) in item.icon" :key="i" :d="d" />
@@ -336,7 +351,6 @@ onBeforeUnmount(() => {
 <style scoped>
 .liquid-nav {
   --nav-shadow: 0.1;
-  --pill-rgb: 0 0 0;
   --nav-halo: 255 255 255;
   position: fixed;
   z-index: 40;
@@ -350,8 +364,14 @@ onBeforeUnmount(() => {
 
 :global([data-theme='dark'] .liquid-nav) {
   --nav-shadow: 0.2;
-  --pill-rgb: 255 255 255;
   --nav-halo: 0 0 0;
+}
+
+@media (max-width: 359px) {
+  .liquid-nav {
+    right: calc(var(--safe-right) + 12px);
+    left: calc(var(--safe-left) + 12px);
+  }
 }
 
 .liquid-nav-defs {
@@ -417,10 +437,11 @@ onBeforeUnmount(() => {
   display: flex;
   padding: 4px;
   color: oklch(var(--bc) / 0.72);
+  font-weight: 500;
 }
 
 .liquid-nav-row.is-accent {
-  color: oklch(var(--p));
+  color: var(--selection-ink);
   pointer-events: none;
   clip-path: inset(0 100% 0 0);
 }
@@ -448,7 +469,20 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 1px;
   border-radius: 9999px;
-  outline-offset: -4px;
+}
+
+.liquid-nav-item:focus-visible {
+  outline: 2px solid oklch(var(--p));
+  outline-offset: -2px;
+}
+
+.liquid-nav-item[aria-current='page']:focus-visible {
+  outline: none;
+}
+
+.liquid-nav-body:has(.liquid-nav-item[aria-current='page']:focus-visible) .liquid-nav-indicator {
+  outline: 2px solid oklch(var(--p));
+  outline-offset: 1px;
 }
 
 .liquid-nav-row.is-accent .liquid-nav-item {
@@ -464,10 +498,14 @@ onBeforeUnmount(() => {
 .liquid-nav-label {
   max-width: 100%;
   overflow: hidden;
-  font-size: 11px;
-  line-height: 14px;
+  font-size: 12px;
+  line-height: 15px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.liquid-nav-row.is-accent .liquid-nav-label {
+  font-weight: 600;
 }
 
 .liquid-nav-indicator {
@@ -492,7 +530,7 @@ onBeforeUnmount(() => {
 .liquid-nav-pill-surface {
   background:
     linear-gradient(rgb(0 0 0 / calc(0.03 * var(--press, 0))), rgb(0 0 0 / calc(0.03 * var(--press, 0)))),
-    rgb(var(--pill-rgb) / calc(0.1 * (1 - var(--press, 0))));
+    oklch(var(--p) / calc(0.15 * (1 - var(--press, 0))));
   box-shadow:
     inset 0 calc(8px * var(--press, 0)) calc(8px * var(--press, 0)) rgb(0 0 0 / calc(0.15 * var(--press, 0))),
     inset 0 0 0 1px rgb(255 255 255 / calc(0.45 * var(--press, 0)));

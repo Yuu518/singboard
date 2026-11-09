@@ -3,7 +3,8 @@ import { render } from 'vitest-browser-vue'
 import { defineComponent, h, type Component } from 'vue'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { usePageActive } from '@/android/composables/usePageActive'
-import { pagerIndex } from '@/android/stores/pager'
+import { keyboardVisible } from '@/android/stores/keyboard'
+import { pagerIndex, requestReselect } from '@/android/stores/pager'
 import { useConfigStore } from '@/stores/config'
 
 function page(name: string): Component {
@@ -52,6 +53,8 @@ const { config } = useConfigStore()
 afterEach(() => {
   document.body.innerHTML = ''
   config.value.pageSwipe = false
+  keyboardVisible.value = false
+  document.documentElement.style.removeProperty('--keyboard-inset')
 })
 
 describe('main pager', () => {
@@ -103,6 +106,30 @@ describe('main pager', () => {
     expect(viewport.querySelector('[data-page="c"]')).toBe(pageC)
     expect(viewport.querySelectorAll('section')[2].classList.contains('is-entering')).toBe(true)
     await expect.poll(() => viewport.querySelectorAll('section')[2].classList.contains('is-entering')).toBe(false)
+  })
+
+  it('makes the pages clear the keyboard instead of the hidden nav while it is open', async () => {
+    const { viewport } = await mountPager('/a')
+    const section = viewport.querySelector('section') as HTMLElement
+    const resting = getComputedStyle(section).paddingBottom
+
+    document.documentElement.style.setProperty('--keyboard-inset', '300px')
+    keyboardVisible.value = true
+    await expect.poll(() => getComputedStyle(section).paddingBottom).toBe('316px')
+
+    keyboardVisible.value = false
+    await expect.poll(() => getComputedStyle(section).paddingBottom).toBe(resting)
+  })
+
+  it('scrolls the current page back to the top when its nav item is picked again', async () => {
+    const { viewport } = await mountPager('/b')
+    const section = viewport.querySelectorAll('section')[1] as HTMLElement
+    section.scrollTo({ top: 600, behavior: 'instant' })
+    expect(section.scrollTop).toBe(600)
+
+    requestReselect()
+
+    await expect.poll(() => section.scrollTop, { timeout: 3000 }).toBe(0)
   })
 
   it('unlocks swiping when the setting is turned on', async () => {

@@ -3,7 +3,8 @@ import { computed, defineAsyncComponent, markRaw, nextTick, onBeforeUnmount, onM
 import { useRoute, useRouter } from 'vue-router'
 import { navItems } from './navItems'
 import PagerPage from './PagerPage.vue'
-import { pagerIndex } from '@/android/stores/pager'
+import { goToPage, pagerIndex, reselectRequest } from '@/android/stores/pager'
+import { keyboardVisible } from '@/android/stores/keyboard'
 import { useConfigStore } from '@/stores/config'
 
 const emit = defineEmits<{
@@ -68,7 +69,7 @@ function settle(index: number) {
   loaded.add(index)
   emitScrolled()
   const path = pages[index].path
-  if (route.path !== path) void router.push(path)
+  if (route.path !== path) goToPage(router, path)
 }
 
 function jumpTo(index: number) {
@@ -174,6 +175,15 @@ watch(
   },
 )
 
+watch(reselectRequest, () => {
+  const page = viewportRef.value?.children[settled.value]
+  if (!(page instanceof HTMLElement)) return
+  const behavior = reducedMotion.matches ? 'instant' : 'smooth'
+  for (const scroller of [page, ...page.querySelectorAll<HTMLElement>('.under-nav')]) {
+    scroller.scrollTo({ top: 0, behavior })
+  }
+})
+
 onMounted(() => {
   void router.isReady().then(async () => {
     const index = Math.max(0, indexOf(route.path))
@@ -205,7 +215,7 @@ onBeforeUnmount(() => {
   <main
     ref="viewportRef"
     class="app-main"
-    :class="{ 'is-locked': !swipe }"
+    :class="{ 'is-locked': !swipe, 'is-keyboard': keyboardVisible }"
     @scroll.passive="onScroll"
     @scrollend="onScrollEnd"
     @touchstart.passive="onTouchStart"
@@ -262,7 +272,7 @@ onBeforeUnmount(() => {
   }
 }
 
-:global(.keyboard-open) .app-main {
+.app-main.is-keyboard {
   --nav-clearance: calc(var(--keyboard-inset, 0px) + 1rem);
 }
 </style>
