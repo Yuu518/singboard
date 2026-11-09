@@ -356,7 +356,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .liquid-nav {
   --nav-shadow: 0.1;
-  --nav-tone: contrast(calc(1 - 0.7 * var(--glass-c, 0))) brightness(calc(1 + 0.7 * var(--glass-c, 0)));
+  --nav-tone: contrast(calc(1 - 0.6 * var(--glass-c, 0))) brightness(calc(1 / (1 - 0.3 * var(--glass-c, 0))));
   --nav-pill-base: calc(0.7 * var(--glass-c, 0));
   position: fixed;
   z-index: 40;
@@ -370,7 +370,7 @@ onBeforeUnmount(() => {
 
 :global([data-theme='dark'] .liquid-nav) {
   --nav-shadow: 0.2;
-  --nav-tone: contrast(calc(1 - 0.6 * var(--glass-c, 0))) brightness(calc(1 - 0.5 * var(--glass-c, 0)));
+  --nav-tone: contrast(calc(1 - 0.5 * var(--glass-c, 0))) brightness(calc(1 - 0.4 * var(--glass-c, 0)));
 }
 
 @media (max-width: 359px) {
