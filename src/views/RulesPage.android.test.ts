@@ -60,7 +60,7 @@ vi.mock('@/bridge/config', () => ({
   readSingboxConfig: (...args: unknown[]) => mocks.readSingboxConfig(...args),
 }))
 
-const provider = {
+const remoteProvider = {
   name: 'geosite-cn', behavior: 'binary', format: 'binary', ruleCount: 100, type: 'Rule',
   updatedAt: '2026-11-09T10:00:00Z', vehicleType: 'Remote',
 }
@@ -69,7 +69,10 @@ async function flush() {
   for (let i = 0; i < 4; i++) await nextTick()
 }
 
-async function mountPage(options: { rootMode: boolean; ready?: boolean }) {
+let provider = remoteProvider
+
+async function mountPage(options: { rootMode: boolean; ready?: boolean; provider?: typeof remoteProvider }) {
+  provider = options.provider ?? remoteProvider
   mocks.config = ref({ rootMode: options.rootMode, configPath: '/data/adb/singboard/config.json', workingDir: '/data/adb/singboard', singboxPath: '/data/adb/singboard/sing-box' })
   mocks.clashApiReady = ref(options.ready ?? true)
   mocks.loadRules = vi.fn(() => Promise.resolve(''))
@@ -131,6 +134,24 @@ describe('RulesPage on Android', () => {
     expect(document.body.querySelector('[role="dialog"]')!.classList.toString()).toContain('glass-popover')
     expect(document.body.querySelector('.glass-scrim')!.classList).toContain('safe-overlay')
     unmount()
+  })
+
+  it('opens local source and inline rule sets in root mode', async () => {
+    for (const vehicleType of ['Local', 'Inline']) {
+      const local = { ...remoteProvider, behavior: 'source', format: 'source', vehicleType }
+      const { host, unmount } = await mountPage({ rootMode: true, provider: local })
+      const chip = host.querySelector<HTMLButtonElement>('button.rules-set')!
+      expect(chip.textContent).toContain('geosite-cn')
+      chip.click()
+      await flush()
+      expect(mocks.srsListProvider).toHaveBeenCalledWith(
+        '/data/adb/singboard',
+        '/data/adb/singboard/config.json',
+        '/data/adb/singboard/sing-box',
+        'geosite-cn',
+      )
+      unmount()
+    }
   })
 
   it('keeps rule set contents closed without root access', async () => {

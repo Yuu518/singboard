@@ -76,7 +76,7 @@ function isInlineProvider(provider: RuleProvider): boolean {
 }
 
 function canOpenProvider(provider: RuleProvider): boolean {
-  return srsReadable.value && !isInlineProvider(provider) && provider.behavior.toLowerCase() !== 'source'
+  return srsReadable.value
 }
 
 const VEHICLE_LABELS: Record<string, string> = { remote: '远程', local: '本地', inline: '内联', http: '远程', file: '本地' }
