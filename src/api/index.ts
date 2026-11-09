@@ -41,6 +41,8 @@ export const fetchRules = () => api.get<RulesData>('/rules')
 export const disconnectAll = () => api.delete('/connections')
 export const disconnectById = (id: string) => api.delete(`/connections/${id}`)
 
+export const fetchVersion = () => api.get<{ version: string }>('/version', { timeout: 3000 })
+
 export const fetchConfig = () => api.get<ClashConfig>('/configs')
 export const patchConfig = (config: Partial<ClashConfig>) =>
   api.patch('/configs', config)

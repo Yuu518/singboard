@@ -114,6 +114,8 @@ export interface ServiceStatus {
   state: 'running' | 'stopped' | 'starting' | 'stopping' | 'not_installed' | 'unknown'
   pid?: number
   uptimeSeconds?: number
+  cpuPercent?: number
+  memoryBytes?: number
 }
 
 export interface ProxyProvider {
@@ -170,6 +172,9 @@ export interface AppConfig {
   clashApis: ClashApiProfile[]
   activeClashApiId: string
   singboxPath: string
+  coreInstallPath: string
+  configPath: string
+  rulesDir: string
   workingDir: string
   startupDelaySeconds: number
   theme: string
@@ -180,6 +185,9 @@ export interface AppConfig {
   configProfiles: ConfigProfile[]
   activeConfigProfileId: string
   closeToTray: boolean
+  rootMode: boolean
+  setupCompleted: boolean
+  pageSwipe: boolean
   coreUpdateSource: 'official' | 'ref1nd' | 'custom'
   coreUpdateCustomRepo: string
   coreUpdateChannel: 'stable' | 'testing'

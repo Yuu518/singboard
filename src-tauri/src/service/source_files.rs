@@ -80,7 +80,7 @@ impl SourceFiles {
                 .open(&backup)
                 .map_err(|error| format!("创建源核心备份失败: {error}"))?;
             if let Err(error) =
-                crate::commands::update::retry_io(3, || std::fs::rename(destination, &backup))
+                crate::commands::update::platform::retry_io(3, || std::fs::rename(destination, &backup))
             {
                 let _ = std::fs::remove_file(&backup);
                 return Err(format!("备份源核心文件失败: {error}"));

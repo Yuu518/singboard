@@ -1,0 +1,90 @@
+@import '../../assets/styles/glass.css';
+@import './settings.css';
+
+@import '../../assets/styles/base.css';
+
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+
+.safe-overlay {
+  padding: calc(var(--safe-top) + 1rem) calc(var(--safe-right) + 1rem) calc(var(--safe-bottom) + 1rem)
+    calc(var(--safe-left) + 1rem);
+}
+
+.toast-host {
+  top: calc(var(--safe-top) + 3.5rem);
+  right: calc(var(--safe-right) + 1rem);
+}
+
+.app-main::-webkit-scrollbar-track {
+  margin-top: calc(var(--safe-top) + 3.25rem);
+  margin-bottom: calc(max(var(--safe-bottom) + 8px, 16px) + 4.5rem);
+}
+
+.keyboard-open .liquid-nav {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.edge-fade {
+  --edge-dir: to top;
+  --edge-tint: var(--page-bg);
+  display: none;
+  position: fixed;
+  right: 0;
+  left: 0;
+  pointer-events: none;
+  background: linear-gradient(var(--edge-dir), var(--edge-tint), transparent);
+}
+
+[data-backdrop='image'] .edge-fade {
+  --edge-tint: rgb(var(--glass-rgb) / 0.3);
+}
+
+[data-glass='clear'] .edge-fade {
+  display: block;
+}
+
+.edge-fade.is-top {
+  --edge-dir: to bottom;
+  top: 0;
+  z-index: 19;
+  height: calc(var(--safe-top) + 4.5rem);
+}
+
+.edge-fade::before,
+.edge-fade::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+
+.edge-fade::before {
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  -webkit-mask-image: linear-gradient(var(--edge-dir), #000 50%, transparent);
+  mask-image: linear-gradient(var(--edge-dir), #000 50%, transparent);
+}
+
+.edge-fade::after {
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  -webkit-mask-image: linear-gradient(var(--edge-dir), #000 25%, transparent 75%);
+  mask-image: linear-gradient(var(--edge-dir), #000 25%, transparent 75%);
+}
+
+.glass-hover:active {
+  --glass-glow: 1.6;
+  box-shadow: var(--glass-highlight), var(--glass-edge), var(--glass-card-shadow);
+  transform: none;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  [data-glass='clear'] .edge-fade {
+    display: none;
+  }
+}

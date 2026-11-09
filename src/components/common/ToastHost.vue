@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useToastStore } from '@/stores/toast'
+import { IS_ANDROID } from '@/platform'
 
 const { toasts, removeToast, pauseToast, resumeToast } = useToastStore()
 
@@ -9,7 +10,12 @@ function accentClass(type?: 'error' | 'info') {
 </script>
 
 <template>
-  <div class="fixed right-4 bottom-4 z-[60] pointer-events-none space-y-2" role="status" aria-live="polite">
+  <div
+    class="fixed z-[60] pointer-events-none space-y-2"
+    :class="IS_ANDROID ? 'toast-host is-top' : 'right-4 bottom-4'"
+    role="status"
+    aria-live="polite"
+  >
     <TransitionGroup name="toast">
       <div
         v-for="toast in toasts"
@@ -64,6 +70,11 @@ function accentClass(type?: 'error' | 'info') {
 .toast-leave-to {
   opacity: 0;
   transform: translateY(8px) scale(0.96);
+}
+
+.is-top .toast-enter-from,
+.is-top .toast-leave-to {
+  transform: translateY(-8px) scale(0.96);
 }
 
 @media (prefers-reduced-motion: reduce) {

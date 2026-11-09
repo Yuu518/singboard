@@ -1,6 +1,6 @@
 import { computed, ref, watch } from 'vue'
 import { listen } from '@tauri-apps/api/event'
-import { checkCoreUpdate, performCoreUpdate, probeAssetExeHash, type CoreUpdateInfo, type CoreUpdateProgress } from '@/bridge/coreUpdate'
+import { checkCoreUpdate, performCoreUpdate, probeAssetCoreHash, type CoreUpdateInfo, type CoreUpdateProgress } from '@/bridge/coreUpdate'
 import { getFileHash } from '@/bridge/config'
 import { isElevationCancelled } from '@/bridge/service'
 import { failureMessage } from '@/utils/humanError'
@@ -93,7 +93,7 @@ async function isLocalOutOfSync(info: CoreUpdateInfo): Promise<boolean> {
   }
   verifying.value = true
   try {
-    const exeHash = await probeAssetExeHash({
+    const exeHash = await probeAssetCoreHash({
       assetUrl: info.assetUrl,
       assetSize: info.assetSize,
       assetDigest: info.assetDigest,

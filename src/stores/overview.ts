@@ -2,6 +2,8 @@ import { ref, onUnmounted, watch } from 'vue'
 import { createClashWS } from '@/api/websocket'
 import { useConfigStore } from './config'
 import { appVisible } from './appVisible'
+import { clashApiReady } from './service'
+import { IS_ANDROID } from '@/platform'
 import type { TrafficData, MemoryData } from '@/types'
 import type ReconnectingWebSocket from 'reconnecting-websocket'
 
@@ -72,7 +74,7 @@ function closeSockets() {
 }
 
 function start() {
-  if (trafficWs || memoryWs || coreSuspended) return
+  if (trafficWs || memoryWs || coreSuspended || (IS_ANDROID && !clashApiReady.value)) return
   socketState.value = 'connecting'
   socketFailures.value = 0
   try {
@@ -179,9 +181,16 @@ export function useOverviewStore() {
       reset()
     }
   })
+  const unwatchReady = IS_ANDROID
+    ? watch(clashApiReady, (ready) => {
+      if (!ready) stop()
+      else if (appVisible.value && refCount > 0) start()
+    })
+    : () => {}
   onUnmounted(() => {
     unwatchApi()
     unwatchVisible()
+    unwatchReady()
     refCount--
     if (refCount === 0) stop()
   })

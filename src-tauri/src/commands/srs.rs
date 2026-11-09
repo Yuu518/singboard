@@ -2,7 +2,6 @@ use flate2::read::ZlibDecoder;
 use serde::Serialize;
 use std::io::{self, Cursor, Read};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 // ---- low-level readers ----
@@ -442,7 +441,7 @@ const ITEM_FINAL: u8 = 0xFF;
 
 // ---- query ----
 
-enum Query {
+pub(crate) enum Query {
     Domain(String),
     Ip(IpAddr),
     /// Inclusive address range, both bounds of the same family.
@@ -478,7 +477,7 @@ fn prefix_range_v6(addr: Ipv6Addr, prefix: u32) -> (IpAddr, IpAddr) {
 }
 
 /// Parse `1.0.1.240/29` or `240e:e1:a800::/36` into its address range.
-fn parse_cidr(s: &str) -> Option<(IpAddr, IpAddr)> {
+pub(crate) fn parse_cidr(s: &str) -> Option<(IpAddr, IpAddr)> {
     let (addr_str, prefix_str) = s.split_once('/')?;
     let prefix: u32 = prefix_str.trim().parse().ok()?;
     match IpAddr::from_str(addr_str.trim()).ok()? {
@@ -526,7 +525,7 @@ fn parse_partial_ip(s: &str) -> Option<(IpAddr, IpAddr)> {
     }
 }
 
-fn parse_query(q: &str) -> Query {
+pub(crate) fn parse_query(q: &str) -> Query {
     let q = q.trim();
     if let Ok(ip) = IpAddr::from_str(q) {
         return Query::Ip(ip);
@@ -700,7 +699,7 @@ fn validate_srs_header(data: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn srs_match_bytes(data: &[u8], query: &Query) -> Result<bool, String> {
+pub(crate) fn srs_match_bytes(data: &[u8], query: &Query) -> Result<bool, String> {
     validate_srs_header(data)?;
     let mut decompressed = Vec::new();
     ZlibDecoder::new(&data[4..])
@@ -770,16 +769,20 @@ fn bolt_btree_lookup(
     key: &[u8],
 ) -> io::Result<Option<(bool, Vec<u8>)>> {
     let mut curr = pgid;
-    loop {
-        let off = curr as usize * ps;
-        if off + PAGE_HEADER_SIZE > data.len() {
+    for _ in 0..BOLT_MAX_DEPTH {
+        let off = (curr as usize).saturating_mul(ps);
+        if off.saturating_add(PAGE_HEADER_SIZE) > data.len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("page {} out of bounds (file size {})", curr, data.len()),
             ));
         }
         let overflow = u32::from_le_bytes(data[off + 12..off + 16].try_into().unwrap()) as usize;
-        let page_end = off + ps * (1 + overflow);
+        let page_end = overflow
+            .checked_add(1)
+            .and_then(|pages| pages.checked_mul(ps))
+            .and_then(|len| len.checked_add(off))
+            .unwrap_or(usize::MAX);
         if page_end > data.len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -801,6 +804,7 @@ fn bolt_btree_lookup(
             ));
         }
     }
+    Err(io::Error::new(io::ErrorKind::InvalidData, "B-tree too deep"))
 }
 
 /// Find the child pgid for `key` in a branch page.
@@ -838,9 +842,11 @@ fn bolt_branch_child(page: &[u8], count: usize, key: &[u8]) -> u64 {
     // if exact match: use lo; if not exact and lo > 0: use lo-1; else use 0
     let is_exact = lo < count && {
         let es = PAGE_HEADER_SIZE + lo * BRANCH_ELEM_SIZE;
-        let pos = u32::from_le_bytes(page[es..es + 4].try_into().unwrap()) as usize;
-        let ksize = u32::from_le_bytes(page[es + 4..es + 8].try_into().unwrap()) as usize;
-        es + pos + ksize <= page.len() && &page[es + pos..es + pos + ksize] == key
+        es + BRANCH_ELEM_SIZE <= page.len() && {
+            let pos = u32::from_le_bytes(page[es..es + 4].try_into().unwrap()) as usize;
+            let ksize = u32::from_le_bytes(page[es + 4..es + 8].try_into().unwrap()) as usize;
+            es + pos + ksize <= page.len() && &page[es + pos..es + pos + ksize] == key
+        }
     };
     let idx = if is_exact {
         lo
@@ -850,7 +856,9 @@ fn bolt_branch_child(page: &[u8], count: usize, key: &[u8]) -> u64 {
         0
     };
     let elem_start = PAGE_HEADER_SIZE + idx * BRANCH_ELEM_SIZE;
-    u64::from_le_bytes(page[elem_start + 8..elem_start + 16].try_into().unwrap())
+    page.get(elem_start + 8..elem_start + 16)
+        .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+        .unwrap_or(u64::MAX)
 }
 
 /// Binary search for `key` in a leaf page.
@@ -945,279 +953,70 @@ fn parse_saved_binary_content(data: &[u8]) -> io::Result<Vec<u8>> {
     }
 }
 
-// ---- cache.db auto-discovery ----
+const BOLT_MAGIC: u32 = 0xED0C_DAED;
+const BOLT_MAX_DEPTH: usize = 64;
 
-fn collect_candidate_dirs(candidates: &[&str]) -> Vec<std::path::PathBuf> {
-    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
-
-    for s in candidates {
-        if s.is_empty() {
-            continue;
-        }
-        let p = std::path::Path::new(s);
-        // If candidate is a file path, use its parent directory
-        let dir = if p.is_file() {
-            if let Some(parent) = p.parent() {
-                parent.to_path_buf()
-            } else {
-                continue;
-            }
-        } else {
-            p.to_path_buf()
-        };
-        if dir.is_dir() && !dirs.contains(&dir) {
-            dirs.push(dir);
-        }
-    }
-
-    dirs
+fn is_bolt(data: &[u8]) -> bool {
+    data.get(16..20)
+        .map(|b| u32::from_le_bytes(b.try_into().unwrap()) == BOLT_MAGIC)
+        .unwrap_or(false)
 }
 
-/// Search candidate directories for a `cache.db` file.
-/// Checks each directory directly, then one level of subdirectories.
-fn find_cache_db(candidates: &[&str]) -> Option<std::path::PathBuf> {
-    let dirs = collect_candidate_dirs(candidates);
+pub(crate) const NOT_BOLT: &str = "不是 sing-box 缓存数据库";
 
-    for dir in &dirs {
-        let candidate = dir.join("cache.db");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-
-    // Search one level of subdirectories
-    for dir in &dirs {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let sub = entry.path();
-                if sub.is_dir() {
-                    let candidate = sub.join("cache.db");
-                    if candidate.is_file() {
-                        return Some(candidate);
-                    }
-                }
-            }
-        }
-    }
-
-    None
+enum BoltBucket {
+    Page(u64),
+    Inline(Vec<u8>),
 }
 
-/// Find `<tag>.srs` under candidate directories recursively.
-/// Includes both direct children and deeper nested subdirectories.
-fn find_local_srs_by_tag(candidates: &[&str], tag: &str) -> Option<std::path::PathBuf> {
-    fn tag_stem_candidates(tag: &str) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        let mut push_unique = |s: String| {
-            let n = s.trim().to_ascii_lowercase();
-            if !n.is_empty() && !out.contains(&n) {
-                out.push(n);
+fn bolt_lookup(db: &[u8], ps: usize, bucket: &BoltBucket, key: &[u8]) -> io::Result<Option<(bool, Vec<u8>)>> {
+    match bucket {
+        BoltBucket::Page(pgid) => bolt_btree_lookup(db, ps, *pgid, key),
+        BoltBucket::Inline(page) => {
+            if page.len() < PAGE_HEADER_SIZE {
+                return Ok(None);
             }
-        };
-
-        push_unique(tag.to_string());
-
-        // Common provider suffixes in sing-box ecosystems.
-        for suffix in ["-domain", "-ip", "-filter", "-cidr", "-geoip", "-geosite"] {
-            if let Some(stripped) = tag.strip_suffix(suffix) {
-                push_unique(stripped.to_string());
-            }
-        }
-
-        // Fallback: drop the last segment after '-'.
-        if let Some((head, _)) = tag.rsplit_once('-') {
-            push_unique(head.to_string());
-        }
-
-        out
-    }
-
-    let dirs = collect_candidate_dirs(candidates);
-    let mut stack: Vec<(std::path::PathBuf, usize)> = dirs.into_iter().map(|d| (d, 0)).collect();
-    let max_depth = 8usize;
-    let stem_candidates = tag_stem_candidates(tag);
-
-    while let Some((dir, depth)) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                let is_srs = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.eq_ignore_ascii_case("srs"))
-                    .unwrap_or(false);
-                if !is_srs {
-                    continue;
-                }
-                let stem_matches = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|s| {
-                        let stem = s.to_ascii_lowercase();
-                        stem_candidates.iter().any(|c| c == &stem)
-                    })
-                    .unwrap_or(false);
-                if stem_matches {
-                    return Some(path);
-                }
-            } else if path.is_dir() && depth < max_depth {
-                stack.push((path, depth + 1));
-            }
+            let count = u16::from_le_bytes([page[10], page[11]]) as usize;
+            Ok(bolt_leaf_lookup(page, count, key))
         }
     }
-    None
 }
 
-fn resolve_path_candidates(base_dirs: &[PathBuf], raw_path: &str) -> Vec<PathBuf> {
-    let path = Path::new(raw_path);
-    if path.is_absolute() {
-        return vec![path.to_path_buf()];
-    }
-
-    let mut out = Vec::new();
-    for base in base_dirs {
-        out.push(base.join(path));
-    }
-    out
-}
-
-/// Resolve local binary rule-set path from config.json by tag.
-/// Reads route.rule_set and returns a matching file path when type=local and path exists.
-fn find_local_srs_from_config(working_dir: &str, config_path: &str, tag: &str) -> Option<PathBuf> {
-    if config_path.is_empty() {
-        return None;
-    }
-
-    let cfg_path = Path::new(config_path);
-    if !cfg_path.is_file() {
-        return None;
-    }
-
-    let cfg_text = std::fs::read_to_string(cfg_path).ok()?;
-    let cfg_json: serde_json::Value = serde_json::from_str(&cfg_text).ok()?;
-    let rule_sets = cfg_json
-        .get("route")
-        .and_then(|r| r.get("rule_set"))
-        .and_then(|v| v.as_array())?;
-
-    let mut base_dirs: Vec<PathBuf> = Vec::new();
-    if let Some(parent) = cfg_path.parent() {
-        base_dirs.push(parent.to_path_buf());
-    }
-    if !working_dir.is_empty() {
-        base_dirs.push(PathBuf::from(working_dir));
-    }
-    base_dirs.dedup();
-
-    for item in rule_sets {
-        let item_tag = item.get("tag").and_then(|v| v.as_str()).unwrap_or("");
-        if item_tag != tag {
-            continue;
-        }
-        let item_type = item
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("inline");
-        if item_type != "local" {
-            continue;
-        }
-        let raw_path = item.get("path").and_then(|v| v.as_str()).unwrap_or("");
-        if raw_path.is_empty() {
-            continue;
-        }
-        let fmt = item.get("format").and_then(|v| v.as_str()).unwrap_or("");
-        if !fmt.is_empty() && fmt != "binary" {
-            continue;
-        }
-
-        for candidate in resolve_path_candidates(&base_dirs, raw_path) {
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-            if candidate.extension().is_none() {
-                let with_srs = candidate.with_extension("srs");
-                if with_srs.is_file() {
-                    return Some(with_srs);
-                }
-            }
-        }
-    }
-
-    None
-}
-
-// ---- public Tauri commands ----
-
-#[tauri::command]
-pub fn srs_match(path: String, query: String) -> Result<bool, String> {
-    let data = std::fs::read(&path).map_err(|e| format!("read '{}': {}", path, e))?;
-    let q = parse_query(&query);
-    srs_match_bytes(&data, &q)
-}
-
-/// Find and return the path to cache.db, searching common locations.
-#[tauri::command]
-pub fn find_cache_db_path(
-    working_dir: String,
-    config_path: String,
-    singbox_path: String,
-) -> Result<String, String> {
-    find_cache_db(&[&working_dir, &config_path, &singbox_path])
-        .map(|p| p.to_string_lossy().into_owned())
-        .ok_or_else(|| {
-            format!(
-                "cache.db not found (searched: '{}', '{}', '{}')",
-                working_dir, config_path, singbox_path
-            )
-        })
-}
-
-#[tauri::command]
-pub fn srs_match_cache(cache_path: String, tag: String, query: String) -> Result<bool, String> {
-    let data = std::fs::read(&cache_path).map_err(|e| format!("read '{}': {}", cache_path, e))?;
-
-    let ps = bolt_page_size(&data);
-    let root_pgid = bolt_meta_root(&data, ps);
-
-    // Step 1: find "rule_set" bucket in root B-tree
-    let (is_bucket, bval) = bolt_btree_lookup(&data, ps, root_pgid, b"rule_set")
-        .map_err(|e| format!("lookup rule_set bucket: {}", e))?
-        .ok_or_else(|| "rule_set bucket not found in cache.db".to_string())?;
-
-    if !is_bucket || bval.len() < 8 {
-        return Err("rule_set is not a valid bucket entry".into());
-    }
-    let bucket_root = u64::from_le_bytes(bval[0..8].try_into().unwrap());
-
-    // Step 2: find tag entry in rule_set bucket
-    let saved_binary_bytes: Vec<u8> = if bucket_root == 0 {
-        // Inline bucket: bval[16..] is the inline leaf page
-        if bval.len() < 16 + PAGE_HEADER_SIZE {
-            return Err(format!("tag '{}' not found (inline bucket too small)", tag));
-        }
-        let inline_page = &bval[16..];
-        let inline_count = u16::from_le_bytes([inline_page[10], inline_page[11]]) as usize;
-        bolt_leaf_lookup(inline_page, inline_count, tag.as_bytes())
-            .map(|(_, v)| v)
-            .ok_or_else(|| format!("tag '{}' not found in cache.db", tag))?
-    } else {
-        bolt_btree_lookup(&data, ps, bucket_root, tag.as_bytes())
-            .map_err(|e| format!("lookup tag '{}': {}", tag, e))?
-            .map(|(_, v)| v)
-            .ok_or_else(|| format!("tag '{}' not found in cache.db", tag))?
+fn bolt_open_bucket(db: &[u8], ps: usize, parent: &BoltBucket, name: &[u8]) -> Result<Option<BoltBucket>, String> {
+    let label = String::from_utf8_lossy(name.strip_prefix(&[0]).unwrap_or(name)).into_owned();
+    let Some((is_bucket, value)) =
+        bolt_lookup(db, ps, parent, name).map_err(|e| format!("读取 {label} 失败: {e}"))?
+    else {
+        return Ok(None);
     };
+    if !is_bucket || value.len() < 8 {
+        return Err(format!("{label} 数据无效"));
+    }
+    let root = u64::from_le_bytes(value[0..8].try_into().unwrap());
+    if root != 0 {
+        return Ok(Some(BoltBucket::Page(root)));
+    }
+    Ok(Some(BoltBucket::Inline(value.get(16..).unwrap_or_default().to_vec())))
+}
 
-    // Step 3: parse SavedBinary to extract .srs content
-    let srs_content = parse_saved_binary_content(&saved_binary_bytes)
-        .map_err(|e| format!("parse SavedBinary for '{}': {}", tag, e))?;
-
-    // Step 4: match query against the .srs content
-    let q = parse_query(&query);
-    srs_match_bytes(&srs_content, &q)
+pub(crate) fn cached_rule_set(db: &[u8], tag: &str, cache_id: Option<&str>) -> Result<Vec<u8>, String> {
+    if !is_bolt(db) {
+        return Err(NOT_BOLT.into());
+    }
+    let ps = bolt_page_size(db);
+    let mut bucket = BoltBucket::Page(bolt_meta_root(db, ps));
+    if let Some(id) = cache_id {
+        let mut name = vec![0u8];
+        name.extend_from_slice(id.as_bytes());
+        bucket = bolt_open_bucket(db, ps, &bucket, &name)?
+            .ok_or_else(|| format!("没有 cache_id 为 {id} 的缓存"))?;
+    }
+    let rule_sets = bolt_open_bucket(db, ps, &bucket, b"rule_set")?
+        .ok_or_else(|| "没有缓存的规则集".to_string())?;
+    let (_, saved) = bolt_lookup(db, ps, &rule_sets, tag.as_bytes())
+        .map_err(|e| format!("读取规则集 {tag} 失败: {e}"))?
+        .ok_or_else(|| format!("未缓存规则集 {tag}"))?;
+    parse_saved_binary_content(&saved).map_err(|e| format!("解析缓存的规则集 {tag} 失败: {e}"))
 }
 
 // ---- rule enumeration ----
@@ -1648,7 +1447,7 @@ fn list_logical_rule<R: Read>(r: &mut R) -> io::Result<Vec<RuleEntry>> {
     Ok(entries)
 }
 
-fn srs_list_bytes(data: &[u8]) -> Result<Vec<RuleEntry>, String> {
+pub(crate) fn srs_list_bytes(data: &[u8]) -> Result<Vec<RuleEntry>, String> {
     validate_srs_header(data)?;
     let mut decompressed = Vec::new();
     ZlibDecoder::new(&data[4..])
@@ -1667,154 +1466,32 @@ fn srs_list_bytes(data: &[u8]) -> Result<Vec<RuleEntry>, String> {
     Ok(entries)
 }
 
-fn resolve_srs_data(
-    working_dir: &str,
-    config_path: &str,
-    singbox_path: &str,
-    tag: &str,
-) -> Result<Vec<u8>, String> {
-    let mut last_cache_error: Option<String> = None;
-
-    if let Some(cache_path) = find_cache_db(&[working_dir, config_path, singbox_path]) {
-        let data = std::fs::read(&cache_path)
-            .map_err(|e| format!("read '{}': {}", cache_path.to_string_lossy(), e))?;
-        let ps = bolt_page_size(&data);
-        let root_pgid = bolt_meta_root(&data, ps);
-
-        match (|| -> Result<Vec<u8>, String> {
-            let (is_bucket, bval) = bolt_btree_lookup(&data, ps, root_pgid, b"rule_set")
-                .map_err(|e| format!("lookup rule_set bucket: {}", e))?
-                .ok_or_else(|| "rule_set bucket not found".to_string())?;
-            if !is_bucket || bval.len() < 8 {
-                return Err("rule_set is not a valid bucket".into());
-            }
-            let bucket_root = u64::from_le_bytes(bval[0..8].try_into().unwrap());
-            let saved = if bucket_root == 0 {
-                if bval.len() < 16 + PAGE_HEADER_SIZE {
-                    return Err(format!("tag '{}' not found", tag));
-                }
-                let inline_page = &bval[16..];
-                let inline_count = u16::from_le_bytes([inline_page[10], inline_page[11]]) as usize;
-                bolt_leaf_lookup(inline_page, inline_count, tag.as_bytes())
-                    .map(|(_, v)| v)
-                    .ok_or_else(|| format!("tag '{}' not found", tag))?
-            } else {
-                bolt_btree_lookup(&data, ps, bucket_root, tag.as_bytes())
-                    .map_err(|e| format!("lookup '{}': {}", tag, e))?
-                    .map(|(_, v)| v)
-                    .ok_or_else(|| format!("tag '{}' not found", tag))?
-            };
-            parse_saved_binary_content(&saved)
-                .map_err(|e| format!("parse SavedBinary '{}': {}", tag, e))
-        })() {
-            Ok(srs_bytes) if srs_bytes.len() >= 4 && &srs_bytes[0..3] == b"SRS" => {
-                return Ok(srs_bytes);
-            }
-            Ok(_) => last_cache_error = Some(format!("cache.db '{}': invalid SRS content", tag)),
-            Err(e) => last_cache_error = Some(e),
-        }
-    }
-
-    if let Some(srs_path) = find_local_srs_from_config(working_dir, config_path, tag) {
-        return std::fs::read(&srs_path)
-            .map_err(|e| format!("read '{}': {}", srs_path.to_string_lossy(), e));
-    }
-
-    if let Some(srs_path) = find_local_srs_by_tag(&[working_dir, config_path, singbox_path], tag) {
-        return std::fs::read(&srs_path)
-            .map_err(|e| format!("read '{}': {}", srs_path.to_string_lossy(), e));
-    }
-
-    if let Some(e) = last_cache_error {
-        Err(format!("{}; and local '{}.srs' not found", e, tag))
-    } else {
-        Err(format!(
-            "no cache.db found; and local '{}.srs' not found",
-            tag
-        ))
-    }
+#[tauri::command]
+pub fn srs_match(path: String, query: String) -> Result<bool, String> {
+    let data = std::fs::read(&path).map_err(|e| format!("read '{}': {}", path, e))?;
+    let q = parse_query(&query);
+    srs_match_bytes(&data, &q)
 }
 
-#[tauri::command]
-pub async fn srs_list_provider(
+#[tauri::command(async)]
+pub fn srs_list_provider(
     working_dir: String,
     config_path: String,
     singbox_path: String,
     tag: String,
 ) -> Result<Vec<RuleEntry>, String> {
-    tokio::task::spawn_blocking(move || {
-        let data = resolve_srs_data(&working_dir, &config_path, &singbox_path, &tag)?;
-        srs_list_bytes(&data)
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
+    super::ruleset::resolve(&working_dir, &config_path, &singbox_path, &tag)?.list()
 }
 
-/// Match provider by tag:
-/// 1) try cache.db if available
-/// 2) fallback to local `<tag>.srs` under configured sing-box related directories recursively
-#[tauri::command]
-pub async fn srs_match_provider(
+#[tauri::command(async)]
+pub fn srs_match_provider(
     working_dir: String,
     config_path: String,
     singbox_path: String,
     tag: String,
     query: String,
 ) -> Result<bool, String> {
-    tokio::task::spawn_blocking(move || {
-        match_provider_blocking(&working_dir, &config_path, &singbox_path, &tag, &query)
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
-}
-
-fn match_provider_blocking(
-    working_dir: &str,
-    config_path: &str,
-    singbox_path: &str,
-    tag: &str,
-    query: &str,
-) -> Result<bool, String> {
-    let mut last_cache_error: Option<String> = None;
-
-    if let Some(cache_path) = find_cache_db(&[working_dir, config_path, singbox_path]) {
-        match srs_match_cache(
-            cache_path.to_string_lossy().into_owned(),
-            tag.to_string(),
-            query.to_string(),
-        ) {
-            Ok(v) => return Ok(v),
-            Err(e) => last_cache_error = Some(e),
-        }
-    }
-
-    if let Some(srs_path) = find_local_srs_from_config(working_dir, config_path, tag) {
-        let data = std::fs::read(&srs_path)
-            .map_err(|e| format!("read '{}': {}", srs_path.to_string_lossy(), e))?;
-        let q = parse_query(query);
-        return srs_match_bytes(&data, &q);
-    }
-
-    if let Some(srs_path) =
-        find_local_srs_by_tag(&[working_dir, config_path, singbox_path], tag)
-    {
-        let data = std::fs::read(&srs_path)
-            .map_err(|e| format!("read '{}': {}", srs_path.to_string_lossy(), e))?;
-        let q = parse_query(query);
-        return srs_match_bytes(&data, &q);
-    }
-
-    if let Some(e) = last_cache_error {
-        Err(format!(
-            "{}; and local '{}.srs' not found under configured working/config/sing-box directories",
-            e, tag
-        ))
-    } else {
-        Err(format!(
-            "no cache.db found; and local '{}.srs' not found under configured working/config/sing-box directories",
-            tag
-        ))
-    }
+    super::ruleset::resolve(&working_dir, &config_path, &singbox_path, &tag)?.matches(&parse_query(&query))
 }
 
 #[cfg(test)]
@@ -1823,7 +1500,7 @@ mod tests {
     use flate2::{Compression, write::ZlibEncoder};
     use std::io::Write;
 
-    fn saved_binary_fixture(version: u8, content: &[u8]) -> Vec<u8> {
+    fn saved_binary_legacy_fixture(version: u8, content: &[u8]) -> Vec<u8> {
         let mut data = vec![version, 16];
         data.extend_from_slice(&[0xAB; 16]);
         data.push(content.len() as u8);
@@ -1832,6 +1509,20 @@ mod tests {
         data.extend_from_slice(&[4, b'e', b't', b'a', b'g']);
         if version >= 2 {
             data.extend_from_slice(&[3, 0x12, 0x34, 0x56]);
+        }
+        data
+    }
+
+    fn saved_binary_fixture(version: u8, content: &[u8]) -> Vec<u8> {
+        let mut data = vec![version, content.len() as u8];
+        data.extend_from_slice(content);
+        data.extend_from_slice(&1_700_000_000i64.to_be_bytes());
+        data.extend_from_slice(&[4, b'e', b't', b'a', b'g']);
+        if version >= 2 {
+            data.extend_from_slice(&[3, 0x12, 0x34, 0x56]);
+        }
+        if version >= 3 {
+            data.extend_from_slice(&[2, 0xab, 0xcd]);
         }
         data
     }
@@ -1853,19 +1544,24 @@ mod tests {
         u128::from_be_bytes(Ipv6Addr::from_str(s).unwrap().octets())
     }
 
-    fn saved_binary_content_first_fixture(version: u8, content: &[u8]) -> Vec<u8> {
-        let mut data = vec![version, content.len() as u8];
-        data.extend_from_slice(content);
-        data.extend_from_slice(&1_700_000_000i64.to_be_bytes());
-        data.extend_from_slice(&[4, b'e', b't', b'a', b'g']);
-        if version >= 2 {
-            data.extend_from_slice(&[3, 0x12, 0x34, 0x56]);
-        }
-        if version >= 3 {
-            data.push(16);
-            data.extend_from_slice(&[0xAB; 16]);
-        }
-        data
+    #[test]
+    fn saved_binary_legacy_hash_first_layout_extracts_srs_content() {
+        let content = b"SRScompressed-rule-set";
+
+        assert_eq!(
+            parse_saved_binary_content(&saved_binary_legacy_fixture(2, content)).unwrap(),
+            content
+        );
+    }
+
+    #[test]
+    fn saved_binary_rejects_unknown_version_and_bad_length() {
+        let error = parse_saved_binary_content(&saved_binary_fixture(4, b"SRSrule-set"))
+            .unwrap_err();
+        assert_eq!(error.to_string(), "unexpected SavedBinary version: 4");
+
+        assert!(parse_saved_binary_content(&[3, 200, b'S', b'R', b'S']).is_err());
+        assert!(parse_saved_binary_content(&[]).is_err());
     }
 
     #[test]
@@ -1879,30 +1575,135 @@ mod tests {
     }
 
     #[test]
-    fn saved_binary_content_first_layouts_extract_srs_content() {
+    fn saved_binary_v3_extracts_srs_content() {
         let content = b"SRS\x03compressed-rule-set";
 
-        for version in 1..=3 {
-            assert_eq!(
-                parse_saved_binary_content(&saved_binary_content_first_fixture(version, content))
-                    .unwrap(),
-                content,
-                "SavedBinary version {} should be supported",
-                version
-            );
-        }
+        assert_eq!(
+            parse_saved_binary_content(&saved_binary_fixture(3, content)).unwrap(),
+            content
+        );
     }
 
     #[test]
-    fn saved_binary_rejects_unknown_version_and_bad_length() {
-        let content = b"SRS\x03compressed-rule-set";
+    fn saved_binary_v1_extracts_content() {
+        let content = br#"{"version":3,"rules":[]}"#;
 
-        let error = parse_saved_binary_content(&saved_binary_content_first_fixture(4, content))
-            .unwrap_err();
-        assert_eq!(error.to_string(), "unexpected SavedBinary version: 4");
+        assert_eq!(
+            parse_saved_binary_content(&saved_binary_fixture(1, content)).unwrap(),
+            content
+        );
+    }
 
-        assert!(parse_saved_binary_content(&[3, 200, b'S', b'R', b'S']).is_err());
-        assert!(parse_saved_binary_content(&[]).is_err());
+    #[test]
+    fn saved_binary_rejects_truncated_content() {
+        let mut data = saved_binary_fixture(2, b"SRS\x03abc");
+        data.truncate(4);
+        assert!(parse_saved_binary_content(&data).is_err());
+    }
+
+    const TEST_PAGE: usize = 4096;
+
+    enum Node {
+        Value(Vec<u8>),
+        Inline(Vec<(Vec<u8>, Node)>),
+        Page(u64),
+    }
+
+    fn leaf_page(entries: &[(Vec<u8>, Node)]) -> Vec<u8> {
+        let mut sorted: Vec<&(Vec<u8>, Node)> = entries.iter().collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        let count = sorted.len();
+        let mut page = vec![0u8; PAGE_HEADER_SIZE + count * LEAF_ELEM_SIZE];
+        page[8..10].copy_from_slice(&LEAF_PAGE_FLAG.to_le_bytes());
+        page[10..12].copy_from_slice(&(count as u16).to_le_bytes());
+        for (i, (key, node)) in sorted.into_iter().enumerate() {
+            let (flags, value) = match node {
+                Node::Value(v) => (0u32, v.clone()),
+                Node::Inline(children) => {
+                    let mut v = vec![0u8; 16];
+                    v.extend_from_slice(&leaf_page(children));
+                    (BUCKET_LEAF_FLAG, v)
+                }
+                Node::Page(pgid) => {
+                    let mut v = pgid.to_le_bytes().to_vec();
+                    v.extend_from_slice(&[0u8; 8]);
+                    (BUCKET_LEAF_FLAG, v)
+                }
+            };
+            let elem = PAGE_HEADER_SIZE + i * LEAF_ELEM_SIZE;
+            let pos = (page.len() - elem) as u32;
+            page[elem..elem + 4].copy_from_slice(&flags.to_le_bytes());
+            page[elem + 4..elem + 8].copy_from_slice(&pos.to_le_bytes());
+            page[elem + 8..elem + 12].copy_from_slice(&(key.len() as u32).to_le_bytes());
+            page[elem + 12..elem + 16].copy_from_slice(&(value.len() as u32).to_le_bytes());
+            page.extend_from_slice(key);
+            page.extend_from_slice(&value);
+        }
+        page
+    }
+
+    fn bolt_fixture(root: Vec<(Vec<u8>, Node)>, extra: Vec<Vec<(Vec<u8>, Node)>>) -> Vec<u8> {
+        let mut db = vec![0u8; TEST_PAGE * 2];
+        for (meta, txid) in [(0usize, 1u64), (1, 0)] {
+            let off = meta * TEST_PAGE;
+            db[off + 16..off + 20].copy_from_slice(&BOLT_MAGIC.to_le_bytes());
+            db[off + 24..off + 28].copy_from_slice(&(TEST_PAGE as u32).to_le_bytes());
+            db[off + 32..off + 40].copy_from_slice(&2u64.to_le_bytes());
+            db[off + 64..off + 72].copy_from_slice(&txid.to_le_bytes());
+        }
+        for entries in std::iter::once(root).chain(extra) {
+            let mut page = leaf_page(&entries);
+            page.resize(TEST_PAGE, 0);
+            db.extend_from_slice(&page);
+        }
+        db
+    }
+
+    fn key(s: &[u8]) -> Vec<u8> {
+        s.to_vec()
+    }
+
+    #[test]
+    fn cached_rule_set_reads_inline_bucket_at_root() {
+        let content = b"SRS\x03inline";
+        let db = bolt_fixture(
+            vec![(key(b"rule_set"), Node::Inline(vec![
+                (key(b"awavenue-ads"), Node::Value(saved_binary_fixture(2, content))),
+                (key(b"geosite-cn"), Node::Value(saved_binary_fixture(2, b"other"))),
+            ]))],
+            vec![],
+        );
+
+        assert_eq!(cached_rule_set(&db, "awavenue-ads", None).unwrap(), content);
+        assert!(cached_rule_set(&db, "missing", None).unwrap_err().contains("未缓存规则集 missing"));
+    }
+
+    #[test]
+    fn cached_rule_set_reads_page_bucket() {
+        let content = b"SRS\x03paged";
+        let db = bolt_fixture(
+            vec![(key(b"rule_set"), Node::Page(3))],
+            vec![vec![(key(b"awavenue-ads"), Node::Value(saved_binary_fixture(1, content)))]],
+        );
+
+        assert_eq!(cached_rule_set(&db, "awavenue-ads", None).unwrap(), content);
+    }
+
+    #[test]
+    fn cached_rule_set_follows_cache_id_bucket() {
+        let content = b"SRS\x03scoped";
+        let db = bolt_fixture(
+            vec![(key(b"\0phone"), Node::Inline(vec![
+                (key(b"rule_set"), Node::Inline(vec![
+                    (key(b"awavenue-ads"), Node::Value(saved_binary_fixture(2, content))),
+                ])),
+            ]))],
+            vec![],
+        );
+
+        assert_eq!(cached_rule_set(&db, "awavenue-ads", Some("phone")).unwrap(), content);
+        assert!(cached_rule_set(&db, "awavenue-ads", None).unwrap_err().contains("没有缓存的规则集"));
+        assert!(cached_rule_set(&db, "awavenue-ads", Some("other")).unwrap_err().contains("cache_id"));
     }
 
     #[test]

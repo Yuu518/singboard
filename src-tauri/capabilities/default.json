@@ -2,6 +2,7 @@
   "identifier": "default",
   "description": "Default capability for the main window",
   "windows": ["main", "tray"],
+  "platforms": ["windows"],
   "permissions": [
     "core:default",
     "core:window:default",

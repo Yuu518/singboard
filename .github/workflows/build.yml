@@ -10,6 +10,29 @@ permissions:
   contents: write
 
 jobs:
+  android-signing:
+    name: Check Android signing
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - name: Check signing secrets
+        id: check
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          for name in ANDROID_KEYSTORE_B64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::warning::Missing secret $name; skipping Android APKs because release APKs must be signed with the same key to update in place"
+              echo "available=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
   build-windows:
     name: Build Windows app
     runs-on: windows-latest
@@ -113,12 +136,161 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "signature verification failed for $($f.Name)" }
           }
 
-      - name: Set build time
-        shell: pwsh
+      - name: Upload Windows app
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: windows
+          path: src-tauri/target/release/singboard.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  build-android:
+    name: Build Android ${{ matrix.abi }}
+    needs: android-signing
+    if: needs.android-signing.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64
+            rust-target: aarch64-linux-android
+            flavor: arm64
+          - abi: armeabi-v7a
+            target: armv7
+            rust-target: armv7-linux-androideabi
+            flavor: arm
+    env:
+      ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Read release tag
         run: |
-          $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("Taipei Standard Time")
-          $now = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tz)
-          "DATE=$($now.ToString('yyyy-MM-dd HH:mm:ss')) UTC+8" >> $env:GITHUB_ENV
+          tag=$(git describe --tags --abbrev=0) || { echo "No tag found in the repository; push a tag before building"; exit 1; }
+          echo "APP_VERSION=${tag#v}" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        run: npm install --global pnpm@11.13.0
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6.3.0
+        with:
+          cache-provider: basic
+          add-job-summary: never
+
+      - name: Install Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1.5.0
+        id: setup-ndk
+        with:
+          ndk-version: r30
+          local-cache: true
+
+      - name: Export NDK path
+        run: echo "NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2.9.2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.rust-target }}
+          env-vars: NDK_HOME
+          cache-on-failure: true
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Write signing config
+        working-directory: src-tauri/gen/android
+        run: |
+          echo "$ANDROID_KEYSTORE_B64" | base64 --decode > release.jks
+          {
+            echo "storeFile=release.jks"
+            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+            echo "keyAlias=$ANDROID_KEY_ALIAS"
+            echo "keyPassword=$ANDROID_KEY_PASSWORD"
+          } > keystore.properties
+
+      - name: Build APK
+        run: |
+          chmod +x src-tauri/gen/android/gradlew
+          pnpm tauri android build --apk --split-per-abi --target ${{ matrix.target }} --config "{\"version\":\"$APP_VERSION\"}"
+
+      - name: Collect APK
+        run: |
+          mkdir -p release
+          cp "src-tauri/gen/android/app/build/outputs/apk/${{ matrix.flavor }}/release/app-${{ matrix.flavor }}-release.apk" "release/singboard-${{ matrix.abi }}.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "release/singboard-${{ matrix.abi }}.apk"
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f src-tauri/gen/android/release.jks src-tauri/gen/android/keystore.properties
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: apk-${{ matrix.abi }}
+          path: release/singboard-${{ matrix.abi }}.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish release
+    needs: [build-windows, build-android]
+    if: always() && needs.build-windows.result == 'success' && (needs.build-android.result == 'success' || needs.build-android.result == 'skipped')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Read release tag
+        run: |
+          tag=$(git describe --tags --abbrev=0)
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "APP_VERSION=${tag#v}" >> "$GITHUB_ENV"
+
+      - name: Download build outputs
+        uses: actions/download-artifact@v8.0.1
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Set build time
+        run: echo "DATE=$(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M:%S') UTC+8" >> "$GITHUB_ENV"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3.0.2
@@ -128,4 +300,5 @@ jobs:
           body: |
             Build time: ${{ env.DATE }}
           files: |
-            src-tauri/target/release/singboard.exe
+            release/singboard.exe
+            release/*.apk

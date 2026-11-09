@@ -1,8 +1,12 @@
 import { ref, computed, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { setRootEnabled } from '@/bridge/app'
+import { IS_ANDROID } from '@/platform'
 import type { AppConfig, ClashApiProfile, ConfigProfile } from '@/types'
 
 const STORAGE_KEY = 'singboard-config'
+
+export const SERVICE_HOME = '/data/adb/singboard'
 
 function createClashApiId(): string {
   return `api_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -28,6 +32,7 @@ function normalizeConfig(raw: any): AppConfig {
     if (value.startsWith('\\\\?\\')) return value.slice(4)
     return value
   }
+  const normalizePath = (value: unknown): string => (typeof value === 'string' ? value.trim() : '')
   const normalizeStartupDelay = (value: unknown): number => {
     const delay = typeof value === 'number' ? value : Number(value)
     if (!Number.isFinite(delay)) return 30
@@ -81,7 +86,7 @@ function normalizeConfig(raw: any): AppConfig {
     : []
 
   // 迁移兼容：旧 configPath 自动创建本地配置
-  const legacyConfigPath = normalizeWindowsPath(raw?.configPath)
+  const legacyConfigPath = IS_ANDROID ? '' : normalizeWindowsPath(raw?.configPath)
   if (configProfiles.length === 0 && legacyConfigPath) {
     configProfiles.push({
       id: createConfigProfileId(),
@@ -101,8 +106,11 @@ function normalizeConfig(raw: any): AppConfig {
   return {
     clashApis,
     activeClashApiId,
-    singboxPath: normalizeWindowsPath(raw?.singboxPath),
-    workingDir: normalizeWindowsPath(raw?.workingDir),
+    singboxPath: IS_ANDROID ? normalizePath(raw?.singboxPath) : normalizeWindowsPath(raw?.singboxPath),
+    coreInstallPath: IS_ANDROID ? normalizePath(raw?.coreInstallPath) : '',
+    configPath: IS_ANDROID ? normalizePath(raw?.configPath) : '',
+    rulesDir: IS_ANDROID ? normalizePath(raw?.rulesDir) : '',
+    workingDir: IS_ANDROID ? normalizePath(raw?.workingDir) : normalizeWindowsPath(raw?.workingDir),
     startupDelaySeconds: normalizeStartupDelay(raw?.startupDelaySeconds),
     theme: ['auto', 'light', 'dark'].includes(raw?.theme) ? raw.theme : 'light',
     glassMode: raw?.glassMode === 'clear' ? 'clear' : 'blur',
@@ -118,6 +126,9 @@ function normalizeConfig(raw: any): AppConfig {
     configProfiles,
     activeConfigProfileId,
     closeToTray: typeof raw?.closeToTray === 'boolean' ? raw.closeToTray : false,
+    rootMode: IS_ANDROID && typeof raw?.rootMode === 'boolean' ? raw.rootMode : false,
+    setupCompleted: typeof raw?.setupCompleted === 'boolean' ? raw.setupCompleted : false,
+    pageSwipe: typeof raw?.pageSwipe === 'boolean' ? raw.pageSwipe : false,
     coreUpdateSource: raw?.coreUpdateSource === 'ref1nd' || raw?.coreUpdateSource === 'custom'
       ? raw.coreUpdateSource
       : 'official',
@@ -205,10 +216,22 @@ watch(config, (val) => {
 }, { deep: true, flush: 'sync' })
 
 // 同步 closeToTray 状态到 Rust 后端
-invoke('set_close_to_tray', { enabled: config.value.closeToTray }).catch(() => {})
-watch(() => config.value.closeToTray, (val) => {
-  invoke('set_close_to_tray', { enabled: val }).catch(() => {})
-})
+if (!IS_ANDROID) {
+  invoke('set_close_to_tray', { enabled: config.value.closeToTray }).catch(() => {})
+  watch(() => config.value.closeToTray, (val) => {
+    invoke('set_close_to_tray', { enabled: val }).catch(() => {})
+  })
+}
+
+export const rootReady: Promise<void> = IS_ANDROID
+  ? setRootEnabled(config.value.rootMode).catch(() => {})
+  : Promise.resolve()
+
+if (IS_ANDROID) {
+  watch(() => config.value.rootMode, (val) => {
+    setRootEnabled(val).catch(() => {})
+  })
+}
 
 export function useConfigStore() {
   const clashApis = computed(() => config.value.clashApis)
@@ -219,6 +242,7 @@ export function useConfigStore() {
   )
   const clashApiUrl = computed(() => activeClashApi.value?.url ?? '')
   const clashApiSecret = computed(() => activeClashApi.value?.secret ?? '')
+  const clashApiEndpoint = computed(() => `${clashApiUrl.value}\n${clashApiSecret.value}`)
 
   const configProfiles = computed(() => config.value.configProfiles)
   const activeConfigProfileId = computed(() => config.value.activeConfigProfileId)
@@ -330,6 +354,7 @@ export function useConfigStore() {
     activeClashApiId,
     clashApiUrl,
     clashApiSecret,
+    clashApiEndpoint,
     configProfiles,
     activeConfigProfileId,
     activeConfigProfile,

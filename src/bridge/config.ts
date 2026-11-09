@@ -3,7 +3,9 @@ import { invoke } from '@tauri-apps/api/core'
 export interface DetectedRuntimeFiles {
   baseDir: string
   singboxPath?: string
+  coreInstallPath?: string
   configPath?: string
+  rulesDir?: string
   found: boolean
 }
 

@@ -10,7 +10,7 @@ const HELPER_VERSION_FILE: &str = "singboard.service.version";
 // The release helper is built before the panel by the Tauri build hooks.
 // Development embeds the same payload so opening a dev panel cannot replace
 // an installed release service with a debug build.
-const EMBEDDED_HELPER: &[u8] = include_bytes!("../../target/release/singboard.service");
+const EMBEDDED_HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/singboard.service"));
 
 /// 服务实际注册使用的 helper 副本位置。
 pub fn deployed_helper_path(data_dir: &Path) -> PathBuf {

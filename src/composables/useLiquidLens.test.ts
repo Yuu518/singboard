@@ -211,3 +211,11 @@ describe('lens strength', () => {
     expect(Number(soften?.getAttribute('stdDeviation'))).toBeLessThan(2)
   })
 })
+
+describe('backdrop lens support', () => {
+  it('keeps SVG backdrop lenses off Android WebView', async () => {
+    const { backdropLensSupported } = await import('./useLiquidLens')
+    expect(backdropLensSupported('Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36 wv')).toBe(false)
+    expect(backdropLensSupported('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36 Edg/140.0')).toBe(true)
+  })
+})

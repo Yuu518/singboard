@@ -45,6 +45,23 @@ function gradRoundedRect(x: number, y: number, halfW: number, halfH: number, rad
   return cx >= cy ? [sx, 0] : [0, sy]
 }
 
+function lensDirection(
+  x: number,
+  y: number,
+  halfW: number,
+  halfH: number,
+  gradRadius: number,
+  depthEffect: boolean,
+): [number, number] {
+  const [gx, gy] = gradRoundedRect(x, y, halfW, halfH, gradRadius)
+  if (!depthEffect) return [gx, gy]
+  const centerLength = Math.hypot(x, y) || 1
+  const sx = gx + x / centerLength
+  const sy = gy + y / centerLength
+  const length = Math.hypot(sx, sy) || 1
+  return [sx / length, sy / length]
+}
+
 export interface MapRegion {
   x: number
   y: number
@@ -59,6 +76,7 @@ export function buildDisplacementMap(
   refractionHeight = REFRACTION_HEIGHT,
   refractionAmount = REFRACTION_AMOUNT,
   region: MapRegion = { x: 0, y: 0, width, height },
+  depthEffect = false,
 ): Uint8ClampedArray {
   const data = new Uint8ClampedArray(region.width * region.height * 4)
   const halfW = width / 2
@@ -76,7 +94,7 @@ export function buildDisplacementMap(
       if (-sd < refractionHeight) {
         const t = 1 - -sd / refractionHeight
         const d = circleMap(t) * refractionAmount
-        const [gx, gy] = gradRoundedRect(x, y, halfW, halfH, gradRadius)
+        const [gx, gy] = lensDirection(x, y, halfW, halfH, gradRadius, depthEffect)
         dx = -d * gx
         dy = -d * gy
         edge = t * t * (3 - 2 * t)
@@ -141,6 +159,7 @@ export interface LensOptions {
   chroma?: boolean
   frost?: number
   amount?: number
+  spread?: number
 }
 
 export interface MapImage extends MapRegion {
@@ -152,7 +171,7 @@ export function buildLensFilter(
   height: number,
   images: MapImage[],
   id: string,
-  { chroma = true, frost = 0, amount = REFRACTION_AMOUNT }: LensOptions = {},
+  { chroma = true, frost = 0, amount = REFRACTION_AMOUNT, spread = CHROMA_SPREAD }: LensOptions = {},
 ): SVGFilterElement {
   const filter = svgElement('filter', {
     id,
@@ -182,7 +201,7 @@ export function buildLensFilter(
     merge.append(svgElement('feMergeNode', { in: `map-${index}` }))
   })
   filter.append(merge)
-  if (chroma) appendChromaticRefraction(filter, amount)
+  if (chroma) appendChromaticRefraction(filter, amount, spread)
   else {
     filter.append(
       svgElement('feDisplacementMap', {
@@ -230,13 +249,13 @@ export function reshapeLensFilter(filter: SVGFilterElement, width: number, heigh
   return true
 }
 
-function appendChromaticRefraction(filter: SVGFilterElement, amount: number) {
+function appendChromaticRefraction(filter: SVGFilterElement, amount: number, spread: number) {
   CHANNELS.forEach((channel, index) => {
     filter.append(
       svgElement('feDisplacementMap', {
         in: 'SourceGraphic',
         in2: 'map',
-        scale: amount * 2 * (1 + index * CHROMA_SPREAD),
+        scale: amount * 2 * (1 + index * spread),
         xChannelSelector: 'R',
         yChannelSelector: 'G',
         result: `${channel.name}-shift`,
@@ -259,6 +278,10 @@ interface LensEntry {
   filter: SVGFilterElement | null
   key: string
   shape: string
+}
+
+export function backdropLensSupported(userAgent = navigator.userAgent): boolean {
+  return !/Android/i.test(userAgent)
 }
 
 export function useLiquidLens() {
@@ -438,7 +461,7 @@ export function useLiquidLens() {
   }
 
   function sync() {
-    if (config.value.glassMode === 'clear' && !reducedTransparency.matches) start()
+    if (config.value.glassMode === 'clear' && !reducedTransparency.matches && backdropLensSupported()) start()
     else stop()
   }
 

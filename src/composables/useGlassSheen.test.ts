@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { isInsideWindow, isOnScreen, SHEEN_REACH, sheenGlow } from './useGlassSheen'
+import { isInsideWindow, isOnScreen, SHEEN_REACH, sheenFollows, sheenGlow } from './useGlassSheen'
+
+describe('glass sheen pointer types', () => {
+  it('only follows a mouse, never touch or pen', () => {
+    expect(sheenFollows('mouse')).toBe(true)
+    expect(sheenFollows('touch')).toBe(false)
+    expect(sheenFollows('pen')).toBe(false)
+  })
+})
 
 describe('glass sheen visibility', () => {
   it('skips elements outside the viewport', () => {

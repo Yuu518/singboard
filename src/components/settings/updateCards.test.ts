@@ -158,7 +158,7 @@ describe('update cards', () => {
       switch (command) {
         case 'check_core_update': return Promise.resolve(info)
         case 'get_file_hash':
-        case 'probe_asset_exe_hash': return Promise.resolve('local-hash')
+        case 'probe_asset_core_hash': return Promise.resolve('local-hash')
         case 'get_singbox_version': return Promise.resolve('sing-box version 1.14.0-beta.13')
         default: return Promise.resolve(null)
       }
@@ -169,7 +169,7 @@ describe('update cards', () => {
     await wrapper.get('button').trigger('click')
     await flushPromises()
 
-    expect(tauri.invoke).toHaveBeenCalledWith('probe_asset_exe_hash', {
+    expect(tauri.invoke).toHaveBeenCalledWith('probe_asset_core_hash', {
       assetUrl: info.assetUrl,
       assetSize: info.assetSize,
       assetDigest,

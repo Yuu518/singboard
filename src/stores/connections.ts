@@ -4,6 +4,8 @@ import { disconnectAll, disconnectById } from '@/api'
 import { useConfigStore } from './config'
 import { appVisible } from './appVisible'
 import { pushConnectionCount } from './overview'
+import { clashApiReady } from './service'
+import { IS_ANDROID } from '@/platform'
 import type { Connection, ConnectionsSnapshot } from '@/types'
 import type ReconnectingWebSocket from 'reconnecting-websocket'
 
@@ -12,6 +14,7 @@ const downloadTotal = ref(0)
 const uploadTotal = ref(0)
 const closedConnections = ref<Connection[]>([])
 const filterText = ref('')
+const paused = ref(false)
 const socketState = ref<'idle' | 'connecting' | 'resuming' | 'reconnecting' | 'open' | 'failed'>('idle')
 const socketFailures = ref(0)
 
@@ -64,7 +67,7 @@ const filteredClosedConnections = computed(() => {
 })
 
 function start() {
-  if (ws || coreSuspended) return
+  if (ws || coreSuspended || (IS_ANDROID && !clashApiReady.value)) return
   let backgroundSince = connections.value.length > 0 ? stoppedAt : 0
   stoppedAt = 0
   socketState.value = backgroundSince ? 'resuming' : 'connecting'
@@ -75,6 +78,7 @@ function start() {
       if (ws !== socket) return
       socketState.value = 'open'
       socketFailures.value = 0
+      if (paused.value) return
       downloadTotal.value = data.downloadTotal
       uploadTotal.value = data.uploadTotal
 
@@ -170,9 +174,16 @@ export function useConnectionsStore() {
       if (ws) stop()
     }
   })
+  const unwatchReady = IS_ANDROID
+    ? watch(clashApiReady, (ready) => {
+      if (!ready) stop()
+      else if (appVisible.value && refCount > 0) start()
+    })
+    : () => {}
   onUnmounted(() => {
     unwatchApi()
     unwatchVisible()
+    unwatchReady()
     refCount--
     if (refCount === 0) stop()
   })
@@ -197,6 +208,7 @@ export function useConnectionsStore() {
     filteredClosedConnections,
     downloadTotal,
     uploadTotal,
+    paused,
     filterText,
     socketState,
     socketFailures,

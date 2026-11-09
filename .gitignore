@@ -22,7 +22,7 @@ src-tauri/target/
 target/
 
 # Tauri generated artifacts
-src-tauri/gen/
+src-tauri/gen/schemas/
 
 # OS / Editor
 .DS_Store

@@ -234,7 +234,7 @@ pub fn apply_update(
 ) -> Result<bool, String> {
     let status = scm::query_service_status(service)?;
     if status.state == "not_installed" {
-        return crate::commands::update::swap_and_restart(progress, files, target, service);
+        return crate::commands::update::platform::swap_and_restart(progress, files, target, service);
     }
     let current = Snapshot::read(service)?;
     let _source_directory =

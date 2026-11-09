@@ -49,3 +49,14 @@ it('leaves no profile selected after deleting the active one, and keeps it that 
   expect(reloaded.activeConfigProfileId.value).toBe('')
   localStorage.clear()
 })
+
+it('ignores Android-only root settings and keeps page swiping off on the desktop', async () => {
+  vi.resetModules()
+  localStorage.setItem('singboard-config', JSON.stringify({ rootMode: true, rulesDir: '/data/adb/box/rules' }))
+  const { useConfigStore } = await import('./config')
+  const { config } = useConfigStore()
+  expect(config.value.rootMode).toBe(false)
+  expect(config.value.rulesDir).toBe('')
+  expect(config.value.pageSwipe).toBe(false)
+  localStorage.clear()
+})

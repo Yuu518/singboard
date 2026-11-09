@@ -3,7 +3,8 @@ import { createClashWS } from '@/api/websocket'
 import { fetchConfig } from '@/api'
 import { useConfigStore } from './config'
 import { appVisible } from './appVisible'
-import { serviceStatus } from './service'
+import { clashApiReady, serviceStatus } from './service'
+import { IS_ANDROID } from '@/platform'
 import type { LogEntry } from '@/types'
 import type ReconnectingWebSocket from 'reconnecting-websocket'
 
@@ -129,7 +130,10 @@ async function loadCoreLevel(): Promise<string> {
 const CORE_DOWN = new Set(['stopped', 'stopping', 'starting'])
 
 function shouldConnect(): boolean {
-  return lifecycleOwners > 0 && appVisible.value && !CORE_DOWN.has(serviceStatus.value.state)
+  return lifecycleOwners > 0
+    && appVisible.value
+    && !CORE_DOWN.has(serviceStatus.value.state)
+    && (!IS_ANDROID || clashApiReady.value)
 }
 
 function hasLogs(): boolean {
@@ -288,6 +292,14 @@ export function useLogsLifecycle() {
     }
   })
 
+  const unwatchReady = IS_ANDROID
+    ? watch(clashApiReady, (ready) => {
+      if (!active) return
+      if (ready) void connect()
+      else disconnect()
+    })
+    : () => {}
+
   function start(): void {
     if (active) return
     active = true
@@ -306,6 +318,7 @@ export function useLogsLifecycle() {
     unwatchApi()
     unwatchService()
     unwatchVisible()
+    unwatchReady()
     stop()
   })
 

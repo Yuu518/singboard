@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { IS_ANDROID } from '@/platform'
 import type { ServiceStatus } from '@/types'
 
 export const SERVICE_NAME = 'singboard.service'
@@ -23,8 +24,9 @@ export async function installService(
   singboxPath: string,
   configPath: string,
   workingDir: string,
-  startupDelaySeconds: number,
+  startupDelaySeconds = 0,
 ): Promise<void> {
+  if (IS_ANDROID) return invoke('service_install', { singboxPath, configPath, workingDir })
   return invoke('service_install', { singboxPath, configPath, workingDir, startupDelaySeconds })
 }
 
@@ -56,4 +58,16 @@ export async function createStartupTask(startupDelaySeconds: number): Promise<vo
 
 export async function deleteStartupTask(): Promise<void> {
   return invoke('service_delete_startup_task')
+}
+
+export async function bootHookExists(): Promise<boolean> {
+  return invoke<boolean>('service_boot_hook_exists')
+}
+
+export async function createBootHook(): Promise<void> {
+  return invoke('service_create_boot_hook')
+}
+
+export async function deleteBootHook(): Promise<void> {
+  return invoke('service_delete_boot_hook')
 }

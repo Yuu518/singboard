@@ -1,12 +1,17 @@
 #[tauri::command]
 pub async fn get_file_hash(path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        crate::service::helper::sha256_file(std::path::Path::new(&path))
+        let path = std::path::Path::new(&path);
+        #[cfg(windows)]
+        return crate::service::helper::sha256_file(path);
+        #[cfg(not(windows))]
+        return crate::root::fs::sha256(path);
     })
     .await
     .map_err(|e| format!("任务执行失败: {}", e))?
 }
 
+#[cfg(windows)]
 #[tauri::command]
 pub async fn get_singbox_version(singbox_path: String) -> Result<String, String> {
     let output = tokio::process::Command::new(&singbox_path)
@@ -22,4 +27,15 @@ pub async fn get_singbox_version(singbox_path: String) -> Result<String, String>
     } else {
         Err("Failed to get version".into())
     }
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+pub async fn get_singbox_version(singbox_path: String) -> Result<String, String> {
+    use crate::root::{self, quote};
+
+    let output = root::run_async(format!("{} version", quote(&singbox_path)))
+        .await
+        .map_err(|e| format!("Failed to run sing-box version: {}", e))?;
+    Ok(output.lines().next().unwrap_or("unknown").to_string())
 }

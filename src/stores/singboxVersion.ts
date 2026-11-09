@@ -2,6 +2,8 @@ import { ref } from 'vue'
 import { getFileHash, getSingboxVersion } from '@/bridge/config'
 import { normalizeVersionText } from '@/utils/format'
 import { useConfigStore } from './config'
+import { fetchVersion } from '@/api'
+import { IS_ANDROID } from '@/platform'
 
 // 版本号按内核文件哈希缓存：启动时先展示缓存值，哈希变化才重新检测
 const CACHE_KEY = 'singboard-singbox-version'
@@ -32,8 +34,31 @@ function fail(reason: string) {
   versionStatus.value = 'failed'
 }
 
+async function runRemoteDetect(token: number) {
+  versionStatus.value = 'detecting'
+  try {
+    const { data } = await fetchVersion()
+    if (token !== generation) return
+    const raw = typeof data?.version === 'string' ? data.version : ''
+    const version = raw ? normalizeVersionText(raw.startsWith('sing-box') ? raw : `sing-box ${raw}`) : ''
+    if (!version) {
+      fail('Clash API 未返回版本号')
+      return
+    }
+    singboxVersion.value = version
+    versionError.value = ''
+    versionStatus.value = 'ok'
+  } catch {
+    if (token === generation) fail('无法连接 Clash API')
+  }
+}
+
 async function runDetect(token: number) {
   const { config } = useConfigStore()
+  if (IS_ANDROID && !config.value.rootMode) {
+    await runRemoteDetect(token)
+    return
+  }
   const path = config.value.singboxPath?.trim()
   if (!path) {
     singboxVersion.value = ''

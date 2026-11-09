@@ -3,9 +3,13 @@ import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 
 const host = process.env.TAURI_DEV_HOST
+const android = process.env.TAURI_ENV_PLATFORM === 'android'
 
 export default defineConfig(async () => ({
   plugins: [vue()],
+  define: {
+    __ANDROID__: JSON.stringify(android),
+  },
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),

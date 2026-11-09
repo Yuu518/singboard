@@ -5,8 +5,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "test": "vitest run && pnpm test:browser",
-    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "test": "vitest run && pnpm test:android && pnpm test:browser",
+    "test:android": "vitest run --config vitest.android.config.ts",
+    "test:browser": "vitest run --config vitest.browser.config.ts && vitest run --config vitest.android.browser.config.ts",
     "preview": "vite preview",
     "tauri": "tauri"
   },

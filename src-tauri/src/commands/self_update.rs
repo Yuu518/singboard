@@ -5,8 +5,10 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::Manager;
 
+use super::update::platform::retry_io;
 use super::update::{
-    GhRelease, UPDATE_LOCK, apply_mirror, download_asset, emit_progress, github_get, retry_io,
+    GhRelease, UPDATE_LOCK, apply_mirror, digest_hash, download_asset, emit_progress, github_get,
+    is_newer, verify_digest,
 };
 
 const PANEL_REPO: &str = "Yuu518/singboard";
@@ -33,32 +35,6 @@ pub struct PanelUpdateInfo {
 
 fn staging_dir() -> PathBuf {
     std::env::temp_dir().join("singboard-panel")
-}
-
-pub(crate) fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
-    let text = text.trim().trim_start_matches(['v', 'V']);
-    let mut parts = text.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    let patch_raw = parts.next().unwrap_or("0");
-    let digits: String = patch_raw.chars().take_while(char::is_ascii_digit).collect();
-    let patch = digits.parse().ok()?;
-    Some((major, minor, patch))
-}
-
-fn is_newer(latest: &str, current: &str) -> bool {
-    match (parse_version(latest), parse_version(current)) {
-        (Some(l), Some(c)) => l > c,
-        _ => latest.trim().trim_start_matches(['v', 'V']) != current.trim(),
-    }
-}
-
-fn digest_hash(asset_digest: &str) -> Option<&str> {
-    asset_digest
-        .trim()
-        .strip_prefix("sha256:")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
 }
 
 fn local_out_of_sync(asset_digest: &str) -> bool {
@@ -116,26 +92,6 @@ pub async fn check_panel_update() -> Result<PanelUpdateInfo, String> {
         asset_size: asset.size,
         asset_digest,
     })
-}
-
-fn verify_digest(file: &Path, asset_digest: &str, mirror: &Option<String>) -> Result<(), String> {
-    let Some(expected) = digest_hash(asset_digest) else {
-        let mirrored = mirror
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|m| !m.is_empty());
-        if mirrored {
-            return Err("该版本缺少校验信息，已中止更新".into());
-        }
-        return Ok(());
-    };
-
-    let actual = crate::service::helper::sha256_file(file)?;
-    if actual.eq_ignore_ascii_case(expected) {
-        Ok(())
-    } else {
-        Err("文件校验失败，已中止更新".into())
-    }
 }
 
 #[tauri::command]
@@ -428,44 +384,6 @@ pub fn cleanup_staging() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_plain_and_prefixed_versions() {
-        assert_eq!(parse_version("3.2.4"), Some((3, 2, 4)));
-        assert_eq!(parse_version("v3.2.4"), Some((3, 2, 4)));
-        assert_eq!(parse_version(" 3.2.4 "), Some((3, 2, 4)));
-        assert_eq!(parse_version("3.2"), Some((3, 2, 0)));
-        assert_eq!(parse_version("3.2.4-beta1"), Some((3, 2, 4)));
-    }
-
-    #[test]
-    fn rejects_unparsable_versions() {
-        assert_eq!(parse_version(""), None);
-        assert_eq!(parse_version("nightly"), None);
-        assert_eq!(parse_version("3"), None);
-    }
-
-    #[test]
-    fn compares_numerically_not_lexically() {
-        assert!(is_newer("3.10.0", "3.2.4"));
-        assert!(is_newer("v3.2.5", "3.2.4"));
-        assert!(is_newer("4.0.0", "3.99.99"));
-    }
-
-    #[test]
-    fn same_or_older_is_not_newer() {
-        assert!(!is_newer("3.2.4", "3.2.4"));
-        assert!(!is_newer("v3.2.4", "3.2.4"));
-        assert!(!is_newer("3.2.3", "3.2.4"));
-        assert!(!is_newer("2.9.9", "3.0.0"));
-    }
-
-    #[test]
-    fn unparsable_falls_back_to_string_inequality() {
-        assert!(is_newer("nightly", "3.2.4"));
-        assert!(!is_newer("nightly", "nightly"));
-        assert!(!is_newer("vnightly", "nightly"));
-    }
 
     fn temp_case(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("singboard-test-{}", name));

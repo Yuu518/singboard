@@ -1,0 +1,393 @@
+use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::Emitter;
+use tauri::Manager;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(false);
+static LAUNCHED_HIDDEN: AtomicBool = AtomicBool::new(false);
+
+const AUTO_LAUNCH_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const AUTO_LAUNCH_NAME: &str = "singboard";
+const AUTO_LAUNCH_APPROVED_KEY: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+
+#[tauri::command]
+fn set_close_to_tray(enabled: bool) {
+    CLOSE_TO_TRAY.store(enabled, Ordering::Relaxed);
+}
+
+#[tauri::command]
+fn is_launched_hidden() -> bool {
+    LAUNCHED_HIDDEN.load(Ordering::Relaxed)
+}
+
+fn auto_launch_command() -> Result<String, String> {
+    let exe = env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
+    Ok(format!("\"{}\" --hidden", exe.display()))
+}
+
+fn registered_auto_launch() -> Option<String> {
+    winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .open_subkey(AUTO_LAUNCH_KEY)
+        .and_then(|key| key.get_value::<String, _>(AUTO_LAUNCH_NAME))
+        .ok()
+}
+
+fn auto_launch_disabled_by_system() -> bool {
+    winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .open_subkey(AUTO_LAUNCH_APPROVED_KEY)
+        .and_then(|key| key.get_raw_value(AUTO_LAUNCH_NAME))
+        .is_ok_and(|value| value.bytes.first().is_some_and(|flag| flag & 1 == 1))
+}
+
+fn clear_auto_launch_approval() {
+    if let Ok((key, _)) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .create_subkey(AUTO_LAUNCH_APPROVED_KEY)
+    {
+        let _ = key.delete_value(AUTO_LAUNCH_NAME);
+    }
+}
+
+fn write_auto_launch(command: &str) -> Result<(), String> {
+    let (key, _) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .create_subkey(AUTO_LAUNCH_KEY)
+        .map_err(|e| format!("打开注册表失败: {}", e))?;
+    key.set_value(AUTO_LAUNCH_NAME, &command)
+        .map_err(|e| format!("写入注册表失败: {}", e))
+}
+
+fn repair_auto_launch_path() {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let (Some(registered), Ok(expected)) = (registered_auto_launch(), auto_launch_command())
+    else {
+        return;
+    };
+    if !registered.eq_ignore_ascii_case(&expected) {
+        let _ = write_auto_launch(&expected);
+    }
+}
+
+#[tauri::command]
+fn get_auto_launch() -> bool {
+    let (Some(registered), Ok(expected)) = (registered_auto_launch(), auto_launch_command())
+    else {
+        return false;
+    };
+    registered.eq_ignore_ascii_case(&expected) && !auto_launch_disabled_by_system()
+}
+
+#[tauri::command]
+fn set_auto_launch(enabled: bool) -> Result<(), String> {
+    if enabled {
+        write_auto_launch(&auto_launch_command()?)?;
+    } else {
+        let (key, _) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+            .create_subkey(AUTO_LAUNCH_KEY)
+            .map_err(|e| format!("打开注册表失败: {}", e))?;
+        if let Err(e) = key.delete_value(AUTO_LAUNCH_NAME) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(format!("删除注册表值失败: {}", e));
+            }
+        }
+    }
+    clear_auto_launch_approval();
+    Ok(())
+}
+
+#[tauri::command]
+fn show_main_window(app: tauri::AppHandle) {
+    show_window(&app);
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+fn supports_mica() -> bool {
+    winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+        .and_then(|key| key.get_value::<String, _>("CurrentBuildNumber"))
+        .ok()
+        .and_then(|build| build.trim().parse::<u32>().ok())
+        .is_some_and(|build| build >= 22000)
+}
+
+#[tauri::command]
+fn set_window_material(window: tauri::WebviewWindow, dark: bool) -> bool {
+    use tauri::window::{Effect, EffectsBuilder};
+
+    if !supports_mica() {
+        let _ = window.set_effects(None);
+        return false;
+    }
+    let effect = if dark { Effect::MicaDark } else { Effect::MicaLight };
+    match window.set_effects(EffectsBuilder::new().effect(effect).build()) {
+        Ok(()) => true,
+        Err(_) => {
+            let _ = window.set_effects(None);
+            false
+        }
+    }
+}
+
+pub fn main() {
+    let args: Vec<String> = env::args().collect();
+
+    // No GUI, tray or single-instance plugin in the elevated management child.
+    if args.get(1).map(String::as_str) == Some(crate::service::elevation::ADMIN_FLAG) {
+        let result = match (args.get(2), args.get(3).and_then(|p| p.parse().ok())) {
+            (Some(pipe), Some(pid)) => crate::service::elevation::run_child(pipe, pid),
+            _ => Err("管理入口参数无效".to_string()),
+        };
+        if let Err(e) = result {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if args.len() > 1 && args[1] == "service" {
+        if let Err(e) = singboard_service::wrapper::run_service(singboard_service::SERVICE_NAME) {
+            eprintln!("Service error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // Must return before run_gui(): single-instance would kill this process.
+    if args.len() > 1 && args[1] == crate::commands::self_update::APPLY_UPDATE_FLAG {
+        let Some(target) = args.get(2).map(std::path::PathBuf::from) else {
+            eprintln!("--apply-update requires <target> <pid>");
+            std::process::exit(1);
+        };
+        let pid: u32 = args.get(3).and_then(|p| p.parse().ok()).unwrap_or(0);
+
+        let source = args
+            .get(4)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| env::current_exe().expect("updater path"));
+        let data_dir = args
+            .get(5)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env::var_os("APPDATA").unwrap_or_default())
+                    .join("singboard")
+            });
+        let result = crate::commands::self_update::run_apply_update(
+            &target, pid, &source, &data_dir,
+        );
+        let launched = crate::commands::self_update::launch_panel(&target);
+        if let Err(e) = result.and(launched) {
+            eprintln!("Update error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if args.iter().any(|a| a == "--hidden") {
+        LAUNCHED_HIDDEN.store(true, Ordering::Relaxed);
+    }
+
+    crate::commands::self_update::cleanup_staging();
+    repair_auto_launch_path();
+
+    run_gui();
+}
+
+fn show_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let _ = window.emit("window-visibility", true);
+    }
+}
+
+fn show_tray_menu(app: &tauri::AppHandle, position: tauri::PhysicalPosition<f64>) {
+    if let Some(window) = app.get_webview_window("tray") {
+        let size = window
+            .outer_size()
+            .unwrap_or_else(|_| tauri::PhysicalSize::new(0, 0));
+        let (w, h) = (size.width as i32, size.height as i32);
+        let (px, py) = (position.x as i32, position.y as i32);
+
+        let monitor = app
+            .monitor_from_point(position.x, position.y)
+            .ok()
+            .flatten()
+            .or_else(|| app.primary_monitor().ok().flatten());
+        let (mx, my, mw, mh) = monitor
+            .map(|m| {
+                (
+                    m.position().x,
+                    m.position().y,
+                    m.size().width as i32,
+                    m.size().height as i32,
+                )
+            })
+            .unwrap_or((0, 0, i32::MAX, i32::MAX));
+
+        let x = if px + w <= mx + mw { px } else { px - w };
+        let y = if py - h >= my { py - h } else { py };
+        let x = x.max(mx).min(mx + mw - w);
+        let y = y.max(my).min(my + mh - h);
+
+        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn run_gui() {
+    if tauri::webview_version().is_err() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+
+        let title: Vec<u16> = "singboard\0".encode_utf16().collect();
+        let message: Vec<u16> = "未检测到当前用户可用的 Microsoft Edge WebView2 Runtime。\n\n请安装后重新启动 singboard：\nhttps://developer.microsoft.com/microsoft-edge/webview2/\n\n点击确定后程序将退出。\0"
+            .encode_utf16()
+            .collect();
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                message.as_ptr(),
+                title.as_ptr(),
+                MB_OK | MB_ICONERROR,
+            );
+        }
+        std::process::exit(1);
+    }
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !args.iter().any(|a| a == "--hidden") {
+                show_window(app);
+            }
+        }))
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        .difference(tauri_plugin_window_state::StateFlags::VISIBLE),
+                )
+                .with_denylist(&["tray"])
+                .build(),
+        )
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let app_handle = app.handle().clone();
+
+            TrayIconBuilder::with_id("main")
+                .icon(app.default_window_icon().cloned().expect("app icon"))
+                .tooltip("singboard")
+                .on_tray_icon_event(move |_tray, event| {
+                    if let TrayIconEvent::Click {
+                        button,
+                        button_state: MouseButtonState::Up,
+                        position,
+                        ..
+                    } = event
+                    {
+                        match button {
+                            MouseButton::Left => show_window(&app_handle),
+                            MouseButton::Right => show_tray_menu(&app_handle, position),
+                            _ => {}
+                        }
+                    }
+                })
+                .build(&app.handle().clone())
+                .expect("tray icon");
+
+            Ok(())
+        })
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                if window.label() == "main" {
+                    if CLOSE_TO_TRAY.load(Ordering::Relaxed) {
+                        api.prevent_close();
+                        let _ = window.emit("window-visibility", false);
+                        let _ = window.hide();
+                    } else {
+                        let _ = window.app_handle().exit(0);
+                    }
+                }
+            }
+            tauri::WindowEvent::Focused(false) => {
+                if window.label() == "tray" {
+                    let _ = window.hide();
+                }
+            }
+            _ => {}
+        })
+        .invoke_handler(tauri::generate_handler![
+            set_close_to_tray,
+            is_launched_hidden,
+            get_auto_launch,
+            set_auto_launch,
+            show_main_window,
+            quit_app,
+            set_window_material,
+            crate::commands::service::service_status,
+            crate::commands::service::service_start,
+            crate::commands::service::service_stop,
+            crate::commands::service::service_restart,
+            crate::commands::service::service_install,
+            crate::commands::service::service_uninstall,
+            crate::commands::service::service_component_sync,
+            crate::commands::service::service_error_log,
+            crate::commands::service::service_startup_task_exists,
+            crate::commands::service::service_create_startup_task,
+            crate::commands::service::service_delete_startup_task,
+            crate::commands::config::read_config,
+            crate::commands::config::write_config,
+            crate::commands::config::replace_config,
+            crate::commands::config::restore_config_backup,
+            crate::commands::config::has_config_backup,
+            crate::commands::config::validate_config,
+            crate::commands::config::validate_config_content,
+            crate::commands::config::detect_runtime_files,
+            crate::commands::config::get_running_config_path,
+            crate::commands::config::copy_to_running_config,
+            crate::commands::config::get_remote_config_dir,
+            crate::commands::config::get_remote_config_path,
+            crate::commands::config::delete_file,
+            crate::commands::binary::get_singbox_version,
+            crate::commands::binary::get_file_hash,
+            crate::commands::srs::srs_match,
+            crate::commands::srs::srs_match_provider,
+            crate::commands::srs::srs_list_provider,
+            crate::commands::network::fetch_url,
+            crate::commands::network::http_ping,
+            crate::commands::network::dns_query,
+            crate::commands::update::check_core_update,
+            crate::commands::update::platform::probe_asset_core_hash,
+            crate::commands::update::platform::perform_core_update,
+            crate::commands::update::open_release_page,
+            crate::commands::self_update::check_panel_update,
+            crate::commands::self_update::perform_panel_update,
+            crate::commands::self_update::take_panel_update_error,
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            use tauri_plugin_window_state::AppHandleExt;
+            let state_flags = tauri_plugin_window_state::StateFlags::all()
+                .difference(tauri_plugin_window_state::StateFlags::VISIBLE);
+            match event {
+                tauri::RunEvent::WindowEvent {
+                    label,
+                    event: tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_),
+                    ..
+                } => {
+                    if label == "main" {
+                        let _ = app.save_window_state(state_flags);
+                    }
+                }
+                tauri::RunEvent::ExitRequested { .. } => {}
+                _ => {}
+            }
+        });
+}

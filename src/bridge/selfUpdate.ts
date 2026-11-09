@@ -29,3 +29,11 @@ export async function performPanelUpdate(args: {
 }): Promise<void> {
   return invoke('perform_panel_update', args)
 }
+
+export async function cleanupPanelUpdate(): Promise<void> {
+  return invoke('cleanup_panel_update')
+}
+
+export function isInstallPermissionRequired(error: unknown): boolean {
+  return String(error instanceof Error ? error.message : error).includes('install_permission_required')
+}

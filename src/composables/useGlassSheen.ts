@@ -33,6 +33,10 @@ export function isInsideWindow(x: number, y: number, width: number, height: numb
   return x > LEAVE_MARGIN && y > LEAVE_MARGIN && x < width - LEAVE_MARGIN && y < height - LEAVE_MARGIN
 }
 
+export function sheenFollows(pointerType: string): boolean {
+  return pointerType === 'mouse'
+}
+
 export function useGlassSheen() {
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
   const glows = new WeakMap<HTMLElement, number>()
@@ -67,6 +71,10 @@ export function useGlassSheen() {
   }
 
   function onPointerMove(event: PointerEvent) {
+    if (!sheenFollows(event.pointerType)) {
+      if (pointer) fadeOut()
+      return
+    }
     pointer = { x: event.clientX, y: event.clientY }
     schedule()
   }

@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue'
-import { fetchRules } from '@/api'
-import type { Rule } from '@/types'
+import { fetchRuleProviders, fetchRules } from '@/api'
+import type { Rule, RuleProvider } from '@/types'
 import { getRequestErrorReason } from '@/utils/requestError'
 
 const rules = ref<Rule[]>([])
@@ -8,7 +8,10 @@ const loading = ref(false)
 const loaded = ref(false)
 const loadError = ref('')
 const filterText = ref('')
+const ruleProviders = ref<RuleProvider[]>([])
+const providersAvailable = computed(() => ruleProviders.value.length > 0)
 let rulesRequest = 0
+let providersRequest = 0
 
 const filteredRules = computed(() => {
   const q = filterText.value.trim().toLowerCase()
@@ -47,6 +50,20 @@ export function useRulesStore() {
     }
   }
 
+  async function loadProviders() {
+    const request = ++providersRequest
+    try {
+      const { data } = await fetchRuleProviders()
+      if (request === providersRequest) ruleProviders.value = Object.values(data?.providers ?? {})
+    } catch {
+      if (request === providersRequest) ruleProviders.value = []
+    }
+  }
+
+  async function reloadAfterCoreReady() {
+    await Promise.all([loadRules(), loadProviders()])
+  }
+
   return {
     rules,
     filteredRules,
@@ -54,6 +71,10 @@ export function useRulesStore() {
     loaded,
     loadError,
     filterText,
+    ruleProviders,
+    providersAvailable,
     loadRules,
+    loadProviders,
+    reloadAfterCoreReady,
   }
 }

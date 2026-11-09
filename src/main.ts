@@ -1,8 +1,7 @@
-import { createApp } from 'vue'
-import App from './App.vue'
-import router from './router'
-import './assets/styles/main.css'
+import { IS_ANDROID } from '@/platform'
 
-const app = createApp(App)
-app.use(router)
-app.mount('#app')
+if (IS_ANDROID) {
+  void import('@/android/main')
+} else {
+  void import('./desktopMain')
+}

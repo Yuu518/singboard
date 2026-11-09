@@ -6,6 +6,7 @@ import { useToastStore } from '@/stores/toast'
 import { openReleasePage } from '@/bridge/coreUpdate'
 import { failureMessage } from '@/utils/humanError'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { IS_ANDROID } from '@/platform'
 
 const PANEL_RELEASES_URL = 'https://github.com/Yuu518/singboard/releases'
 
@@ -26,7 +27,7 @@ const phaseText = computed(() => {
         : `下载中… ${mb(p.downloaded)} MB`
     }
     case 'verify': return '正在校验…'
-    case 'replace': return '正在重启面板…'
+    case 'replace': return IS_ANDROID ? '正在打开系统安装器…' : '正在重启面板…'
     default: return '更新中…'
   }
 })
@@ -41,7 +42,9 @@ watch(pendingConfirm, async (info) => {
   if (!info) return
   pendingConfirm.value = null
   const mirror = useConfigStore().config.value.coreUpdateMirror.trim()
-  const restartNote = '更新会关闭面板并自动重新打开，代理服务不受影响。'
+  const restartNote = IS_ANDROID
+    ? '下载并校验后会打开系统安装器，代理服务不受影响。'
+    : '更新会关闭面板并自动重新打开，代理服务不受影响。'
   const confirmed = await dialogRef.value?.show({
     title: info.hasUpdate ? '发现新面板版本' : '本地面板和官方发布的不同',
     details: [
@@ -52,7 +55,7 @@ watch(pendingConfirm, async (info) => {
     ],
     message: info.hasUpdate
       ? restartNote
-      : `版本号相同，但本地面板和官方发布的文件不一样，可能是上游重新构建过，或本地文件被替换过。重新安装会覆盖当前面板。${restartNote}`,
+      : `版本号相同，但本地面板和官方发布的文件不一样，可能是上游重新构建过，或本地文件被替换过。重新安装会覆盖当前${IS_ANDROID ? '应用' : '面板'}。${restartNote}`,
     warning: !info.assetDigest && mirror
       ? '这个版本没有提供文件校验值，经镜像下载时无法确认文件没有被改动。'
       : '',
@@ -71,7 +74,7 @@ watch(pendingConfirm, async (info) => {
 
   <!-- Covers the titlebar too, so the window cannot be closed mid-update. -->
   <Transition name="glass-pop">
-  <div v-if="updating" class="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4">
+  <div v-if="updating" class="glass-scrim safe-overlay fixed inset-0 z-50 flex items-center justify-center p-4">
     <div class="glass-popover w-full max-w-sm rounded-[var(--radius-panel)] p-5 space-y-3">
       <h2 class="text-lg font-semibold">正在更新面板</h2>
       <div class="text-xs text-base-content/70">{{ phaseText }}</div>
@@ -82,7 +85,9 @@ watch(pendingConfirm, async (info) => {
         :max="progress.total"
       />
       <progress v-else class="progress progress-primary w-full" />
-      <p class="text-xs text-base-content/60">请勿关闭面板，更新完成后会自动重新启动。</p>
+      <p class="text-xs text-base-content/60">
+        {{ IS_ANDROID ? '请保持应用在前台，校验完成后会弹出系统安装界面。' : '请勿关闭面板，更新完成后会自动重新启动。' }}
+      </p>
     </div>
   </div>
   </Transition>

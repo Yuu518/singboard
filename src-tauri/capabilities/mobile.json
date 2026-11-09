@@ -1,0 +1,9 @@
+{
+  "identifier": "mobile",
+  "description": "Capability for the Android main window",
+  "windows": ["main"],
+  "platforms": ["android"],
+  "permissions": [
+    "core:default"
+  ]
+}

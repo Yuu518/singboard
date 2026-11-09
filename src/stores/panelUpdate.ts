@@ -3,10 +3,17 @@ import { invoke } from '@tauri-apps/api/core'
 import { isElevationCancelled } from '@/bridge/service'
 import { getVersion } from '@tauri-apps/api/app'
 import { listen } from '@tauri-apps/api/event'
-import { checkPanelUpdate, performPanelUpdate, type PanelUpdateInfo, type PanelUpdateProgress } from '@/bridge/selfUpdate'
+import {
+  checkPanelUpdate,
+  isInstallPermissionRequired,
+  performPanelUpdate,
+  type PanelUpdateInfo,
+  type PanelUpdateProgress,
+} from '@/bridge/selfUpdate'
 import { useConfigStore } from './config'
 import { useToastStore } from './toast'
 import { failureMessage } from '@/utils/humanError'
+import { IS_ANDROID } from '@/platform'
 
 // Module-level singleton: the startup check can fire on any page, while the
 // settings card only exists on the settings page.
@@ -51,7 +58,9 @@ async function check(silent: boolean) {
 async function checkOnStartup() {
   if (checkedThisSession) return
   checkedThisSession = true
-  const previousError = await invoke<string | null>('take_panel_update_error').catch(() => null)
+  const previousError = IS_ANDROID
+    ? null
+    : await invoke<string | null>('take_panel_update_error').catch(() => null)
   if (previousError) {
     const { pushToast } = useToastStore()
     pushToast({ message: isElevationCancelled(previousError) ? '已取消面板更新' : failureMessage('上次面板更新失败', previousError), type: 'info' }, 6000)
@@ -75,8 +84,17 @@ async function runUpdate() {
     })
     // Deliberately leaves `updating` set: the overlay must stay up until the
     // process actually dies.
+    if (IS_ANDROID) {
+      pushToast({ message: '安装包已校验，请在系统安装界面中确认更新', type: 'info' }, 6000)
+      updating.value = false
+      progress.value = null
+    }
   } catch (e) {
-    if (!isElevationCancelled(e)) pushToast({ message: failureMessage('面板更新失败', e), type: 'error' }, 8000)
+    if (IS_ANDROID && isInstallPermissionRequired(e)) {
+      pushToast({ message: '请在系统设置中允许 singboard 安装应用，返回后再次点击更新', type: 'info' }, 8000)
+    } else if (!isElevationCancelled(e)) {
+      pushToast({ message: failureMessage('面板更新失败', e), type: 'error' }, 8000)
+    }
     updating.value = false
     progress.value = null
   }
