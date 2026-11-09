@@ -22,7 +22,9 @@ import DnsQueryTool from '@/components/settings/DnsQueryTool.vue'
 import CoreUpdateCard from '@/android/components/settings/CoreUpdateCard.vue'
 import PanelUpdateCard from '@/android/components/settings/PanelUpdateCard.vue'
 import BackgroundEditorDialog from '@/components/settings/BackgroundEditorDialog.vue'
+import GlassTintSlider from '@/components/common/GlassTintSlider.vue'
 import SettingsSelect from '@/android/components/settings/SettingsSelect.vue'
+import { glassTintLabel } from '@/utils/glassTint'
 
 const {
   config,
@@ -45,11 +47,6 @@ const themeOptions = [
   { value: 'dark', label: '深色' },
 ] as const
 
-const glassOptions = [
-  { value: 'clear', label: '通透' },
-  { value: 'blur', label: '模糊' },
-] as const
-
 const { backgroundUrl, hasBackground, setBackground, removeBackground } = useBackgroundStore()
 const personalizationExpanded = ref(false)
 const backgroundInput = ref<HTMLInputElement | null>(null)
@@ -57,7 +54,7 @@ const backgroundEditorRef = ref<InstanceType<typeof BackgroundEditorDialog> | nu
 const backgroundBusy = ref(false)
 
 const personalizationSummary = computed(() => {
-  const glass = glassOptions.find((option) => option.value === config.value.glassMode)?.label ?? ''
+  const glass = glassTintLabel(config.value.glassTint)
   const backdrop = hasBackground.value ? '已设置背景' : '默认背景'
   return `${glass} · ${backdrop}`
 })
@@ -834,29 +831,21 @@ watch(
 
           <Transition name="settings-reveal">
             <div v-show="personalizationExpanded" class="settings-subpanel">
-              <div class="settings-row">
+              <div class="settings-row settings-row-stack">
                 <div class="settings-row-copy">
                   <strong id="settings-glass-label">玻璃效果</strong>
-                  <span>作用于顶部栏、底栏、卡片和弹窗。“通透”是带折射的液态玻璃，“模糊”是带底色的模糊玻璃。</span>
+                  <span>作用于顶部栏、底栏、卡片和弹窗。往左更通透，往右底色更重、文字更易读。</span>
                 </div>
-                <div class="settings-segmented" role="radiogroup" aria-labelledby="settings-glass-label">
-                  <button
-                    v-for="option in glassOptions"
-                    :key="option.value"
-                    type="button"
-                    role="radio"
-                    :class="{ 'is-active': config.glassMode === option.value }"
-                    :aria-checked="config.glassMode === option.value"
-                    @click="updateConfig({ glassMode: option.value })"
-                  >
-                    {{ option.label }}
-                  </button>
-                </div>
+                <GlassTintSlider
+                  :model-value="config.glassTint"
+                  labelledby="settings-glass-label"
+                  @update:model-value="updateConfig({ glassTint: $event })"
+                />
               </div>
               <div class="settings-row">
                 <div class="settings-row-copy">
                   <strong>背景图片</strong>
-                  <span>{{ hasBackground ? '显示在窗口背后，“通透”模式下玻璃会折射它。' : '未设置，使用系统默认材质。' }}</span>
+                  <span>{{ hasBackground ? '显示在应用背后，玻璃越通透越能看清它。' : '未设置，使用系统默认材质。' }}</span>
                 </div>
                 <div class="settings-background-actions">
                   <img v-if="backgroundUrl" :src="backgroundUrl" alt="" class="settings-background-thumb" />

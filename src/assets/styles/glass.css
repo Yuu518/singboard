@@ -101,28 +101,26 @@
   --udp-ink: #d38df5;
 }
 
-:root,
-[data-glass='blur'] {
-  --glass-blur: 25px;
-  --glass-pop-blur: 30px;
-  --glass-saturate: 1.8;
-  --glass-bar-alpha: 0.8;
-  --glass-float-alpha: 0.6;
-  --glass-pop-alpha: 0.72;
-  --glass-card-alpha: 0.62;
-  --glass-control-alpha: 0.72;
+:root {
+  --glass-t: 1;
+  --glass-c: clamp(0, calc(1 - 2 * var(--glass-t)), 1);
+  --glass-bar-floor: 0;
+  --glass-float-floor: 0;
+  --glass-pop-floor: 0;
+  --glass-card-floor: 0;
+  --glass-control-floor: 0;
+  --glass-blur: calc(3px + 22px * var(--glass-t));
+  --glass-pop-blur: calc(4px + 26px * var(--glass-t));
+  --glass-saturate: calc(1.5 + 0.3 * var(--glass-t));
+  --glass-bar-alpha: max(var(--glass-bar-floor), calc(0.35 + 0.45 * var(--glass-t)));
+  --glass-float-alpha: max(var(--glass-float-floor), calc(0.14 + 0.46 * var(--glass-t)));
+  --glass-pop-alpha: max(var(--glass-pop-floor), calc(0.42 + 0.3 * var(--glass-t)));
+  --glass-card-alpha: max(var(--glass-card-floor), calc(0.3 + 0.32 * var(--glass-t)));
+  --glass-control-alpha: max(var(--glass-control-floor), calc(0.5 + 0.22 * var(--glass-t)));
   --glass-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0.045 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
 }
 
 [data-glass='clear'] {
-  --glass-blur: 3px;
-  --glass-pop-blur: 4px;
-  --glass-saturate: 1.5;
-  --glass-bar-alpha: 0.35;
-  --glass-float-alpha: 0.14;
-  --glass-pop-alpha: 0.42;
-  --glass-card-alpha: 0.3;
-  --glass-control-alpha: 0.5;
   --glass-grain: none;
 }
 
@@ -409,12 +407,12 @@ html[data-backdrop='image'] .btn.btn-glass.btn-glass-danger:hover {
   text-shadow: none;
 }
 
-[data-glass='clear']:is([data-theme='light'][data-backdrop-tone='dark'], [data-theme='dark'][data-backdrop-tone='light']) {
-  --glass-bar-alpha: 0.6;
-  --glass-float-alpha: 0.55;
-  --glass-card-alpha: 0.6;
-  --glass-pop-alpha: 0.7;
-  --glass-control-alpha: 0.72;
+:is([data-theme='light'][data-backdrop-tone='dark'], [data-theme='dark'][data-backdrop-tone='light']) {
+  --glass-bar-floor: 0.6;
+  --glass-float-floor: 0.55;
+  --glass-card-floor: 0.6;
+  --glass-pop-floor: 0.7;
+  --glass-control-floor: 0.72;
 }
 
 html .tabs-boxed .tab {

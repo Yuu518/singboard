@@ -6,6 +6,7 @@ import { backdropLensSupported, buildDisplacementMap, buildLensFilter, type MapI
 import { Spring } from '@/utils/spring'
 import { goToPage, pagerIndex, requestReselect } from '@/android/stores/pager'
 import { useConfigStore } from '@/stores/config'
+import { isClearGlass } from '@/utils/glassTint'
 
 const BAR_HEIGHT = 64
 const BAR_PADDING = 4
@@ -28,6 +29,7 @@ const bodyRef = ref<HTMLElement | null>(null)
 const accentRef = ref<HTMLElement | null>(null)
 const rowRef = ref<HTMLElement | null>(null)
 const indicatorRef = ref<HTMLElement | null>(null)
+const fillRef = ref<HTMLElement | null>(null)
 const defsRef = ref<SVGSVGElement | null>(null)
 const measured = ref(false)
 const lensReady = ref(false)
@@ -132,7 +134,9 @@ function render() {
   body.style.setProperty('--tab-scale', (1 + 0.2 * lift).toFixed(3))
   body.style.setProperty('--glow', clamp(glow.value, 0, 1).toFixed(3))
   body.style.setProperty('--glow-x', `${center.toFixed(1)}px`)
-  indicator.style.transform = `translate3d(${left.toFixed(2)}px, 0, 0) scale(${sx.toFixed(4)}, ${sy.toFixed(4)})`
+  const transform = `translate3d(${left.toFixed(2)}px, 0, 0) scale(${sx.toFixed(4)}, ${sy.toFixed(4)})`
+  indicator.style.transform = transform
+  if (fillRef.value) fillRef.value.style.transform = transform
 
   const w = tabWidth * sx
   const h = PILL_HEIGHT * sy
@@ -175,7 +179,7 @@ function rebuildLens() {
   defs.replaceChildren()
   pillScales = []
   lensReady.value = false
-  if (!lensSupported || config.value.glassMode !== 'clear' || reducedTransparency.matches || width < 2 || tabWidth < 2) return
+  if (!lensSupported || !isClearGlass(config.value.glassTint) || reducedTransparency.matches || width < 2 || tabWidth < 2) return
   const barWidth = Math.round(width)
   const barMap = mapUrl(barWidth, BAR_HEIGHT, BAR_LENS.height, BAR_LENS.amount, false)
   const pillWidth = Math.round(tabWidth)
@@ -286,7 +290,7 @@ function onTransparencyChange() {
   render()
 }
 
-watch(() => config.value.glassMode, onTransparencyChange)
+watch(() => isClearGlass(config.value.glassTint), onTransparencyChange)
 
 onMounted(() => {
   measure()
@@ -317,6 +321,7 @@ onBeforeUnmount(() => {
     >
       <div class="liquid-nav-glass" :style="lensReady ? { filter: `url(#${barLensId})` } : undefined" />
       <div class="liquid-nav-rim" aria-hidden="true" />
+      <div ref="fillRef" class="liquid-nav-pill-fill" aria-hidden="true" />
       <div ref="rowRef" class="liquid-nav-row">
         <button
           v-for="(item, index) in navItems"
@@ -351,7 +356,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .liquid-nav {
   --nav-shadow: 0.1;
-  --nav-halo: 255 255 255;
+  --nav-tone: contrast(calc(1 - 0.7 * var(--glass-c, 0))) brightness(calc(1 + 0.7 * var(--glass-c, 0)));
+  --nav-pill-base: calc(0.7 * var(--glass-c, 0));
   position: fixed;
   z-index: 40;
   right: calc(var(--safe-right) + 24px);
@@ -364,7 +370,7 @@ onBeforeUnmount(() => {
 
 :global([data-theme='dark'] .liquid-nav) {
   --nav-shadow: 0.2;
-  --nav-halo: 0 0 0;
+  --nav-tone: contrast(calc(1 - 0.6 * var(--glass-c, 0))) brightness(calc(1 - 0.5 * var(--glass-c, 0)));
 }
 
 @media (max-width: 359px) {
@@ -405,8 +411,8 @@ onBeforeUnmount(() => {
 .liquid-nav-glass {
   background: var(--glass-grain), rgb(var(--glass-rgb) / var(--glass-float-alpha));
   clip-path: inset(0 round 9999px);
-  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
-  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur)) var(--nav-tone,);
+  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur)) var(--nav-tone,);
 }
 
 .liquid-nav-rim {
@@ -436,7 +442,7 @@ onBeforeUnmount(() => {
   inset: 0;
   display: flex;
   padding: 4px;
-  color: oklch(var(--bc) / 0.72);
+  color: oklch(var(--bc) / calc(0.72 + 0.28 * var(--glass-c, 0)));
   font-weight: 500;
 }
 
@@ -446,18 +452,12 @@ onBeforeUnmount(() => {
   clip-path: inset(0 100% 0 0);
 }
 
-:global([data-glass='clear'] .liquid-nav-row) {
-  color: oklch(var(--bc));
-}
-
 :global([data-glass='clear'] .liquid-nav-icon) {
   stroke-width: 2;
-  filter: drop-shadow(0 0 1px rgb(var(--nav-halo) / 0.9)) drop-shadow(0 0 3px rgb(var(--nav-halo) / 0.6));
 }
 
 :global([data-glass='clear'] .liquid-nav-label) {
   font-weight: 600;
-  text-shadow: 0 0 1px rgb(var(--nav-halo) / 0.9), 0 0 4px rgb(var(--nav-halo) / 0.7);
 }
 
 .liquid-nav-item {
@@ -508,7 +508,8 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
-.liquid-nav-indicator {
+.liquid-nav-indicator,
+.liquid-nav-pill-fill {
   position: absolute;
   top: 4px;
   left: 0;
@@ -521,6 +522,12 @@ onBeforeUnmount(() => {
   will-change: transform;
 }
 
+.liquid-nav-pill-fill {
+  background:
+    linear-gradient(oklch(var(--p) / calc(0.15 * (1 - var(--press, 0)))), oklch(var(--p) / calc(0.15 * (1 - var(--press, 0))))),
+    rgb(var(--glass-rgb) / calc(var(--nav-pill-base, 0) * (1 - var(--press, 0))));
+}
+
 .liquid-nav-pill-lens {
   clip-path: inset(0 round 9999px);
   -webkit-backdrop-filter: saturate(1.1);
@@ -528,15 +535,13 @@ onBeforeUnmount(() => {
 }
 
 .liquid-nav-pill-surface {
-  background:
-    linear-gradient(rgb(0 0 0 / calc(0.03 * var(--press, 0))), rgb(0 0 0 / calc(0.03 * var(--press, 0)))),
-    oklch(var(--p) / calc(0.15 * (1 - var(--press, 0))));
+  background: rgb(0 0 0 / calc(0.03 * var(--press, 0)));
   box-shadow:
     inset 0 calc(8px * var(--press, 0)) calc(8px * var(--press, 0)) rgb(0 0 0 / calc(0.15 * var(--press, 0))),
     inset 0 0 0 1px rgb(255 255 255 / calc(0.45 * var(--press, 0)));
 }
 
-.liquid-nav-body.is-measured .liquid-nav-indicator {
+.liquid-nav-body.is-measured :is(.liquid-nav-indicator, .liquid-nav-pill-fill) {
   opacity: 1;
 }
 

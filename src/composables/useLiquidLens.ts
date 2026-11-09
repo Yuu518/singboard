@@ -1,6 +1,7 @@
 import { onBeforeUnmount, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { useBackgroundStore } from '@/stores/background'
+import { isClearGlass } from '@/utils/glassTint'
 
 const BASE_LENS_SELECTOR = '.glass-float, .glass-popover'
 const CARD_LENS_SELECTOR = '.surface-card, .settings-card'
@@ -461,11 +462,11 @@ export function useLiquidLens() {
   }
 
   function sync() {
-    if (config.value.glassMode === 'clear' && !reducedTransparency.matches && backdropLensSupported()) start()
+    if (isClearGlass(config.value.glassTint) && !reducedTransparency.matches && backdropLensSupported()) start()
     else stop()
   }
 
-  watch(() => config.value.glassMode, sync, { immediate: true })
+  watch(() => isClearGlass(config.value.glassTint), sync, { immediate: true })
   watch(hasBackground, () => {
     stop()
     sync()

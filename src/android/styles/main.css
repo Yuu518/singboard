@@ -39,6 +39,7 @@
   left: 0;
   pointer-events: none;
   background: linear-gradient(var(--edge-dir), var(--edge-tint), transparent);
+  opacity: var(--glass-c, 1);
 }
 
 [data-backdrop='image'] .edge-fade {
@@ -54,16 +55,6 @@
   top: 0;
   z-index: 19;
   height: calc(var(--safe-top) + 4.5rem);
-}
-
-.edge-fade.is-bottom {
-  bottom: 0;
-  z-index: 19;
-  height: calc(max(var(--safe-bottom) + 8px, 16px) + 5rem);
-}
-
-.keyboard-open .edge-fade.is-bottom {
-  display: none;
 }
 
 .edge-fade::before,

@@ -28,6 +28,8 @@ import { useSettingField, validateHttpUrl } from '@/composables/useSettingField'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import OverflowingText from '@/components/common/OverflowingText.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
+import GlassTintSlider from '@/components/common/GlassTintSlider.vue'
+import { glassTintLabel } from '@/utils/glassTint'
 import DnsQueryTool from '@/components/settings/DnsQueryTool.vue'
 import CoreUpdateCard from '@/components/settings/CoreUpdateCard.vue'
 import PanelUpdateCard from '@/components/settings/PanelUpdateCard.vue'
@@ -67,11 +69,6 @@ const themeOptions = [
   { value: 'dark', label: '深色' },
 ] as const
 
-const glassOptions = [
-  { value: 'clear', label: '通透' },
-  { value: 'blur', label: '模糊' },
-] as const
-
 const { backgroundUrl, hasBackground, setBackground, removeBackground } = useBackgroundStore()
 const personalizationExpanded = ref(false)
 const backgroundInput = ref<HTMLInputElement | null>(null)
@@ -79,7 +76,7 @@ const backgroundEditorRef = ref<InstanceType<typeof BackgroundEditorDialog> | nu
 const backgroundBusy = ref(false)
 
 const personalizationSummary = computed(() => {
-  const glass = glassOptions.find((option) => option.value === config.value.glassMode)?.label ?? ''
+  const glass = glassTintLabel(config.value.glassTint)
   return `${glass} · ${hasBackground.value ? '已设置背景' : '默认背景'}`
 })
 
@@ -1137,22 +1134,21 @@ watch(
 
           <Transition name="settings-reveal">
             <div v-show="personalizationExpanded" class="settings-subpanel">
-              <div class="settings-row">
+              <div class="settings-row settings-row-stack">
                 <div class="settings-row-copy">
                   <strong id="settings-glass-label">玻璃效果</strong>
-                  <span>作用于顶部栏、侧栏、卡片和弹窗。“通透”是带折射的液态玻璃，“模糊”是带底色的模糊玻璃。</span>
+                  <span>作用于顶部栏、侧栏、卡片和弹窗。往左更通透，偏通透时带折射；往右底色更重、文字更易读。</span>
                 </div>
-                <SegmentedControl
-                  :model-value="config.glassMode"
-                  :options="glassOptions"
+                <GlassTintSlider
+                  :model-value="config.glassTint"
                   labelledby="settings-glass-label"
-                  @update:model-value="updateConfig({ glassMode: $event })"
+                  @update:model-value="updateConfig({ glassTint: $event })"
                 />
               </div>
               <div class="settings-row">
                 <div class="settings-row-copy">
                   <strong>背景图片</strong>
-                  <span v-if="hasBackground">显示在窗口背后，“通透”模式下玻璃会折射它。</span>
+                  <span v-if="hasBackground">显示在窗口背后，玻璃偏通透时会折射它。</span>
                   <span v-else-if="removedBackground">
                     背景已删除，改用系统默认材质。<button ref="backgroundUndoButton" type="button" class="settings-undo" aria-label="撤销删除背景" :disabled="backgroundBusy" @click="undoBackgroundRemoval">撤销</button>
                   </span>

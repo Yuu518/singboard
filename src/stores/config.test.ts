@@ -13,18 +13,35 @@ it('drops the legacy custom service name when loading and saving settings', asyn
   localStorage.clear()
 })
 
-it('defaults to blurred glass and mirrors the glass mode onto the root element', async () => {
+it('defaults to tinted glass and mirrors the glass tint onto the root element', async () => {
   const { nextTick } = await import('vue')
   const { useConfigStore } = await import('./config')
   const { config, updateConfig } = useConfigStore()
-  expect(config.value.glassMode).toBe('blur')
-  expect(document.documentElement.getAttribute('data-glass')).toBe('blur')
-  updateConfig({ glassMode: 'clear' })
+  const root = document.documentElement
+  expect(config.value.glassTint).toBe(1)
+  expect(root.getAttribute('data-glass')).toBe('blur')
+  expect(root.style.getPropertyValue('--glass-t')).toBe('1')
+  updateConfig({ glassTint: 0.3 })
   await nextTick()
+  expect(root.getAttribute('data-glass')).toBe('clear')
+  expect(root.style.getPropertyValue('--glass-t')).toBe('0.3')
+  updateConfig({ glassTint: 7 })
+  await nextTick()
+  expect(config.value.glassTint).toBe(1)
+  updateConfig({ glassTint: 'frosted' as never })
+  await nextTick()
+  expect(config.value.glassTint).toBe(1)
+  localStorage.clear()
+})
+
+it('carries the old clear glass mode over to the clear end of the slider', async () => {
+  vi.resetModules()
+  localStorage.setItem('singboard-config', JSON.stringify({ glassMode: 'clear' }))
+  const { useConfigStore } = await import('./config')
+  const { config } = useConfigStore()
+  expect(config.value.glassTint).toBe(0)
+  expect(config.value).not.toHaveProperty('glassMode')
   expect(document.documentElement.getAttribute('data-glass')).toBe('clear')
-  updateConfig({ glassMode: 'frosted' as never })
-  await nextTick()
-  expect(config.value.glassMode).toBe('blur')
   localStorage.clear()
 })
 

@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { setRootEnabled } from '@/bridge/app'
 import { IS_ANDROID } from '@/platform'
 import type { AppConfig, ClashApiProfile, ConfigProfile } from '@/types'
+import { applyGlassTint, normalizeGlassTint } from '@/utils/glassTint'
 
 const STORAGE_KEY = 'singboard-config'
 
@@ -113,7 +114,7 @@ function normalizeConfig(raw: any): AppConfig {
     workingDir: IS_ANDROID ? normalizePath(raw?.workingDir) : normalizeWindowsPath(raw?.workingDir),
     startupDelaySeconds: normalizeStartupDelay(raw?.startupDelaySeconds),
     theme: ['auto', 'light', 'dark'].includes(raw?.theme) ? raw.theme : 'light',
-    glassMode: raw?.glassMode === 'clear' ? 'clear' : 'blur',
+    glassTint: normalizeGlassTint(raw?.glassTint, raw?.glassMode),
     latencyTestUrl: typeof raw?.latencyTestUrl === 'string' && raw.latencyTestUrl
       ? raw.latencyTestUrl
       : 'https://www.gstatic.com/generate_204',
@@ -198,14 +199,10 @@ watch(resolvedTheme, (val) => {
   applyTheme(val)
 })
 
-function applyGlassMode(mode: AppConfig['glassMode']) {
-  document.documentElement.setAttribute('data-glass', mode)
-}
+applyGlassTint(config.value.glassTint)
 
-applyGlassMode(config.value.glassMode)
-
-watch(() => config.value.glassMode, (val) => {
-  applyGlassMode(val)
+watch(() => config.value.glassTint, (val) => {
+  applyGlassTint(val)
 })
 
 watch(config, (val) => {
