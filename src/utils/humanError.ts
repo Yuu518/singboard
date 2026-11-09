@@ -1,4 +1,6 @@
 const RULES: Array<[RegExp, string]> = [
+  [/\bHTTP 404\b|\(404\)/i, '下载地址不存在 (404)，请检查镜像前缀'],
+  [/\bHTTP 5\d\d\b/i, '服务器暂时出错，请稍后再试'],
   [/timed?\s*out|deadline has elapsed|超时/i, '连接超时，请检查网络后重试'],
   [/dns error|failed to lookup|no such host|name or service not known/i, '无法解析域名，请检查网络或 DNS 设置'],
   [/certificate|\btls\b|\bssl\b|handshake/i, 'HTTPS 证书校验失败，网络或镜像可能被拦截'],
@@ -7,8 +9,6 @@ const RULES: Array<[RegExp, string]> = [
   [/being used by another process|os error 32/i, '文件正被其他程序占用，请关闭后重试'],
   [/access is denied|permission denied|os error 5\b/i, '没有权限访问该文件或目录'],
   [/cannot find the (file|path)|no such file|os error [23]\b/i, '找不到该文件或目录'],
-  [/\bHTTP 404\b|\(404\)/i, '下载地址不存在 (404)，请检查镜像前缀'],
-  [/\bHTTP 5\d\d\b/i, '服务器暂时出错，请稍后再试'],
 ]
 
 function rawMessage(error: unknown): string {

@@ -8,6 +8,7 @@ describe('humanizeError', () => {
     expect(humanizeError(new Error('operation timed out'))).toBe('连接超时，请检查网络后重试')
     expect(humanizeError('dns error: failed to lookup address information')).toBe('无法解析域名，请检查网络或 DNS 设置')
     expect(humanizeError('下载失败: HTTP 404')).toBe('下载地址不存在 (404)，请检查镜像前缀')
+    expect(humanizeError('下载失败: HTTP 504 Gateway Timeout')).toBe('服务器暂时出错，请稍后再试')
   })
 
   it('explains Windows file errors', () => {
