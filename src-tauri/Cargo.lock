@@ -3761,7 +3761,7 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "singboard"
-version = "4.5.0"
+version = "4.6.0"
 dependencies = [
  "base64 0.22.1",
  "flate2",
