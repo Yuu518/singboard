@@ -50,27 +50,37 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.0
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version: 24
-
-      - name: Install pnpm
-        run: npm install --global pnpm@11.13.0
+          cache: pnpm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v6.1.0
+      - name: Build the desktop library as an rlib only
+        shell: pwsh
+        working-directory: src-tauri
+        run: |
+          $manifest = Get-Content Cargo.toml -Raw
+          if ($manifest -notmatch '(?m)^crate-type = \[[^\]]*\]') { throw "crate-type not found in Cargo.toml" }
+          $manifest -replace '(?m)^crate-type = \[[^\]]*\]', 'crate-type = ["rlib"]' | Set-Content Cargo.toml -NoNewline
+          Select-String -Path Cargo.toml -Pattern '^crate-type'
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          workspaces: src-tauri -> target
+          cache-on-failure: true
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Read release tag
         shell: pwsh
@@ -127,8 +137,13 @@ jobs:
         run: |
           # The service host was signed before being embedded; fail loudly if
           # the Tauri build relinked it and wiped the signature.
-          & $env:SIGNTOOL verify /pa src-tauri/target/release/singboard.service
-          if ($LASTEXITCODE -ne 0) { throw "singboard.service lost its signature during the Tauri build" }
+          $serviceHost = Get-Item src-tauri/target/release/singboard-service.exe
+          & $env:SIGNTOOL verify /pa $serviceHost.FullName
+          if ($LASTEXITCODE -ne 0) { throw "singboard-service.exe lost its signature during the Tauri build" }
+          $hostHash = (Get-FileHash $serviceHost.FullName -Algorithm SHA256).Hash
+          $embedded = Get-ChildItem src-tauri/target/release/build -Recurse -File -Filter singboard.service |
+            Where-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash -eq $hostHash }
+          if (-not $embedded) { throw "no embedded singboard.service matches the signed singboard-service.exe" }
 
           $files = @(Get-Item src-tauri/target/release/singboard.exe)
           $files += Get-ChildItem src-tauri/target/release/bundle -Recurse -File -Include *.exe, *.msi -ErrorAction SilentlyContinue
@@ -182,13 +197,16 @@ jobs:
           tag=$(git describe --tags --abbrev=0) || { echo "No tag found in the repository; push a tag before building"; exit 1; }
           echo "APP_VERSION=${tag#v}" >> "$GITHUB_ENV"
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.0
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version: 24
-
-      - name: Install pnpm
-        run: npm install --global pnpm@11.13.0
+          cache: pnpm
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -207,15 +225,16 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Setup NDK
-        uses: nttld/setup-ndk@v1.5.0
-        id: setup-ndk
-        with:
-          ndk-version: r30
-          local-cache: true
-
-      - name: Export NDK path
-        run: echo "NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+      - name: Use preinstalled NDK r30
+        run: |
+          ndk=$(ls -d "$ANDROID_HOME"/ndk/30.* 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$ndk" ]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;30.0.16248370"
+            ndk="$ANDROID_HOME/ndk/30.0.16248370"
+          fi
+          test -f "$ndk/source.properties" || { echo "NDK r30 not found at $ndk"; exit 1; }
+          grep Pkg.Revision "$ndk/source.properties"
+          echo "NDK_HOME=$ndk" >> "$GITHUB_ENV"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
