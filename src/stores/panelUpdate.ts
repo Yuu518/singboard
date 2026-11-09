@@ -38,7 +38,7 @@ async function check(silent: boolean) {
   const { pushToast } = useToastStore()
   checking.value = true
   try {
-    const info = await checkPanelUpdate()
+    const info = await checkPanelUpdate(useConfigStore().config.value.githubToken)
     latest.value = info
     currentVersion.value = info.currentVersion
     // Hash mismatch is manual-check only: self-built and dev binaries never
@@ -78,9 +78,11 @@ async function runUpdate() {
   try {
     await performPanelUpdate({
       assetUrl: info.assetUrl,
+      assetApiUrl: info.assetApiUrl,
       assetSize: info.assetSize,
       assetDigest: info.assetDigest,
       mirror: config.value.coreUpdateMirror,
+      githubToken: config.value.githubToken,
     })
     // Deliberately leaves `updating` set: the overlay must stay up until the
     // process actually dies.

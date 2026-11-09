@@ -7,6 +7,7 @@ export interface PanelUpdateInfo {
   outOfSync: boolean
   publishedAt: string
   assetUrl: string
+  assetApiUrl: string
   assetSize: number
   assetDigest: string
 }
@@ -17,15 +18,17 @@ export interface PanelUpdateProgress {
   total: number
 }
 
-export async function checkPanelUpdate(): Promise<PanelUpdateInfo> {
-  return invoke<PanelUpdateInfo>('check_panel_update')
+export async function checkPanelUpdate(githubToken: string): Promise<PanelUpdateInfo> {
+  return invoke<PanelUpdateInfo>('check_panel_update', { githubToken })
 }
 
 export async function performPanelUpdate(args: {
   assetUrl: string
+  assetApiUrl: string
   assetSize: number
   assetDigest: string
   mirror: string
+  githubToken: string
 }): Promise<void> {
   return invoke('perform_panel_update', args)
 }

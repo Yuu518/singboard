@@ -193,4 +193,5 @@ export interface AppConfig {
   coreUpdateChannel: 'stable' | 'testing'
   coreUpdateMirror: string
   panelAutoCheckUpdate: boolean
+  githubToken: string
 }

@@ -15,6 +15,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: tauri.listen }))
 import CoreUpdateCard from './CoreUpdateCard.vue'
 import PanelUpdateCard from './PanelUpdateCard.vue'
 import { useConfigStore } from '@/stores/config'
+import { usePanelUpdateStore } from '@/stores/panelUpdate'
 import { useToastStore } from '@/stores/toast'
 
 interface Deferred<T> {
@@ -90,6 +91,81 @@ describe('update cards', () => {
     expect.soft(status).toContain('已是最新版本')
     expect.soft(status).toContain('3.2.8')
     expect.soft(status).not.toContain('尚未检查上游版本')
+  })
+
+  it('saves, rejects and clears the GitHub token from the panel card', async () => {
+    const { config } = useConfigStore()
+    config.value.githubToken = ''
+    const token = `github_pat_${'A1b2'.repeat(10)}`
+    const wrapper = mount(PanelUpdateCard, { attachTo: document.body })
+    wrappers.push(wrapper)
+    const body = new DOMWrapper(document.body)
+    const rowButton = () => wrapper.findAll('button').find((button) => ['填写', '修改'].includes(button.text()))!
+
+    expect(rowButton().text()).toBe('填写')
+    await rowButton().trigger('click')
+    const input = body.get<HTMLInputElement>('[role="dialog"] input')
+    expect(input.attributes('type')).toBe('password')
+
+    await input.setValue('"ghp_with quotes"')
+    await body.get('[role="dialog"] form').trigger('submit')
+    expect(body.get('[role="dialog"] [role="alert"]').text()).toContain('字母、数字和下划线')
+    expect(config.value.githubToken).toBe('')
+
+    await input.setValue(`  ${token}  `)
+    await body.get('[role="dialog"] form').trigger('submit')
+    await flushPromises()
+    expect(config.value.githubToken).toBe(token)
+    expect(body.find('[role="dialog"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('已填写')
+    expect(rowButton().text()).toBe('修改')
+
+    await rowButton().trigger('click')
+    const clear = body.findAll('[role="dialog"] button').find((button) => button.text() === '清除 Token')!
+    await clear.trigger('click')
+    await flushPromises()
+    expect(config.value.githubToken).toBe('')
+    expect(rowButton().text()).toBe('填写')
+  })
+
+  it('sends the GitHub token with the panel check and the update download', async () => {
+    const { config } = useConfigStore()
+    const token = `ghp_${'x'.repeat(36)}`
+    config.value.githubToken = token
+    const info = {
+      currentVersion: '3.2.8',
+      latestVersion: '3.3.0',
+      hasUpdate: true,
+      outOfSync: false,
+      publishedAt: '2026-08-12T00:00:00Z',
+      assetUrl: 'https://github.com/Yuu518/singboard/releases/download/v3.3.0/singboard.exe',
+      assetApiUrl: 'https://api.github.com/repos/Yuu518/singboard/releases/assets/1',
+      assetSize: 123,
+      assetDigest: `sha256:${'ef'.repeat(32)}`,
+    }
+    tauri.invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === 'check_panel_update' ? info : null),
+    )
+    const store = usePanelUpdateStore()
+    try {
+      await store.check(true)
+      await store.runUpdate()
+
+      expect(tauri.invoke).toHaveBeenCalledWith('check_panel_update', { githubToken: token })
+      expect(tauri.invoke).toHaveBeenCalledWith('perform_panel_update', {
+        assetUrl: info.assetUrl,
+        assetApiUrl: info.assetApiUrl,
+        assetSize: info.assetSize,
+        assetDigest: info.assetDigest,
+        mirror: config.value.coreUpdateMirror,
+        githubToken: token,
+      })
+    } finally {
+      config.value.githubToken = ''
+      store.updating.value = false
+      store.latest.value = null
+      store.pendingConfirm.value = null
+    }
   })
 
   it('does not label the current core release as an available update', async () => {

@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { usePanelUpdateStore } from '@/stores/panelUpdate'
+import GithubTokenRow from './GithubTokenRow.vue'
 
 const { config } = useConfigStore()
 const { currentVersion, latest, checking, updating, check } = usePanelUpdateStore()
@@ -46,5 +47,7 @@ const latestDisplay = computed(() =>
       </span>
       <input v-model="config.panelAutoCheckUpdate" type="checkbox" class="toggle toggle-sm toggle-primary" />
     </label>
+
+    <GithubTokenRow />
   </div>
 </template>

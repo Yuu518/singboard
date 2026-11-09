@@ -81,7 +81,7 @@ onBeforeUnmount(() => {
     <Transition name="glass-pop">
       <div
         v-if="open"
-        class="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
+        class="glass-scrim safe-overlay fixed inset-0 z-50 flex items-center justify-center p-4"
         @click.self="onBackdrop"
       >
         <div

@@ -4,8 +4,8 @@ use serde::Serialize;
 use tauri::Manager;
 
 use super::update::{
-    GhRelease, UPDATE_LOCK, apply_mirror, digest_hash, download_asset, emit_progress, github_get,
-    is_newer, sha256_file, verify_digest,
+    GhRelease, UPDATE_LOCK, digest_hash, download_asset_from, emit_progress,
+    github_get_with_token, is_newer, panel_download_urls, sha256_file, verify_digest,
 };
 
 const PANEL_REPO: &str = "Yuu518/singboard";
@@ -20,6 +20,7 @@ pub struct PanelUpdateInfo {
     out_of_sync: bool,
     published_at: String,
     asset_url: String,
+    asset_api_url: String,
     asset_size: u64,
     asset_digest: String,
 }
@@ -55,12 +56,15 @@ fn installed_out_of_sync(app: &tauri::AppHandle, asset_digest: &str) -> bool {
 }
 
 #[tauri::command]
-pub async fn check_panel_update(app: tauri::AppHandle) -> Result<PanelUpdateInfo, String> {
+pub async fn check_panel_update(
+    app: tauri::AppHandle,
+    github_token: Option<String>,
+) -> Result<PanelUpdateInfo, String> {
     let url = format!(
         "https://api.github.com/repos/{}/releases/latest",
         PANEL_REPO
     );
-    let release: GhRelease = github_get(&url)
+    let release: GhRelease = github_get_with_token(&url, github_token.as_deref())
         .await?
         .json()
         .await
@@ -99,6 +103,7 @@ pub async fn check_panel_update(app: tauri::AppHandle) -> Result<PanelUpdateInfo
         latest_version,
         published_at: release.published_at.unwrap_or_default(),
         asset_url: asset.browser_download_url.clone(),
+        asset_api_url: asset.url.clone(),
         asset_size: asset.size,
         asset_digest,
     })
@@ -108,9 +113,11 @@ pub async fn check_panel_update(app: tauri::AppHandle) -> Result<PanelUpdateInfo
 pub async fn perform_panel_update(
     app: tauri::AppHandle,
     asset_url: String,
+    asset_api_url: Option<String>,
     asset_size: u64,
     asset_digest: String,
     mirror: Option<String>,
+    github_token: Option<String>,
 ) -> Result<(), String> {
     let _guard = UPDATE_LOCK
         .try_lock()
@@ -129,8 +136,15 @@ pub async fn perform_panel_update(
     };
 
     let apk = staging.join("singboard.apk");
-    let download_url = apply_mirror(&mirror, &asset_url);
-    download_asset(&app, PROGRESS_EVENT, &download_url, asset_size, &apk)
+    let token = github_token.as_deref();
+    let urls = panel_download_urls(
+        &mirror,
+        PANEL_REPO,
+        &asset_url,
+        asset_api_url.as_deref(),
+        super::update::github_token(token).is_some(),
+    );
+    download_asset_from(&app, PROGRESS_EVENT, &urls, token, asset_size, &apk)
         .await
         .map_err(cleanup)?;
 

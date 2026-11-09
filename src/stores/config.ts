@@ -137,6 +137,7 @@ function normalizeConfig(raw: any): AppConfig {
     coreUpdateChannel: raw?.coreUpdateChannel === 'testing' ? 'testing' : 'stable',
     coreUpdateMirror: typeof raw?.coreUpdateMirror === 'string' ? raw.coreUpdateMirror.trim() : '',
     panelAutoCheckUpdate: typeof raw?.panelAutoCheckUpdate === 'boolean' ? raw.panelAutoCheckUpdate : true,
+    githubToken: typeof raw?.githubToken === 'string' ? raw.githubToken.trim() : '',
   }
 }
 

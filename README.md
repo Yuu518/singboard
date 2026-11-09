@@ -97,6 +97,8 @@ The Proxies, Connections, Logs and Rules pages are shared between both platforms
     - Stable or testing channel, optional download mirror
     - SHA-256 verified, rolled back if the new core fails to start
   - Panel updates: checked on startup, SHA-256 verified; the panel replaces itself without interrupting the proxy service
+    - Downloads from the release link first and falls back to the GitHub API asset endpoint
+    - With an optional GitHub token, checks and downloads go through the GitHub API first, avoiding the anonymous rate limit
 
 ## Android features
 
@@ -145,6 +147,7 @@ The Proxies, Connections, Logs and Rules pages are shared between both platforms
 - **In-app updates**
   - Checks `Yuu518/singboard` releases on startup (can be disabled)
   - Downloads the APK for the device ABI, verifies its SHA-256 digest, then opens the system installer
+  - Same download order as Windows: release link first, GitHub API as fallback, or the API first when a GitHub token is set
 
 ### Root layout
 

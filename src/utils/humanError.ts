@@ -1,4 +1,5 @@
 const RULES: Array<[RegExp, string]> = [
+  [/GitHub Token 无效|\bHTTP 401\b|401 Unauthorized/i, 'GitHub Token 无效或已过期，请在设置里重新填写'],
   [/\bHTTP 404\b|\(404\)/i, '下载地址不存在 (404)，请检查镜像前缀'],
   [/\bHTTP 5\d\d\b/i, '服务器暂时出错，请稍后再试'],
   [/timed?\s*out|deadline has elapsed|超时/i, '连接超时，请检查网络后重试'],

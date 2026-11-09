@@ -57,6 +57,8 @@ pub(crate) struct StagedCore {
 #[derive(Deserialize)]
 pub(crate) struct GhAsset {
     pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) url: String,
     pub(crate) browser_download_url: String,
     pub(crate) size: u64,
     #[serde(default)]
@@ -154,18 +156,39 @@ pub(crate) fn apply_mirror(mirror: &Option<String>, url: &str) -> String {
     }
 }
 
+const GITHUB_API: &str = "https://api.github.com/";
+const INVALID_TOKEN: &str = "GitHub Token 无效或已过期 (401)";
+
+pub(crate) fn github_token(token: Option<&str>) -> Option<&str> {
+    token.map(str::trim).filter(|token| !token.is_empty())
+}
+
 pub(crate) async fn github_get(url: &str) -> Result<reqwest::Response, String> {
+    github_get_with_token(url, None).await
+}
+
+pub(crate) async fn github_get_with_token(
+    url: &str,
+    token: Option<&str>,
+) -> Result<reqwest::Response, String> {
     let client = super::network::build_client(Some(Duration::from_secs(30)))
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-    let resp = client
+    let mut request = client
         .get(url)
         .header("User-Agent", "singboard")
-        .header("Accept", "application/vnd.github+json")
+        .header("Accept", "application/vnd.github+json");
+    if let Some(token) = github_token(token).filter(|_| url.starts_with(GITHUB_API)) {
+        request = request.bearer_auth(token);
+    }
+    let resp = request
         .send()
         .await
         .map_err(|e| format!("请求 GitHub API 失败: {}", e))?;
 
     let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(INVALID_TOKEN.into());
+    }
     if status == reqwest::StatusCode::FORBIDDEN {
         let body = resp.text().await.unwrap_or_default();
         if body.contains("rate limit") {
@@ -249,6 +272,26 @@ pub async fn check_core_update(repo: String, channel: String) -> Result<CoreUpda
     pick_asset(&release, &suffixes)
 }
 
+pub(crate) fn panel_download_urls(
+    mirror: &Option<String>,
+    repo: &str,
+    asset_url: &str,
+    api_url: Option<&str>,
+    prefer_api: bool,
+) -> Vec<String> {
+    let direct = apply_mirror(mirror, asset_url);
+    let prefix = format!("{}repos/{}/releases/assets/", GITHUB_API, repo);
+    let api = api_url.map(str::trim).filter(|url| {
+        url.strip_prefix(&prefix)
+            .is_some_and(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+    });
+    match api {
+        Some(api) if prefer_api => vec![api.to_string(), direct],
+        Some(api) => vec![direct, api.to_string()],
+        None => vec![direct],
+    }
+}
+
 pub(crate) async fn download_asset(
     app: &tauri::AppHandle,
     event: &str,
@@ -256,15 +299,56 @@ pub(crate) async fn download_asset(
     expected_size: u64,
     dest: &Path,
 ) -> Result<(), String> {
+    download_asset_from(app, event, &[url.to_string()], None, expected_size, dest).await
+}
+
+pub(crate) async fn download_asset_from(
+    app: &tauri::AppHandle,
+    event: &str,
+    urls: &[String],
+    token: Option<&str>,
+    expected_size: u64,
+    dest: &Path,
+) -> Result<(), String> {
     // 下载不设总超时（大文件慢速网络下会中途截断），连接问题由系统层面报错
     let client =
         super::network::build_client(None).map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-    let mut resp = client
-        .get(url)
-        .header("User-Agent", "singboard")
+    let mut first_error = None;
+    for url in urls {
+        match fetch_to_file(app, event, &client, url, token, expected_size, dest).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    Err(first_error.unwrap_or_else(|| "没有可用的下载地址".to_string()))
+}
+
+async fn fetch_to_file(
+    app: &tauri::AppHandle,
+    event: &str,
+    client: &reqwest::Client,
+    url: &str,
+    token: Option<&str>,
+    expected_size: u64,
+    dest: &Path,
+) -> Result<(), String> {
+    let api = url.starts_with(GITHUB_API);
+    let mut request = client.get(url).header("User-Agent", "singboard");
+    if api {
+        request = request.header("Accept", "application/octet-stream");
+        if let Some(token) = github_token(token) {
+            request = request.bearer_auth(token);
+        }
+    }
+    let mut resp = request
         .send()
         .await
         .map_err(|e| format!("下载失败: {}", e))?;
+    if api && resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(INVALID_TOKEN.into());
+    }
     if !resp.status().is_success() {
         return Err(format!("下载失败: HTTP {}", resp.status()));
     }
@@ -414,6 +498,70 @@ mod tests {
         assert!(!is_release_page_url("https://github.com/a/b/releases/tag/v 1"));
     }
 
+    const ASSET: &str = "https://github.com/Yuu518/singboard/releases/download/v1.0.0/singboard.exe";
+    const API: &str = "https://api.github.com/repos/Yuu518/singboard/releases/assets/726398165";
+    const REPO: &str = "Yuu518/singboard";
+
+    #[test]
+    fn panel_downloads_try_the_release_link_before_the_api() {
+        assert_eq!(
+            panel_download_urls(&None, REPO, ASSET, Some(API), false),
+            vec![ASSET, API]
+        );
+        assert_eq!(
+            panel_download_urls(&Some("  ".into()), REPO, ASSET, Some(API), false),
+            vec![ASSET, API]
+        );
+    }
+
+    #[test]
+    fn a_github_token_moves_the_api_first() {
+        assert_eq!(
+            panel_download_urls(&None, REPO, ASSET, Some(API), true),
+            vec![API, ASSET]
+        );
+    }
+
+    #[test]
+    fn only_the_release_link_goes_through_the_mirror() {
+        let mirror = Some("https://mirror.example.com/".to_string());
+        let mirrored = format!("https://mirror.example.com/{ASSET}");
+        assert_eq!(
+            panel_download_urls(&mirror, REPO, ASSET, Some(API), false),
+            vec![mirrored.clone(), API.to_string()]
+        );
+        assert_eq!(
+            panel_download_urls(&mirror, REPO, ASSET, Some(API), true),
+            vec![API.to_string(), mirrored]
+        );
+    }
+
+    #[test]
+    fn the_api_fallback_only_accepts_this_repos_asset_endpoint() {
+        for bad in [
+            "",
+            "https://api.github.com/repos/Yuu518/singboard/releases/assets/",
+            "https://api.github.com/repos/Yuu518/singboard/releases/assets/1/../x",
+            "http://api.github.com/repos/Yuu518/singboard/releases/assets/1",
+            "https://api.github.com.evil.test/repos/Yuu518/singboard/releases/assets/1",
+            "https://api.github.com/repos/other/repo/releases/assets/1",
+        ] {
+            assert_eq!(
+                panel_download_urls(&None, REPO, ASSET, Some(bad), true),
+                vec![ASSET],
+                "{bad}"
+            );
+        }
+        assert_eq!(panel_download_urls(&None, REPO, ASSET, None, true), vec![ASSET]);
+    }
+
+    #[test]
+    fn blank_github_tokens_are_ignored() {
+        assert_eq!(github_token(None), None);
+        assert_eq!(github_token(Some("   ")), None);
+        assert_eq!(github_token(Some(" ghp_abc ")), Some("ghp_abc"));
+    }
+
     fn release(tag: &str, prerelease: bool, draft: bool, published_at: &str) -> GhRelease {
         GhRelease {
             tag_name: tag.to_string(),
@@ -434,6 +582,7 @@ mod tests {
                 .iter()
                 .map(|name| GhAsset {
                     name: name.to_string(),
+                    url: String::new(),
                     browser_download_url: format!("https://example.com/{name}"),
                     size: 1,
                     digest: None,
