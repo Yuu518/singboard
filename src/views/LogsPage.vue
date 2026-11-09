@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import ServiceNotice from '@/components/common/ServiceNotice.vue'
 import { useSettledServiceState } from '@/composables/useSettledServiceState'
 import { useVirtualList } from '@/composables/useVirtualList'
+import { usePageActive } from '@/android/composables/usePageActive'
+import { IS_ANDROID } from '@/platform'
 import { useConfigStore } from '@/stores/config'
 import { LOG_LEVELS, useLogsStore } from '@/stores/logs'
 import type { LogEntry } from '@/types'
@@ -26,11 +28,19 @@ const {
 const { clashApiUrl, activeClashApiId } = useConfigStore()
 const { serviceState, isRunning } = useSettledServiceState()
 const router = useRouter()
+const pageActive = usePageActive()
 
+const showNotice = computed(() => !IS_ANDROID && !isRunning.value)
 const query = computed(() => filterText.value.trim())
 const apiUnreachable = computed(() => socketState.value === 'failed' || socketFailures.value >= 3)
 
-const ROW_HEIGHT = 26
+const frozenLogs = shallowRef<LogEntry[]>(filteredLogs.value)
+watch(pageActive, (active) => {
+  if (!active) frozenLogs.value = filteredLogs.value
+})
+const shownLogs = computed(() => (pageActive.value ? filteredLogs.value : frozenLogs.value))
+
+const ROW_HEIGHT = IS_ANDROID ? 62 : 26
 const autoScroll = ref(true)
 const {
   container: logContainer,
@@ -40,7 +50,7 @@ const {
   syncScroll,
   offsetOf,
   indexAt,
-} = useVirtualList({ items: filteredLogs, keyOf: (log) => log.seq ?? 0, rowHeight: ROW_HEIGHT })
+} = useVirtualList({ items: shownLogs, keyOf: (log) => log.seq ?? 0, rowHeight: ROW_HEIGHT })
 
 const expanded = shallowRef(new Set<number>())
 
@@ -123,6 +133,10 @@ watch(apiUnreachable, (unreachable) => {
   if (unreachable && isRunning.value) announce('无法连接 Clash API，请检查 API 配置')
 })
 
+function openApiSettings() {
+  void router.push({ path: '/settings', hash: '#clash-api' })
+}
+
 const searchInput = ref<HTMLInputElement | null>(null)
 
 function clearSearch() {
@@ -137,7 +151,7 @@ function onSearchEscape(e: KeyboardEvent) {
 
 function onGlobalKeydown(e: KeyboardEvent) {
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'f') return
-  if (!isRunning.value || document.querySelector('[role="alertdialog"]')) return
+  if (!pageActive.value || !isRunning.value || document.querySelector('[role="alertdialog"]')) return
   e.preventDefault()
   searchInput.value?.focus()
   searchInput.value?.select()
@@ -148,7 +162,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
 
 const activeSeq = ref<number | null>(null)
 const focusInside = ref(false)
-const lineCount = computed(() => countLines(filteredLogs.value))
+const lineCount = computed(() => countLines(shownLogs.value))
 const activeRendered = computed(() => visibleItems.value.some(({ item }) => item.seq === activeSeq.value))
 
 function focusActiveRow() {
@@ -168,20 +182,25 @@ function onListFocusOut(e: FocusEvent) {
 
 function lineIndexes(): number[] {
   const out: number[] = []
-  filteredLogs.value.forEach((entry, index) => {
+  shownLogs.value.forEach((entry, index) => {
     if (entry.type !== 'marker') out.push(index)
   })
   return out
 }
 
+function listPadding(el: HTMLElement) {
+  const style = getComputedStyle(el)
+  return { top: parseFloat(style.paddingTop) || 0, bottom: parseFloat(style.paddingBottom) || 0 }
+}
+
 function revealIndex(index: number) {
   const el = logContainer.value
   if (!el) return
-  const pad = 6
-  const top = offsetOf(index) + pad
-  const bottom = offsetOf(index + 1) + pad
-  if (top < el.scrollTop) el.scrollTop = top - pad
-  else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight + pad
+  const pad = listPadding(el)
+  const top = offsetOf(index) + pad.top
+  const bottom = offsetOf(index + 1) + pad.top
+  if (top < el.scrollTop) el.scrollTop = top - pad.top
+  else if (bottom > el.scrollTop + el.clientHeight - pad.bottom) el.scrollTop = bottom - el.clientHeight + pad.bottom
   handleScroll()
 }
 
@@ -195,19 +214,19 @@ function onListFocus(e: FocusEvent) {
   const pick = [...lines].reverse().find((index) => index <= bottom && index >= top)
     ?? [...lines].reverse().find((index) => index <= bottom)
     ?? lines[0]
-  activeSeq.value = filteredLogs.value[pick].seq ?? null
+  activeSeq.value = shownLogs.value[pick].seq ?? null
   focusActiveRow()
 }
 
 function onListKeydown(e: KeyboardEvent) {
   const lines = lineIndexes()
   if (lines.length === 0) return
-  const current = activeSeq.value === null ? -1 : findBySeq(filteredLogs.value, activeSeq.value)
+  const current = activeSeq.value === null ? -1 : findBySeq(shownLogs.value, activeSeq.value)
   let position = lines.indexOf(current)
   if (e.key === 'Enter' || e.key === ' ') {
     if (current < 0) return
     e.preventDefault()
-    const entry = filteredLogs.value[current]
+    const entry = shownLogs.value[current]
     toggleExpanded(entry, true)
     return
   }
@@ -224,7 +243,7 @@ function onListKeydown(e: KeyboardEvent) {
   }
   e.preventDefault()
   const index = lines[Math.min(Math.max(next, 0), lines.length - 1)]
-  activeSeq.value = filteredLogs.value[index].seq ?? null
+  activeSeq.value = shownLogs.value[index].seq ?? null
   revealIndex(index)
   focusActiveRow()
 }
@@ -259,11 +278,28 @@ function rowTint(type: string): string {
   }
 }
 
+function tileTint(type: string): string {
+  switch (type.toLowerCase()) {
+    case 'error':
+    case 'fatal':
+    case 'panic': return 'bg-error/[0.1]'
+    case 'warning':
+    case 'warn': return 'bg-warning/[0.1]'
+    default: return ''
+  }
+}
+
+const listClass = IS_ANDROID ? 'under-nav' : 'card-scroll py-1.5'
+const bannerAction = IS_ANDROID
+  ? 'btn btn-sm btn-ghost px-3 text-[color:var(--selection-ink)]'
+  : 'btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]'
+const clearSearchSize = IS_ANDROID ? 'right-0 h-8 w-8' : 'right-1 h-6 w-6'
+
 let anchor: { seq: number; delta: number } | null = null
 
 function rememberAnchor() {
   const el = logContainer.value
-  const list = filteredLogs.value
+  const list = shownLogs.value
   if (!el || list.length === 0) {
     anchor = null
     return
@@ -286,7 +322,7 @@ function findBySeq(list: LogEntry[], seq: number): number {
   return -1
 }
 
-watch(filteredLogs, (list) => {
+watch(shownLogs, (list) => {
   const kept = new Set<number>()
   for (const seq of expanded.value) if (findBySeq(list, seq) >= 0) kept.add(seq)
   if (kept.size !== expanded.value.size) expanded.value = kept
@@ -298,9 +334,20 @@ watch(filteredLogs, (list) => {
     if (autoScroll.value && !focusInside.value) {
       el.scrollTop = el.scrollHeight
     } else if (held) {
-      const index = findBySeq(filteredLogs.value, held.seq)
+      const index = findBySeq(shownLogs.value, held.seq)
       if (index >= 0) el.scrollTop = offsetOf(index) + held.delta
     }
+    syncScroll()
+    rememberAnchor()
+  })
+})
+
+watch(totalHeight, () => {
+  if (!autoScroll.value || focusInside.value) return
+  void nextTick(() => {
+    const el = logContainer.value
+    if (!el || !autoScroll.value || focusInside.value) return
+    el.scrollTop = el.scrollHeight
     syncScroll()
     rememberAnchor()
   })
@@ -326,7 +373,7 @@ function handleScroll() {
   <div class="flex flex-col h-full gap-3">
     <span class="sr-only" aria-live="polite">{{ announcement }}</span>
     <ServiceNotice
-      v-if="!isRunning"
+      v-if="showNotice"
       :state="serviceState"
       page-title="日志"
       stopped-detail="启动服务后即可查看实时日志。"
@@ -334,15 +381,15 @@ function handleScroll() {
     />
 
     <template v-else>
-    <div class="flex items-center justify-between">
-      <h1 class="text-[26px] leading-tight tracking-tight font-bold">
+    <div class="logs-toolbar">
+      <h1 class="logs-title text-[26px] leading-tight tracking-tight font-bold">
         日志
         <span class="ml-1 text-sm font-normal tabular-nums text-base-content/65">{{ shownCount === totalCount ? totalCount.toLocaleString() : `${shownCount.toLocaleString()} / ${totalCount.toLocaleString()}` }}</span>
       </h1>
-      <div class="flex items-center gap-2">
-        <select v-model="levelChoice" class="select select-sm select-bordered" aria-label="显示级别">
-          <option v-for="option in levelOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-        </select>
+      <select v-model="levelChoice" class="logs-level select select-sm select-bordered" aria-label="显示级别">
+        <option v-for="option in levelOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+      </select>
+      <div class="logs-actions flex items-center gap-2">
         <button
           type="button"
           class="btn btn-sm btn-ghost btn-circle shrink-0"
@@ -362,36 +409,37 @@ function handleScroll() {
         </button>
         <button type="button" class="btn btn-sm btn-ghost" :disabled="logs.length === 0 && !paused" @click="clearLogs">清空</button>
       </div>
-    </div>
 
-    <div class="relative flex items-center">
-      <input
-        ref="searchInput"
-        v-model="filterText"
-        type="search"
-        class="input input-sm input-bordered w-full min-w-0 pl-8 [&::-webkit-search-cancel-button]:appearance-none"
-        :class="{ 'pr-8': filterText }"
-        placeholder="搜索日志内容"
-        aria-label="搜索日志"
-        aria-keyshortcuts="Control+F"
-        title="搜索日志 (Ctrl+F)"
-        @keydown.esc="onSearchEscape"
-      />
-      <svg class="pointer-events-none absolute left-2.5 z-[1] h-3.5 w-3.5 text-base-content/55" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-        <circle cx="7" cy="7" r="4.5" />
-        <path d="m10.5 10.5 3 3" />
-      </svg>
-      <button
-        v-if="filterText"
-        type="button"
-        class="absolute right-1 z-[1] flex h-6 w-6 items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-        aria-label="清除搜索"
-        @click="clearSearch"
-      >
-        <svg class="h-2.5 w-2.5" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
-          <path d="M2 2l6 6M8 2 2 8" />
+      <div class="logs-search relative flex items-center">
+        <input
+          ref="searchInput"
+          v-model="filterText"
+          type="search"
+          class="input input-sm input-bordered w-full min-w-0 pl-8 [&::-webkit-search-cancel-button]:appearance-none"
+          :class="{ 'pr-8': filterText }"
+          placeholder="搜索日志内容"
+          aria-label="搜索日志"
+          :aria-keyshortcuts="IS_ANDROID ? undefined : 'Control+F'"
+          :title="IS_ANDROID ? undefined : '搜索日志 (Ctrl+F)'"
+          @keydown.esc="onSearchEscape"
+        />
+        <svg class="pointer-events-none absolute left-2.5 z-[1] h-3.5 w-3.5 text-base-content/55" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.5" />
+          <path d="m10.5 10.5 3 3" />
         </svg>
-      </button>
+        <button
+          v-if="filterText"
+          type="button"
+          class="absolute z-[1] flex items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          :class="clearSearchSize"
+          aria-label="清除搜索"
+          @click="clearSearch"
+        >
+          <svg class="h-2.5 w-2.5" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+            <path d="M2 2l6 6M8 2 2 8" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     <div
@@ -400,15 +448,15 @@ function handleScroll() {
     >
       <template v-if="paused">
         <span class="tabular-nums">已暂停刷新{{ newSincePause > 0 ? `，暂停后收到 ${newSincePause} 条新日志` : '' }}。</span>
-        <button type="button" class="btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]" @click="togglePaused">继续刷新</button>
+        <button type="button" :class="bannerAction" @click="togglePaused">继续刷新</button>
       </template>
       <template v-else-if="clearedLogs">
         <span class="tabular-nums">已清空 {{ countLines(clearedLogs) }} 条日志。</span>
-        <button type="button" class="btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]" @click="undoClear">撤销</button>
+        <button type="button" :class="bannerAction" @click="undoClear">撤销</button>
       </template>
       <template v-else-if="apiUnreachable">
         <span>{{ socketState === 'failed' ? 'Clash API 地址无效，无法建立连接' : '无法连接 Clash API，正在重试' }}；下面是中断前的日志。</span>
-        <button type="button" class="btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]" @click="router.push({ path: '/settings', hash: '#clash-api' })">检查 API 配置</button>
+        <button type="button" :class="bannerAction" @click="openApiSettings">检查 API 配置</button>
       </template>
       <template v-else>
         <span class="loading loading-spinner loading-xs" aria-hidden="true"></span>
@@ -416,10 +464,11 @@ function handleScroll() {
       </template>
     </div>
 
-    <div class="surface-card relative flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div class="relative flex min-h-0 flex-1 flex-col" :class="{ 'surface-card overflow-hidden': !IS_ANDROID }">
       <div
         ref="logContainer"
-        class="log-list card-scroll min-h-0 flex-1 overflow-auto py-1.5 focus-visible:outline-none"
+        class="log-list min-h-0 flex-1 overflow-auto focus-visible:outline-none"
+        :class="listClass"
         role="log"
         aria-live="off"
         aria-label="sing-box 日志"
@@ -430,17 +479,53 @@ function handleScroll() {
         @focusout="onListFocusOut"
         @keydown="onListKeydown"
       >
-        <div v-if="filteredLogs.length > 0" class="relative" :style="{ height: `${totalHeight}px` }">
+        <div v-if="shownLogs.length > 0" class="relative" :style="{ height: `${totalHeight}px` }">
           <div class="absolute inset-x-0 top-0" :style="{ transform: `translateY(${offsetY}px)` }">
             <template v-for="{ item: log } in visibleItems" :key="log.seq">
               <div
-                v-if="log.type === 'marker'"
+                v-if="log.type === 'marker' && IS_ANDROID"
+                :data-virtual-key="log.seq"
+                class="flex min-h-[32px] items-center gap-2 px-1 pb-1.5 text-[11.5px] text-base-content/65"
+              >
+                <span class="h-px min-w-3 flex-1 bg-[color:var(--hairline)]" aria-hidden="true"></span>
+                <span class="min-w-0 text-center tabular-nums">{{ log.payload }}</span>
+                <span class="h-px min-w-3 flex-1 bg-[color:var(--hairline)]" aria-hidden="true"></span>
+              </div>
+              <div
+                v-else-if="log.type === 'marker'"
                 :data-virtual-key="log.seq"
                 class="flex h-[26px] items-center gap-3 px-3.5 text-[11.5px] text-base-content/65"
               >
                 <span class="h-px flex-1 bg-[color:var(--hairline)]" aria-hidden="true"></span>
                 <span class="shrink-0 tabular-nums">{{ log.payload }}</span>
                 <span class="h-px flex-1 bg-[color:var(--hairline)]" aria-hidden="true"></span>
+              </div>
+              <div
+                v-else-if="IS_ANDROID"
+                :data-virtual-key="log.seq"
+                role="button"
+                :tabindex="log.seq === activeSeq ? 0 : -1"
+                :aria-expanded="expanded.has(log.seq ?? 0)"
+                class="log-row is-tile pb-1.5"
+                @click="toggleExpanded(log)"
+                @focus="activeSeq = log.seq ?? null"
+              >
+                <div
+                  class="log-tile surface-fill grid grid-cols-[56px_minmax(0,1fr)] items-start gap-x-2.5 rounded-[var(--radius-tile)] px-3 py-2"
+                  :class="tileTint(log.type)"
+                >
+                  <div class="flex flex-col gap-1">
+                    <span
+                      class="flex h-[18px] items-center justify-center rounded-full text-[10.5px] font-semibold uppercase tracking-[0.04em]"
+                      :class="levelBadge(log.type)"
+                    >{{ log.type }}</span>
+                    <time class="settings-mono text-center text-[11px] leading-[18px] text-base-content/65">{{ log.time }}</time>
+                  </div>
+                  <span
+                    class="min-h-10 text-[13px] leading-5 text-base-content/90 [overflow-wrap:anywhere]"
+                    :class="expanded.has(log.seq ?? 0) ? 'whitespace-pre-wrap' : 'line-clamp-2'"
+                  >{{ log.payload }}</span>
+                </div>
               </div>
               <div
                 v-else
@@ -489,7 +574,7 @@ function handleScroll() {
               <dd>{{ socketState === 'failed' ? '地址无效，无法建立连接' : `已连续 ${socketFailures} 次连接失败，仍在自动重试` }}</dd>
             </dl>
             <div class="mt-4">
-              <button type="button" class="btn btn-sm btn-glass px-5" @click="router.push({ path: '/settings', hash: '#clash-api' })">检查 API 配置</button>
+              <button type="button" class="btn btn-sm btn-glass px-5" @click="openApiSettings">检查 API 配置</button>
             </div>
           </div>
           <div v-else-if="socketState !== 'open'" class="flex items-center justify-center gap-2 py-12 text-sm text-base-content/65" role="status">
@@ -503,7 +588,7 @@ function handleScroll() {
         </template>
       </div>
       <button
-        v-if="!autoScroll && filteredLogs.length > 0"
+        v-if="!autoScroll && shownLogs.length > 0"
         type="button"
         class="btn btn-sm btn-glass absolute bottom-3 right-3 gap-1.5 px-3"
         @click="scrollToLatest"
@@ -519,8 +604,69 @@ function handleScroll() {
 </template>
 
 <style scoped>
-.log-row:focus-visible {
+.logs-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'title actions'
+    'search level';
+  align-items: center;
+  gap: 12px 8px;
+}
+
+.logs-title {
+  grid-area: title;
+  min-width: 0;
+}
+
+.logs-level {
+  grid-area: level;
+  max-width: 11rem;
+}
+
+.logs-actions {
+  grid-area: actions;
+  justify-self: end;
+}
+
+.logs-search {
+  grid-area: search;
+  min-width: 0;
+}
+
+@media (min-width: 640px) {
+  .logs-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'title level actions'
+      'search search search';
+  }
+
+  .logs-level {
+    max-width: none;
+  }
+}
+
+.under-nav {
+  margin-bottom: calc(-1 * var(--nav-clearance, 0px));
+  padding-bottom: calc(var(--nav-clearance, 0px) + 0.5rem);
+}
+
+.log-row:not(.is-tile):focus-visible,
+.log-row.is-tile:focus-visible > .log-tile {
   outline: 2px solid oklch(var(--p));
   outline-offset: -2px;
+}
+
+.log-row.is-tile:focus-visible {
+  outline: none;
+}
+
+.log-tile {
+  transition: background-color 150ms ease;
+}
+
+.log-row.is-tile:active > .log-tile {
+  background-color: var(--fill-strong);
 }
 </style>

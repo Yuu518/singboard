@@ -15,13 +15,38 @@ import { formatDate } from '@/utils/format'
 import { batchUpdateProviders } from '@/utils/batchUpdate'
 import ServiceNotice from '@/components/common/ServiceNotice.vue'
 import { useSettledServiceState } from '@/composables/useSettledServiceState'
+import { useServiceStore } from '@/stores/service'
+import { usePageActive } from '@/android/composables/usePageActive'
+import { IS_ANDROID } from '@/platform'
 
 const { rules, loading, loaded, loadError, filterText, loadRules } = useRulesStore()
 const { serviceState, isRunning } = useSettledServiceState()
+const { clashApiReady } = useServiceStore()
 const { proxyMap } = useProxiesStore()
 const { pushToast } = useToastStore()
 const { config, clashApiUrl } = useConfigStore()
 const router = useRouter()
+const pageActive = usePageActive()
+
+const showNotice = computed(() => !IS_ANDROID && !isRunning.value)
+const srsReadable = computed(() => !IS_ANDROID || config.value.rootMode)
+const rulesPlaceholder = computed(() => {
+  if (!IS_ANDROID) return '搜索规则或出站，输入域名 / IP 时也会查找命中的规则提供商'
+  return srsReadable.value ? '搜索规则、出站、域名或 IP' : '搜索规则或出站'
+})
+const providerPlaceholder = computed(() =>
+  srsReadable.value ? '输入域名或 IP，查找命中的规则提供商' : '开启 root 模式后可按域名或 IP 查找',
+)
+const clearSearchSize = IS_ANDROID ? 'right-0 h-8 w-8' : 'right-1 h-6 w-6'
+
+async function ruleSetConfigPath(): Promise<string> {
+  if (IS_ANDROID) return config.value.configPath ?? ''
+  try {
+    return await getRunningConfigPath()
+  } catch {
+    return ''
+  }
+}
 
 function resolveProxyChain(name: string): string[] {
   const chain: string[] = [name]
@@ -51,7 +76,7 @@ function isInlineProvider(provider: RuleProvider): boolean {
 }
 
 function canOpenProvider(provider: RuleProvider): boolean {
-  return !isInlineProvider(provider) && provider.behavior.toLowerCase() !== 'source'
+  return srsReadable.value && !isInlineProvider(provider) && provider.behavior.toLowerCase() !== 'source'
 }
 
 const VEHICLE_LABELS: Record<string, string> = { remote: '远程', local: '本地', inline: '内联', http: '远程', file: '本地' }
@@ -128,10 +153,7 @@ function failureSummary(failures: Map<string, string>): string {
 }
 
 async function runProviderMatch(query: string, providers: RuleProvider[]): Promise<MatchOutcome> {
-  let configPath = ''
-  try {
-    configPath = await getRunningConfigPath()
-  } catch { }
+  const configPath = await ruleSetConfigPath()
 
   const matched = new Set<string>()
   const failures = new Map<string, string>()
@@ -518,7 +540,7 @@ async function loadProviders(): Promise<string> {
 }
 
 async function loadAll() {
-  await Promise.all([loadRules(), loadProviders(), loadFinalOutbound()])
+  await Promise.all(IS_ANDROID ? [loadRules(), loadProviders()] : [loadRules(), loadProviders(), loadFinalOutbound()])
 }
 
 async function refreshAfterUpdate() {
@@ -735,8 +757,7 @@ async function searchInDetail() {
   detailMatchResult.value = null
   detailMatchError.value = ''
 
-  let configPath = ''
-  try { configPath = await getRunningConfigPath() } catch {}
+  const configPath = await ruleSetConfigPath()
 
   try {
     const matched = await srsMatchProvider(
@@ -823,10 +844,7 @@ async function loadDetailRules(provider: RuleProvider) {
   detailError.value = ''
   detailRules.value = []
 
-  let configPath = ''
-  try {
-    configPath = await getRunningConfigPath()
-  } catch {}
+  const configPath = await ruleSetConfigPath()
 
   try {
     const entries = await srsListProvider(
@@ -916,7 +934,7 @@ function onGlobalKeydown(e: KeyboardEvent) {
     }
     return
   }
-  if (!isFindShortcut(e) || !isRunning.value || document.querySelector('[role="alertdialog"]')) return
+  if (!isFindShortcut(e) || !pageActive.value || !isRunning.value || document.querySelector('[role="alertdialog"]')) return
   e.preventDefault()
   const input = activeTab.value === 'providers' ? providerSearchInput.value : searchInput.value
   input?.focus()
@@ -927,14 +945,24 @@ watch(isRunning, (running) => {
   if (!running && detailProvider.value) closeProviderDetail()
 })
 
-watch(serviceState, (state, previous) => {
-  if (state !== 'running' || previous === 'running') return
-  void loadAll()
+watch(srsReadable, (readable) => {
+  if (!readable && detailProvider.value) closeProviderDetail()
 })
+
+if (IS_ANDROID) {
+  watch(clashApiReady, (ready) => {
+    if (ready) void loadAll()
+  }, { immediate: true })
+} else {
+  watch(serviceState, (state, previous) => {
+    if (state !== 'running' || previous === 'running') return
+    void loadAll()
+  })
+}
 
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown)
-  if (isRunning.value) void loadAll()
+  if (!IS_ANDROID && isRunning.value) void loadAll()
 })
 
 onBeforeUnmount(() => {
@@ -954,7 +982,7 @@ onBeforeUnmount(() => {
   <div class="rules-page flex min-w-0 flex-col h-full gap-3">
     <span class="sr-only" aria-live="polite">{{ announcement }}</span>
     <ServiceNotice
-      v-if="!isRunning"
+      v-if="showNotice"
       :state="serviceState"
       page-title="规则"
       stopped-detail="启动服务后即可查看路由规则和规则提供商。"
@@ -1027,10 +1055,10 @@ onBeforeUnmount(() => {
             type="search"
             class="input input-sm input-bordered rules-search pl-8 [&::-webkit-search-cancel-button]:appearance-none"
             :class="{ 'pr-8': filterText }"
-            placeholder="搜索规则或出站，输入域名 / IP 时也会查找命中的规则提供商"
+            :placeholder="rulesPlaceholder"
             aria-label="搜索规则"
-            aria-keyshortcuts="Control+F"
-            title="搜索规则 (Ctrl+F)"
+            :aria-keyshortcuts="IS_ANDROID ? undefined : 'Control+F'"
+            :title="IS_ANDROID ? undefined : '搜索规则 (Ctrl+F)'"
             :aria-busy="ruleSetSearching"
             @keydown.esc="onRulesSearchEscape"
           />
@@ -1042,7 +1070,8 @@ onBeforeUnmount(() => {
           <button
             v-if="filterText"
             type="button"
-            class="absolute right-1 z-[1] flex h-6 w-6 items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            class="absolute z-[1] flex items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            :class="clearSearchSize"
             aria-label="清除搜索"
             @click="clearRulesSearch"
           >
@@ -1057,18 +1086,24 @@ onBeforeUnmount(() => {
         {{ ruleSetFailureNote }}，结果可能不完整
       </p>
 
-      <div class="surface-card flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div class="rules-table-container card-scroll">
-          <ol v-if="ruleRows.length > 0" class="rules-flow" aria-label="规则列表，从上到下依次匹配">
+      <div class="flex min-h-0 flex-1 flex-col" :class="{ 'surface-card overflow-hidden': !IS_ANDROID }">
+        <div class="rules-table-container" :class="IS_ANDROID ? 'rules-card-scroll under-nav' : 'card-scroll'">
+          <ol
+            v-if="ruleRows.length > 0"
+            :class="IS_ANDROID ? 'rules-cards' : 'rules-flow'"
+            :style="IS_ANDROID ? { '--rules-index-digits': String(rules.length).length } : undefined"
+            aria-label="规则列表，从上到下依次匹配"
+          >
             <li
               v-for="row in ruleRows"
               :key="row.index"
-              class="rules-step"
-              :class="[`rules-step--${row.action.kind}`, { 'cursor-pointer': row.detailTarget }]"
-              :title="`${row.rule.payload || '所有流量'} → ${row.rule.proxy}`"
+              :class="IS_ANDROID
+                ? ['surface-card rules-card', `rules-card--${row.action.kind}`, { 'glass-hover cursor-pointer': row.detailTarget }]
+                : ['rules-step', `rules-step--${row.action.kind}`, { 'cursor-pointer': row.detailTarget }]"
+              :title="IS_ANDROID ? undefined : `${row.rule.payload || '所有流量'} → ${row.rule.proxy}`"
               @click="row.detailTarget && openProviderDetail(row.detailTarget)"
             >
-              <span class="rules-rail" aria-hidden="true"><span class="rules-node"></span></span>
+              <span v-if="!IS_ANDROID" class="rules-rail" aria-hidden="true"><span class="rules-node"></span></span>
               <span class="rules-step-index">{{ row.index + 1 }}</span>
               <span class="rules-cond">
                 <template v-for="(token, k) in row.tokens" :key="k">
@@ -1116,7 +1151,7 @@ onBeforeUnmount(() => {
               </span>
             </li>
             <li
-              v-if="!ruleQuery && finalChain.length > 0"
+              v-if="!IS_ANDROID && !ruleQuery && finalChain.length > 0"
               class="rules-step rules-step--final"
               :title="finalChain.join(' › ')"
             >
@@ -1197,10 +1232,11 @@ onBeforeUnmount(() => {
             type="search"
             class="input input-sm input-bordered rules-search pl-8 [&::-webkit-search-cancel-button]:appearance-none"
             :class="{ 'pr-8': providerSearchText }"
-            placeholder="输入域名或 IP，查找命中的规则提供商"
+            :placeholder="providerPlaceholder"
+            :disabled="!srsReadable"
             aria-label="按域名或 IP 查找规则提供商"
-            aria-keyshortcuts="Control+F"
-            title="按域名或 IP 查找规则提供商 (Ctrl+F)"
+            :aria-keyshortcuts="IS_ANDROID ? undefined : 'Control+F'"
+            :title="IS_ANDROID ? undefined : '按域名或 IP 查找规则提供商 (Ctrl+F)'"
             :aria-busy="providerSearching"
             @keydown.esc="onProviderSearchEscape"
           />
@@ -1212,7 +1248,8 @@ onBeforeUnmount(() => {
           <button
             v-if="providerSearchText"
             type="button"
-            class="absolute right-1 z-[1] flex h-6 w-6 items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            class="absolute z-[1] flex items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            :class="clearSearchSize"
             aria-label="清除搜索"
             @click="clearProviderSearch"
           >
@@ -1227,14 +1264,15 @@ onBeforeUnmount(() => {
         {{ providerFailureNote }}，结果可能不完整
       </p>
 
-      <div class="surface-card flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div class="rules-table-container card-scroll">
-          <ul v-if="displayedProviders.length > 0" class="rules-flow" aria-label="规则提供商列表">
+      <div class="flex min-h-0 flex-1 flex-col" :class="{ 'surface-card overflow-hidden': !IS_ANDROID }">
+        <div class="rules-table-container" :class="IS_ANDROID ? 'rules-card-scroll under-nav' : 'card-scroll'">
+          <ul v-if="displayedProviders.length > 0" :class="IS_ANDROID ? 'rules-cards' : 'rules-flow'" aria-label="规则提供商列表">
             <li
               v-for="provider in displayedProviders"
               :key="provider.name"
-              class="rules-provider-line"
-              :class="{ 'cursor-pointer': canOpenProvider(provider) }"
+              :class="IS_ANDROID
+                ? ['surface-card rules-provider-card', { 'glass-hover cursor-pointer': canOpenProvider(provider) }]
+                : ['rules-provider-line', { 'cursor-pointer': canOpenProvider(provider) }]"
               @click="canOpenProvider(provider) && openProviderDetail(provider)"
             >
               <span class="rules-provider-tile" aria-hidden="true">
@@ -1252,7 +1290,9 @@ onBeforeUnmount(() => {
                   @click.stop="openProviderDetail(provider)"
                 ><span v-if="providerNameParts(provider.name).prefix" class="rules-name-prefix">{{ providerNameParts(provider.name).prefix }}</span>{{ providerNameParts(provider.name).base }}</button>
                 <div v-else class="rules-provider-name" :title="provider.name"><span v-if="providerNameParts(provider.name).prefix" class="rules-name-prefix">{{ providerNameParts(provider.name).prefix }}</span>{{ providerNameParts(provider.name).base }}</div>
-                <div class="rules-provider-meta">
+                <div v-if="IS_ANDROID" class="rules-provider-meta">{{ providerMeta(provider) }}</div>
+                <div v-if="IS_ANDROID" class="rules-provider-meta" :class="{ 'text-base-content/45': !providerUsage[provider.name] }">{{ providerUsageText(provider.name) }}</div>
+                <div v-else class="rules-provider-meta">
                   {{ providerMeta(provider) }} ·
                   <span :class="{ 'text-base-content/45': !providerUsage[provider.name] }">{{ providerUsageText(provider.name) }}</span>
                 </div>
@@ -1262,6 +1302,7 @@ onBeforeUnmount(() => {
                 v-if="!isInlineProvider(provider)"
                 type="button"
                 class="btn btn-ghost btn-sm btn-circle"
+                :class="{ 'glass-press bg-[var(--fill)]': IS_ANDROID }"
                 :aria-busy="updatingProviders.has(provider.name)"
                 :disabled="updatingProviders.has(provider.name) || updatingAll"
                 @click.stop="handleUpdateProvider(provider.name)"
@@ -1301,7 +1342,8 @@ onBeforeUnmount(() => {
     <Transition name="glass-pop">
     <div
       v-if="detailProvider"
-      class="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
+      class="glass-scrim fixed inset-0 z-50 flex items-center justify-center"
+      :class="IS_ANDROID ? 'safe-overlay' : 'p-4'"
       @click.self="closeProviderDetail"
     >
       <div
@@ -1354,7 +1396,7 @@ onBeforeUnmount(() => {
               :class="{ 'pr-8': detailFilterText }"
               placeholder="搜索规则内容，或输入域名 / IP 判断是否命中"
               aria-label="搜索这个规则提供商的规则"
-              aria-keyshortcuts="Control+F"
+              :aria-keyshortcuts="IS_ANDROID ? undefined : 'Control+F'"
               :aria-busy="detailMatchSearching"
               @keydown.esc.stop.prevent="onDetailSearchEscape"
             />
@@ -1366,7 +1408,8 @@ onBeforeUnmount(() => {
             <button
               v-if="detailFilterText"
               type="button"
-              class="absolute right-1 z-[1] flex h-6 w-6 items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+              class="absolute z-[1] flex items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+              :class="clearSearchSize"
               aria-label="清除搜索"
               @click="clearDetailSearch"
             >
@@ -1718,6 +1761,79 @@ button.rules-provider-name:hover .rules-name-prefix {
   .rules-set,
   .rules-provider-line {
     transition: none;
+  }
+}
+
+.rules-card-scroll {
+  margin-inline: -0.5rem;
+  padding: 0.25rem 0.5rem 0.5rem;
+}
+
+.under-nav {
+  margin-bottom: calc(-1 * var(--nav-clearance, 0px));
+  padding-bottom: calc(var(--nav-clearance, 0px) + 0.5rem);
+}
+
+.rules-cards {
+  @apply m-0 flex list-none flex-col gap-2 p-0;
+}
+
+.rules-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 6px;
+  align-items: start;
+  padding: 12px 14px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.rules-card > * {
+  grid-column: 2;
+}
+
+.rules-card > .rules-step-index {
+  grid-row: 1;
+  grid-column: 1;
+  min-width: calc(var(--rules-index-digits, 1) * 1ch);
+  line-height: 24px;
+}
+
+.rules-card > .rules-cond {
+  overflow: visible;
+  line-height: 24px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.rules-card > .rules-dest {
+  @apply flex-wrap;
+  max-width: 100%;
+  justify-self: start;
+  white-space: normal;
+}
+
+.rules-card > .rules-act {
+  justify-self: start;
+}
+
+.rules-provider-card {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto 2rem;
+  align-items: center;
+  column-gap: 12px;
+  min-height: 52px;
+  padding: 12px 12px 12px 14px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 639px) {
+  .rules-entry {
+    grid-template-columns: 5.5rem minmax(0, 1fr);
+  }
+
+  .rules-entry-index {
+    display: none;
   }
 }
 </style>

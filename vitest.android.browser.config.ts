@@ -12,6 +12,9 @@ export default defineConfig({
       '@': resolve(__dirname, 'src'),
     },
   },
+  optimizeDeps: {
+    include: ['vue-router', '@tauri-apps/api/core'],
+  },
   test: {
     include: ['src/android/**/*.browser.test.ts'],
     setupFiles: ['vitest-browser-vue', './src/android/test/browserSetup.ts'],

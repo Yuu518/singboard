@@ -20,7 +20,7 @@ export const navItems: NavItem[] = [
   {
     path: '/proxies',
     fill: true,
-    load: () => import('@/android/views/ProxiesPage.vue'),
+    load: () => import('@/views/ProxiesPage.vue'),
     gate: '代理信息',
     label: '代理',
     icon: navIcons.proxies,
@@ -28,7 +28,7 @@ export const navItems: NavItem[] = [
   {
     path: '/connections',
     fill: true,
-    load: () => import('@/android/views/ConnectionsPage.vue'),
+    load: () => import('@/views/ConnectionsPage.vue'),
     gate: '连接信息',
     label: '连接',
     icon: navIcons.connections,
@@ -36,7 +36,7 @@ export const navItems: NavItem[] = [
   {
     path: '/logs',
     fill: true,
-    load: () => import('@/android/views/LogsPage.vue'),
+    load: () => import('@/views/LogsPage.vue'),
     gate: '日志',
     label: '日志',
     icon: navIcons.logs,
@@ -44,7 +44,7 @@ export const navItems: NavItem[] = [
   {
     path: '/rules',
     fill: true,
-    load: () => import('@/android/views/RulesPage.vue'),
+    load: () => import('@/views/RulesPage.vue'),
     gate: '规则信息',
     label: '规则',
     icon: navIcons.rules,

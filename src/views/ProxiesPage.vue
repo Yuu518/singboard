@@ -17,6 +17,8 @@ import GroupSpeed from '@/components/proxies/GroupSpeed.vue'
 import ServiceNotice from '@/components/common/ServiceNotice.vue'
 import { useSettledServiceState } from '@/composables/useSettledServiceState'
 import { appVisible } from '@/stores/appVisible'
+import { usePageActive } from '@/android/composables/usePageActive'
+import { IS_ANDROID } from '@/platform'
 
 const {
   proxyGroups,
@@ -38,11 +40,21 @@ import { useConfigStore } from '@/stores/config'
 import { useConnectionsStore } from '@/stores/connections'
 const { config, clashApiUrl } = useConfigStore()
 const { pushToast } = useToastStore()
-const { serviceStatus } = useServiceStore()
+const { serviceStatus, clashApiReady } = useServiceStore()
 const router = useRouter()
 const { start: startConnections } = useConnectionsStore()
 
 const { serviceState, isRunning } = useSettledServiceState()
+const pageActive = usePageActive()
+const showNotice = computed(() => !IS_ANDROID && !isRunning.value)
+const coreReady = computed(() => (IS_ANDROID ? clashApiReady.value : isRunning.value))
+const cardPadding = IS_ANDROID ? 'px-4' : 'px-5'
+const nodeGridStyle = { gridTemplateColumns: `repeat(auto-fill, minmax(${IS_ANDROID ? 128 : 180}px, 1fr))` }
+const nodeTileWidth = IS_ANDROID ? 'min-w-0' : 'min-w-[180px]'
+const panelClass = `-mx-2 -mt-1 flex-1 overflow-auto px-2 pt-1 ${IS_ANDROID ? 'under-nav' : 'pb-2'}`
+const undoAction = IS_ANDROID
+  ? 'btn btn-xs btn-ghost -my-1 h-7 min-h-0 shrink-0 px-2.5 text-[color:var(--selection-ink)]'
+  : 'btn btn-xs btn-ghost h-5 min-h-0 shrink-0 px-2 text-[color:var(--selection-ink)]'
 
 const coreWarmingUp = computed(() =>
   serviceStatus.value.state === 'running' && (serviceStatus.value.uptimeSeconds ?? Infinity) < 15
@@ -197,7 +209,7 @@ function onGroupFocusOut(e: FocusEvent, name: string) {
 
 function onGlobalKeydown(e: KeyboardEvent) {
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'f') return
-  if (!isRunning.value || orderedGroups.value.length === 0) return
+  if (!pageActive.value || !coreReady.value || orderedGroups.value.length === 0) return
   e.preventDefault()
   activeTab.value = 'groups'
   void nextTick(() => {
@@ -512,12 +524,12 @@ const groupsPanel = ref<HTMLElement | null>(null)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 function refreshInBackground() {
-  if (!isRunning.value || !appVisible.value || loading.value) return
+  if (!coreReady.value || !appVisible.value || !pageActive.value || loading.value) return
   void loadProxies(false, true)
 }
 
 onMounted(() => {
-  if (isRunning.value) {
+  if (!IS_ANDROID && isRunning.value) {
     loadProxies()
     loadProviders()
     startConnections()
@@ -539,20 +551,35 @@ onBeforeUnmount(() => {
 })
 
 watch(appVisible, (visible) => {
-  if (!visible || !isRunning.value) return
+  if (!visible || !coreReady.value) return
   refreshInBackground()
   void loadProviders()
 })
 
-watch(
-  serviceState,
-  (state, previous) => {
-    if (state !== 'running' || previous === 'running') return
-    loadProxies(previous !== 'unknown')
-    loadProviders()
-    startConnections()
-  },
-)
+if (IS_ANDROID) {
+  let readyBefore = false
+  watch(
+    clashApiReady,
+    (ready) => {
+      if (!ready) return
+      void loadProxies(readyBefore)
+      readyBefore = true
+      void loadProviders()
+      startConnections()
+    },
+    { immediate: true },
+  )
+} else {
+  watch(
+    serviceState,
+    (state, previous) => {
+      if (state !== 'running' || previous === 'running') return
+      loadProxies(previous !== 'unknown')
+      loadProviders()
+      startConnections()
+    },
+  )
+}
 
 </script>
 
@@ -560,7 +587,7 @@ watch(
   <div class="flex flex-col h-full gap-3">
     <span class="sr-only" aria-live="polite">{{ announcement }}</span>
     <ServiceNotice
-      v-if="!isRunning"
+      v-if="showNotice"
       :state="serviceState"
       page-title="代理"
       stopped-detail="启动服务后即可查看代理组和节点延迟。"
@@ -616,18 +643,22 @@ watch(
           </svg>
         </button>
       </div>
-      <div v-if="activeTab === 'groups' && orderedGroups.length > 0" class="ml-auto flex min-w-0 items-center gap-2">
-        <div class="relative flex min-w-0 items-center">
+      <div
+        v-if="activeTab === 'groups' && orderedGroups.length > 0"
+        class="flex min-w-0 items-center gap-2"
+        :class="IS_ANDROID ? 'w-full' : 'ml-auto'"
+      >
+        <div class="relative flex min-w-0 items-center" :class="{ 'flex-1': IS_ANDROID }">
           <input
             ref="searchInput"
             v-model="searchText"
             type="search"
-            class="input input-sm input-bordered w-48 min-w-0 pl-8 [&::-webkit-search-cancel-button]:appearance-none"
-            :class="{ 'pr-8': searchText }"
+            class="input input-sm input-bordered min-w-0 pl-8 [&::-webkit-search-cancel-button]:appearance-none"
+            :class="[IS_ANDROID ? 'w-full' : 'w-48', { 'pr-8': searchText }]"
             placeholder="搜索节点或代理组"
             aria-label="搜索节点或代理组"
-            aria-keyshortcuts="Control+F"
-            title="搜索节点或代理组 (Ctrl+F)"
+            :aria-keyshortcuts="IS_ANDROID ? undefined : 'Control+F'"
+            :title="IS_ANDROID ? undefined : '搜索节点或代理组 (Ctrl+F)'"
             @keydown.esc="onSearchEscape"
           />
           <svg class="pointer-events-none absolute left-2.5 z-[1] h-3.5 w-3.5 text-base-content/55" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
@@ -637,7 +668,8 @@ watch(
           <button
             v-if="searchText"
             type="button"
-            class="absolute right-1.5 z-[1] flex h-5 w-5 items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            class="absolute z-[1] flex items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            :class="IS_ANDROID ? 'right-0 h-8 w-8' : 'right-1.5 h-5 w-5'"
             aria-label="清除搜索"
             @click="clearSearch"
           >
@@ -668,7 +700,7 @@ watch(
       ref="groupsPanel"
       role="tabpanel"
       aria-labelledby="proxy-tab-groups"
-      class="-mx-2 -mt-1 flex-1 overflow-auto px-2 pb-2 pt-1"
+      :class="panelClass"
     >
       <div v-if="(loading || (loadError && coreWarmingUp)) && proxyGroups.length === 0" class="flex justify-center py-10" role="status">
         <span class="loading loading-spinner loading-md" aria-hidden="true"></span>
@@ -723,7 +755,7 @@ watch(
         @focusin="onGroupFocusIn(group.name)"
         @focusout="onGroupFocusOut($event, group.name)"
       >
-        <div class="flex cursor-pointer items-start justify-between gap-3 px-5 pt-4 pb-4" @click="toggleGroup(group.name)">
+        <div class="flex cursor-pointer items-start justify-between gap-3 pt-4 pb-4" :class="cardPadding" @click="toggleGroup(group.name)">
           <div class="flex min-w-0 flex-1 flex-col gap-2">
             <h2 class="flex min-w-0">
               <button
@@ -771,7 +803,7 @@ watch(
               <button
                 v-if="lastSwitch?.group === group.name && !previewNode(group)"
                 type="button"
-                class="btn btn-xs btn-ghost h-5 min-h-0 shrink-0 px-2 text-[color:var(--selection-ink)]"
+                :class="undoAction"
                 @click.stop="undoSwitch"
               >
                 撤销
@@ -844,8 +876,9 @@ watch(
           <div class="proxy-collapse-inner">
           <div
             v-if="mountedGroups.has(group.name)"
-            class="grid gap-2 px-5 pt-1 pb-4"
-            style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr))"
+            class="grid gap-2 pt-1 pb-4"
+            :class="cardPadding"
+            :style="nodeGridStyle"
             :role="isSelectable(group) ? 'listbox' : 'group'"
             :aria-label="`${group.name} 的节点`"
             :data-group-panel="group.name"
@@ -855,8 +888,9 @@ watch(
               v-for="nodeName in nodesOf(group.name)"
               :key="nodeName"
               :data-node="nodeName"
-              class="node-tile relative flex h-[76px] min-w-[180px] flex-col items-start gap-1 p-2.5 rounded-[var(--radius-tile)] text-xs transition-all duration-150 overflow-hidden"
+              class="node-tile relative flex h-[76px] flex-col items-start gap-1 p-2.5 rounded-[var(--radius-tile)] text-xs transition-all duration-150 overflow-hidden"
               :class="[
+                nodeTileWidth,
                 group.now === nodeName
                   ? 'bg-primary/15 text-[color:var(--selection-ink)] ring-1 ring-inset ring-primary/40'
                   : isSelectable(group) ? 'surface-fill surface-fill-hover' : 'surface-fill',
@@ -912,7 +946,8 @@ watch(
       id="proxy-panel-providers"
       role="tabpanel"
       aria-labelledby="proxy-tab-providers"
-      class="-mx-2 -mt-1 flex-1 overflow-auto space-y-3 px-2 pb-2 pt-1"
+      class="space-y-3"
+      :class="panelClass"
     >
       <div v-if="proxyProviders.length === 0" class="flex items-center justify-center py-10 text-base-content/65">
         暂无代理提供商
@@ -923,7 +958,7 @@ watch(
         :key="provider.name"
         class="surface-card glass-hover overflow-hidden"
       >
-        <div class="flex cursor-pointer items-start justify-between gap-3 px-5 pt-4 pb-4" @click="toggleProvider(provider.name)">
+        <div class="flex cursor-pointer items-start justify-between gap-3 pt-4 pb-4" :class="cardPadding" @click="toggleProvider(provider.name)">
           <div class="flex min-w-0 flex-1 flex-col gap-2">
             <h2 class="flex min-w-0">
               <button
@@ -1018,11 +1053,12 @@ watch(
 
         <div :id="`proxy-provider-${providerIndex}`" class="proxy-collapse" :class="{ 'is-open': expandedProviders.has(provider.name) }">
           <div class="proxy-collapse-inner">
-          <div class="grid gap-2 px-5 pb-4" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr))">
+          <div class="grid gap-2 pb-4" :class="cardPadding" :style="nodeGridStyle">
             <div
               v-for="node in provider.proxies"
               :key="node.name"
-              class="surface-fill flex h-[76px] min-w-[180px] flex-col items-start gap-1 p-2.5 rounded-[var(--radius-tile)] text-xs overflow-hidden"
+              class="surface-fill flex h-[76px] flex-col items-start gap-1 p-2.5 rounded-[var(--radius-tile)] text-xs overflow-hidden"
+              :class="nodeTileWidth"
             >
               <div class="w-full min-h-0 flex-1 line-clamp-2 break-words text-sm leading-tight" :title="node.name">
                 {{ node.name }}
@@ -1056,6 +1092,11 @@ watch(
 </template>
 
 <style scoped>
+.under-nav {
+  margin-bottom: calc(-1 * var(--nav-clearance, 0px));
+  padding-bottom: calc(var(--nav-clearance, 0px) + 0.5rem);
+}
+
 .node-tile:has(> [data-node-select]:focus-visible) {
   outline: 2px solid oklch(var(--p));
   outline-offset: 2px;

@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComputedRef } from 'vue'
 import { useRouter } from 'vue-router'
+import { usePageActive } from '@/android/composables/usePageActive'
+import { IS_ANDROID } from '@/platform'
 import { matchesFilter, useConnectionsStore } from '@/stores/connections'
 import { useConfigStore } from '@/stores/config'
 import { useToastStore } from '@/stores/toast'
@@ -29,6 +31,21 @@ const { clashApiUrl } = useConfigStore()
 const { pushToast } = useToastStore()
 const { serviceState, isRunning } = useSettledServiceState()
 const router = useRouter()
+const pageActive = usePageActive()
+const showNotice = computed(() => !IS_ANDROID && !isRunning.value)
+
+function whileActive<T>(getter: () => T): ComputedRef<T> {
+  let held: { value: T } | null = null
+  return computed(() => {
+    if (pageActive.value || !held) held = { value: getter() }
+    return held.value
+  })
+}
+
+const bannerAction = IS_ANDROID
+  ? 'btn btn-sm btn-ghost px-3 text-[color:var(--selection-ink)]'
+  : 'btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]'
+const clearSearchSize = IS_ANDROID ? 'right-0 h-8 w-8' : 'right-1 h-6 w-6'
 
 const confirmDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null)
 const activeTab = ref<'active' | 'closed'>('active')
@@ -171,8 +188,8 @@ function prepareList(source: Connection[], closed: boolean): Row[] {
   return rows
 }
 
-const activeRows = computed(() => prepareList(pausedSnapshot.value?.active ?? connections.value, false))
-const closedRows = computed(() => prepareList(pausedSnapshot.value?.closed ?? closedConnections.value, true))
+const activeRows = whileActive(() => prepareList(pausedSnapshot.value?.active ?? connections.value, false))
+const closedRows = whileActive(() => prepareList(pausedSnapshot.value?.closed ?? closedConnections.value, true))
 const visibleRows = computed(() => (activeTab.value === 'active' ? activeRows.value : closedRows.value))
 const activeLive = computed(() => activeRows.value.filter((row) => row.state === 'live').map((row) => row.conn))
 const closedCount = computed(() => closedRows.value.filter((row) => row.state === 'live').length)
@@ -181,8 +198,54 @@ function snapshotRows(): Map<string, Connection> {
   return new Map(visibleRows.value.filter((row) => row.state === 'live').map((row) => [row.conn.id, row.conn]))
 }
 
-watch([listHovered, listFocused], ([hovered, focused]) => {
-  if (!hovered && !focused) {
+const touchHeld = ref(false)
+const TOUCH_RELEASE_MS = 1200
+let touchReleaseTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearTouchRelease() {
+  if (touchReleaseTimer) clearTimeout(touchReleaseTimer)
+  touchReleaseTimer = null
+}
+
+function onListTouchStart() {
+  clearTouchRelease()
+  touchHeld.value = true
+}
+
+function releaseTouchLater() {
+  if (!touchHeld.value) return
+  clearTouchRelease()
+  touchReleaseTimer = setTimeout(() => {
+    touchReleaseTimer = null
+    touchHeld.value = false
+  }, TOUCH_RELEASE_MS)
+}
+
+function onListScroll() {
+  if (touchReleaseTimer) releaseTouchLater()
+}
+
+function onListHover(hovered: boolean) {
+  if (!IS_ANDROID) listHovered.value = hovered
+}
+
+function isKeyboardFocus(el: Element): boolean {
+  try {
+    return el.matches(':focus-visible')
+  } catch {
+    return false
+  }
+}
+
+function onListFocusIn(e: FocusEvent) {
+  if (IS_ANDROID && !isKeyboardFocus(e.target as Element)) return
+  listFocused.value = true
+}
+
+onBeforeUnmount(clearTouchRelease)
+
+watch([listHovered, listFocused, touchHeld], ([hovered, focused, touched]) => {
+  if (!hovered && !focused && !touched) {
     frozenRows.value = null
   } else if (!frozenRows.value) {
     frozenRows.value = snapshotRows()
@@ -507,7 +570,7 @@ function onGlobalKeydown(e: KeyboardEvent) {
     return
   }
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'f') return
-  if (!isRunning.value || document.querySelector('[role="alertdialog"]')) return
+  if (!pageActive.value || !isRunning.value || document.querySelector('[role="alertdialog"]')) return
   e.preventDefault()
   searchInput.value?.focus()
   searchInput.value?.select()
@@ -527,7 +590,7 @@ onBeforeUnmount(() => {
   <div class="flex flex-col h-full gap-3">
     <span class="sr-only" aria-live="polite">{{ announcement }}</span>
     <ServiceNotice
-      v-if="!isRunning"
+      v-if="showNotice"
       :state="serviceState"
       page-title="连接"
       stopped-detail="启动服务后即可查看实时连接。"
@@ -538,7 +601,7 @@ onBeforeUnmount(() => {
     <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
       <div class="flex items-center gap-3">
         <h1 class="text-[26px] leading-tight tracking-tight font-bold shrink-0">连接</h1>
-        <div class="tabs tabs-boxed tabs-sm" role="tablist" aria-label="连接视图" @keydown="onTabKeydown">
+        <div class="tabs tabs-boxed tabs-sm flex-nowrap whitespace-nowrap" role="tablist" aria-label="连接视图" @keydown="onTabKeydown">
           <button
             id="connections-tab-active"
             type="button"
@@ -611,8 +674,8 @@ onBeforeUnmount(() => {
           :class="{ 'pr-8': filterText }"
           placeholder="搜索域名、IP、端口、进程、规则或节点"
           aria-label="搜索连接"
-          aria-keyshortcuts="Control+F"
-          title="搜索连接 (Ctrl+F)"
+          :aria-keyshortcuts="IS_ANDROID ? undefined : 'Control+F'"
+          :title="IS_ANDROID ? undefined : '搜索连接 (Ctrl+F)'"
           @keydown.esc="onSearchEscape"
         />
         <svg class="pointer-events-none absolute left-2.5 z-[1] h-3.5 w-3.5 text-base-content/55" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
@@ -622,7 +685,8 @@ onBeforeUnmount(() => {
         <button
           v-if="filterText"
           type="button"
-          class="absolute right-1 z-[1] flex h-6 w-6 items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          class="absolute z-[1] flex items-center justify-center rounded-full text-base-content/55 transition-colors hover:bg-[var(--fill-strong)] hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          :class="clearSearchSize"
           aria-label="清除搜索"
           @click="clearSearch"
         >
@@ -648,11 +712,11 @@ onBeforeUnmount(() => {
     >
       <template v-if="paused">
         <span>已暂停刷新，显示的是暂停时的连接。</span>
-        <button type="button" class="btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]" @click="paused = false">继续刷新</button>
+        <button type="button" :class="bannerAction" @click="paused = false">继续刷新</button>
       </template>
       <template v-else-if="apiUnreachable">
         <span>无法连接 Clash API，正在重试；下面是中断前的数据。</span>
-        <button type="button" class="btn btn-xs btn-ghost h-5 min-h-0 px-2 text-[color:var(--selection-ink)]" @click="router.push({ path: '/settings', hash: '#clash-api' })">检查 API 配置</button>
+        <button type="button" :class="bannerAction" @click="router.push({ path: '/settings', hash: '#clash-api' })">检查 API 配置</button>
       </template>
       <template v-else>
         <span class="loading loading-spinner loading-xs" aria-hidden="true"></span>
@@ -664,20 +728,82 @@ onBeforeUnmount(() => {
       id="connections-panel"
       role="tabpanel"
       :aria-labelledby="`connections-tab-${activeTab}`"
-      class="surface-card flex min-h-0 flex-1 flex-col overflow-hidden"
+      class="flex min-h-0 flex-1 flex-col"
+      :class="{ 'surface-card overflow-hidden': !IS_ANDROID }"
     >
-      <div class="card-scroll min-h-0 flex-1 overflow-auto">
+      <div
+        :class="IS_ANDROID ? 'conn-list under-nav' : 'card-scroll min-h-0 flex-1 overflow-auto'"
+        @touchstart.passive="onListTouchStart"
+        @touchend.passive="releaseTouchLater"
+        @touchcancel.passive="releaseTouchLater"
+        @scroll.passive="onListScroll"
+      >
         <ul
           v-if="visibleRows.length > 0"
           ref="listEl"
-          class="py-1"
+          :class="IS_ANDROID ? 'flex flex-col gap-2' : 'py-1'"
           :aria-label="activeTab === 'active' ? '活跃连接' : '已关闭连接'"
-          @mouseenter="listHovered = true"
-          @mouseleave="listHovered = false"
-          @focusin="listFocused = true"
+          @mouseenter="onListHover(true)"
+          @mouseleave="onListHover(false)"
+          @focusin="onListFocusIn"
           @focusout="onListFocusOut"
           @keydown="onListKeydown"
         >
+          <template v-if="IS_ANDROID">
+          <li
+            v-for="row in visibleRows"
+            :key="row.conn.id"
+            class="conn-card surface-card relative transition-opacity"
+            :class="{ 'opacity-50': row.state !== 'live' }"
+          >
+            <button
+              type="button"
+              data-conn-row
+              class="absolute inset-0 rounded-[inherit] focus-visible:outline-none"
+              :tabindex="rowTabTarget === row.conn.id ? 0 : -1"
+              :aria-label="rowLabel(row)"
+              @focus="focusedRowId = row.conn.id"
+              @click="openDetail(row.conn)"
+            ></button>
+            <div class="conn-line pointer-events-none" aria-hidden="true">
+              <span class="flex min-w-0 flex-1 items-center gap-1.5">
+                <span
+                  class="shrink-0 rounded-full px-1.5 text-[11px] font-medium uppercase leading-[18px]"
+                  :class="row.conn.metadata.network === 'tcp'
+                    ? 'bg-info/15 text-[color:var(--tcp-ink)]'
+                    : 'bg-accent/15 text-[color:var(--udp-ink)]'"
+                >{{ row.conn.metadata.network }}</span>
+                <span class="conn-host">{{ withPort(getHost(row.conn), row.conn.metadata.destinationPort) }}</span>
+              </span>
+              <span class="conn-time conn-nums">{{ row.state !== 'live' ? rowStateText(row) : connectionDuration(row.conn) }}</span>
+            </div>
+            <div class="conn-line pointer-events-none" aria-hidden="true">
+              <span class="conn-muted conn-ellipsis">{{ getProcess(row.conn) ? `${getProcess(row.conn)} · ` : '' }}{{ ruleText(row.conn) }}</span>
+              <span class="conn-muted conn-nums">↓ {{ formatBytes(row.conn.download) }}&ensp;↑ {{ formatBytes(row.conn.upload) }}</span>
+            </div>
+            <div class="conn-line">
+              <span class="conn-chain conn-ellipsis pointer-events-none" aria-hidden="true">{{ formatChains(row.conn.chains) }}</span>
+              <span v-if="row.state === 'live' && !row.conn.closedAt" class="conn-speed conn-nums pointer-events-none" aria-hidden="true">
+                <span :class="{ 'conn-muted': !row.conn.downloadSpeed }">↓ {{ formatSpeed(row.conn.downloadSpeed) }}</span>
+                <span :class="{ 'conn-muted': !row.conn.uploadSpeed }">↑ {{ formatSpeed(row.conn.uploadSpeed) }}</span>
+              </span>
+              <button
+                v-if="activeTab === 'active'"
+                type="button"
+                tabindex="-1"
+                class="conn-close relative z-[1]"
+                :disabled="row.state !== 'live'"
+                :aria-label="`断开 ${getHost(row.conn)}`"
+                @click="disconnect(row.conn)"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                  <path d="M7 7l10 10M17 7 7 17" />
+                </svg>
+              </button>
+            </div>
+          </li>
+          </template>
+          <template v-else>
           <li
             v-for="row in visibleRows"
             :key="row.conn.id"
@@ -734,6 +860,7 @@ onBeforeUnmount(() => {
             </button>
             <span v-else aria-hidden="true"></span>
           </li>
+          </template>
         </ul>
 
         <div v-else-if="query" class="flex flex-col items-center gap-3 px-6 py-12 text-center" role="status">
@@ -781,7 +908,8 @@ onBeforeUnmount(() => {
     <Transition name="glass-pop">
     <div
       v-if="selectedConnection"
-      class="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
+      class="glass-scrim fixed inset-0 z-50 flex items-center justify-center"
+      :class="IS_ANDROID ? 'safe-overlay' : 'p-4'"
       @click.self="closeDetail"
     >
       <div
@@ -912,5 +1040,116 @@ onBeforeUnmount(() => {
 .conn-row:has(> [data-conn-row]:focus-visible) {
   outline: 2px solid oklch(var(--p));
   outline-offset: -2px;
+}
+
+.conn-list {
+  min-height: 0;
+  flex: 1 1 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  margin-inline: -0.5rem;
+  padding: 0.25rem 0.5rem 0;
+}
+
+.under-nav {
+  margin-bottom: calc(-1 * var(--nav-clearance, 0px));
+  padding-bottom: calc(var(--nav-clearance, 0px) + 0.5rem);
+}
+
+.conn-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 14px 10px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.conn-card:has(> [data-conn-row]:focus-visible) {
+  outline: 2px solid oklch(var(--p) / 0.6);
+  outline-offset: 2px;
+}
+
+.conn-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.conn-host {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conn-time {
+  color: oklch(var(--bc) / 0.6);
+}
+
+.conn-muted {
+  color: oklch(var(--bc) / 0.6);
+}
+
+.conn-ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conn-line > .conn-ellipsis {
+  flex: 1 1 auto;
+}
+
+.conn-nums {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.conn-chain {
+  font-size: 13px;
+  color: oklch(var(--bc) / 0.8);
+}
+
+.conn-speed {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.conn-close {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  margin-block: -5px;
+  border-radius: 9999px;
+  background: var(--fill);
+  color: oklch(var(--bc) / 0.6);
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.conn-close:not(:disabled):active {
+  background: oklch(var(--er) / 0.15);
+  color: var(--danger-ink);
+}
+
+.conn-close:disabled {
+  opacity: 0.4;
+}
+
+.conn-close svg {
+  width: 15px;
+  height: 15px;
 }
 </style>
