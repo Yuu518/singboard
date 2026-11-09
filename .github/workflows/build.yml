@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - master
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
 
 permissions:
   contents: write
