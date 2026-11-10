@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { coreNotice, exitLabel, modeLabel, networkCounts, resolveCurrentExit } from './overviewStatus'
+import { coreNotice, exitLabel, modeLabel, modePhrase, networkCounts, resolveCurrentExit, splitRate } from './overviewStatus'
 import type { Proxy } from '@/types'
 
 function group(name: string, all: string[], now: string, type = 'Selector'): Proxy {
@@ -71,6 +71,47 @@ describe('coreNotice', () => {
     expect(coreNotice('unreachable', 'running', 4)).toMatchObject({ action: 'api', alert: true })
     expect(coreNotice('unreachable', 'running', 4)?.detail).toContain('已连续 4 次连接失败')
     expect(coreNotice('invalid', 'running', 0)?.title).toBe('sing-box 连接地址无效')
+  })
+})
+
+describe('coreNotice on Android', () => {
+  const root = { android: true, rootMode: true, authFailed: false }
+  const remote = { android: true, rootMode: false, authFailed: false }
+
+  it('offers to start the core in root mode', () => {
+    expect(coreNotice('stopped', 'stopped', 0, root)).toMatchObject({ title: 'sing-box 未运行', action: 'start' })
+    expect(coreNotice('stopped', 'not_installed', 0, root)?.action).toBe('start')
+    expect(coreNotice('stopped', 'stopping', 0, root)).toMatchObject({ busy: true, action: null })
+    expect(coreNotice('stopped', 'unknown', 0, root)?.action).toBe('settings')
+  })
+
+  it('asks for a working directory before offering to start', () => {
+    expect(coreNotice('stopped', 'stopped', 0, { ...root, missingWorkingDir: true })).toMatchObject({ title: '还没有指定工作目录', action: 'settings' })
+    expect(coreNotice('stopped', 'starting', 0, { ...root, missingWorkingDir: true })?.busy).toBe(true)
+  })
+
+  it('points a remote panel at the API settings instead of a start button', () => {
+    expect(coreNotice('stopped', 'stopped', 0, remote)).toMatchObject({ title: '连不上 sing-box', action: 'api', alert: true })
+    expect(coreNotice('stopped', 'unknown', 0, remote)).toMatchObject({ busy: true, action: null })
+  })
+
+  it('names a wrong secret before anything else', () => {
+    expect(coreNotice('connecting', 'running', 0, { ...remote, authFailed: true })).toMatchObject({ title: 'Clash API 密钥不匹配', action: 'api', alert: true })
+    expect(coreNotice('live', 'running', 0, remote)).toBeNull()
+  })
+})
+
+describe('splitRate and modePhrase', () => {
+  it('splits a formatted value from its unit', () => {
+    expect(splitRate('3.4 MB/s')).toEqual({ value: '3.4', unit: 'MB/s' })
+    expect(splitRate('—')).toEqual({ value: '—', unit: '' })
+  })
+
+  it('reads known modes as a phrase and keeps custom ones', () => {
+    expect(modePhrase('rule')).toBe('规则模式')
+    expect(modePhrase('Global')).toBe('全局模式')
+    expect(modePhrase('script')).toBe('模式 script')
+    expect(modePhrase(null)).toBe('')
   })
 })
 

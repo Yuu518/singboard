@@ -5,7 +5,7 @@
 - **Windows panel**: Clash API visualization, config profile management, Windows service control, and core/panel updates.
 - **Android app**: a remote panel for any reachable Clash API, which can also run a local core on rooted devices.
 
-The Proxies, Connections, Logs and Rules pages are shared between both platforms, so improvements reach both. Android keeps its own glass cards, touch sizes and bottom-nav layout.
+The Overview, Proxies, Connections, Logs and Rules pages are shared between both platforms, so improvements reach both. Android keeps its own glass cards, touch sizes and bottom-nav layout.
 
 ## Windows features
 
@@ -18,12 +18,13 @@ The Proxies, Connections, Logs and Rules pages are shared between both platforms
   - Asks for the working directory and the Clash API URL and secret
   - Finds the `sing-box` core and `config.json` under that directory, and imports the config as the default profile
 - **Overview**
-  - Status band shows:
-    - Core state, uptime and memory
-    - Proxy mode
+  - One main card shows:
+    - Core state, uptime and proxy mode
     - The current exit node, resolved through selector chains, with its latency
     - The active config profile
-  - Upload speed, download speed and connection count (TCP/UDP split), each with a sparkline and session totals
+    - Download and upload speed with totals, over a mirrored traffic wave for the last minute
+  - Connection count (TCP/UDP split) and memory, each with a small trend line
+  - When sing-box is stopped or unreachable, the main card says why and offers the next step
   - Network info:
     - Direct and proxied exit IPs, which can be hidden
     - Latency to common sites
@@ -103,21 +104,16 @@ The Proxies, Connections, Logs and Rules pages are shared between both platforms
 ## Android features
 
 - **Navigation**
-  - Floating glass bottom bar: Home, Proxies, Connections, Logs, Rules, Settings
-  - Back returns to Home
+  - Floating glass bottom bar: Overview, Proxies, Connections, Logs, Rules, Settings
+  - Back returns to Overview
   - Swiping between pages is an opt-in setting (off by default)
 - **Setup wizard**
   - Clash API URL and secret
   - Optionally, a sing-box working directory for root mode
   - Can be skipped and finished later in Settings
-- **Home** (opens first)
-  - Root mode only:
-    - Core state, uptime and version
-    - Power and restart buttons
-    - Run mode, control endpoint and working directory
-  - Realtime upload and download speed with sparklines and totals
-  - Memory usage; in root mode, also the core process's CPU usage and resident memory
-  - Network info: exit IPs and connectivity checks
+- **Overview** (opens first): the shared page described above
+  - Root mode adds the core version, restart and power buttons, the core process's CPU usage and resident memory, and asks for a working directory when none is set
+  - Remote mode shows the endpoint name, and points to the Clash API settings when the core cannot be reached
 - **Proxies, Connections, Logs, Rules**: the shared pages described above. Each page shows a clear state when the core is stopped, the Clash API is unreachable, or the secret is wrong
 - **Settings**
   - Core and service (root mode):
@@ -215,7 +211,7 @@ pnpm tauri android dev
 The platform is fixed at build time. The Tauri CLI sets `TAURI_ENV_PLATFORM`, and the frontend only bundles the code for that platform.
 
 - Shared logic (API, stores, bridges, utilities) and the shared pages live in `src/`.
-- The Android shell, Home and Settings pages, and Android-only components live in `src/android/`.
+- The Android shell, the Settings page, and Android-only components live in `src/android/`.
 
 To preview the Android interface in a desktop browser, run `TAURI_ENV_PLATFORM=android pnpm dev`.
 
@@ -299,7 +295,7 @@ Android APKs are built only when all four `ANDROID_*` secrets are set. Without t
 ```text
 .
 ├─ src/                 # Vue frontend: shared logic and pages, Windows shell
-│  └─ android/          # Android shell, Home and Settings pages, components
+│  └─ android/          # Android shell, Settings page, components
 ├─ src-tauri/           # Rust + Tauri commands
 │  ├─ src/service/      # Windows service integration
 │  ├─ src/root/         # Android root shell

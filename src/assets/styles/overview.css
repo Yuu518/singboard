@@ -1,0 +1,121 @@
+.overview-section {
+  margin-top: 26px;
+}
+
+.overview-section-head {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 12px;
+  margin: 0 6px 9px;
+}
+
+.overview-section-head h2 {
+  flex: none;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.overview-section-sub {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: oklch(var(--bc) / 0.55);
+}
+
+.overview-section-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  align-self: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.overview-text-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 9999px;
+  padding: 3px 9px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--selection-ink);
+  transition: background-color 0.15s ease;
+}
+
+.overview-text-action:hover {
+  background: var(--fill);
+}
+
+.overview-text-action[aria-pressed='true'] {
+  background: color-mix(in oklab, var(--selection-ink) 13%, transparent);
+}
+
+.overview-text-action[aria-disabled='true'] {
+  color: oklch(var(--bc) / 0.45);
+}
+
+.overview-text-action:focus-visible,
+.overview-cover:focus-visible {
+  outline: 2px solid oklch(var(--p));
+  outline-offset: 2px;
+}
+
+.overview-cover {
+  position: absolute;
+  inset: -6px -10px;
+  z-index: 0;
+  border-radius: var(--radius-tile);
+  transition: background-color 0.15s ease;
+}
+
+.overview-cover:hover {
+  background: var(--fill);
+}
+
+.overview-cover-body {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.overview-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 9999px;
+}
+
+.overview-dim {
+  color: oklch(var(--bc) / 0.4);
+}
+
+@container overview (max-width: 639px) {
+  .overview-section-head {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  .overview-section-sub {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .overview-section-sub:empty {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overview-text-action,
+  .overview-cover {
+    transition: none;
+  }
+}

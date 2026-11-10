@@ -65,7 +65,44 @@ export interface CoreNotice {
   alert: boolean
 }
 
-export function coreNotice(link: OverviewLinkState, serviceState: ServiceStatus['state'], failures: number): CoreNotice | null {
+export interface NoticeContext {
+  android: boolean
+  rootMode: boolean
+  authFailed: boolean
+  missingWorkingDir?: boolean
+}
+
+const DESKTOP: NoticeContext = { android: false, rootMode: false, authFailed: false }
+
+function androidNotice(serviceState: ServiceStatus['state'], rootMode: boolean, missingWorkingDir: boolean): CoreNotice | null {
+  if (!rootMode) {
+    if (serviceState === 'unknown') return { title: '正在连接 sing-box…', detail: '连上之后显示出口和实时流量。', action: null, busy: true, alert: false }
+    return { title: '连不上 sing-box', detail: '没有收到 Clash API 的响应，正在自动重试。', action: 'api', busy: false, alert: true }
+  }
+  if (missingWorkingDir && serviceState !== 'starting' && serviceState !== 'stopping') {
+    return { title: '还没有指定工作目录', detail: '在设置里选择 sing-box 的工作目录后才能启动。', action: 'settings', busy: false, alert: false }
+  }
+  switch (serviceState) {
+    case 'starting':
+      return { title: '正在启动 sing-box…', detail: '核心启动后自动显示实时数据。', action: null, busy: true, alert: false }
+    case 'stopping':
+      return { title: '正在停止 sing-box…', detail: '停止后可以在这里重新启动。', action: null, busy: true, alert: false }
+    case 'unknown':
+      return { title: '无法获取 sing-box 状态', detail: '可以在设置中检查工作目录。', action: 'settings', busy: false, alert: false }
+    default:
+      return { title: 'sing-box 未运行', detail: '启动后显示出口、实时流量和内存。', action: 'start', busy: false, alert: false }
+  }
+}
+
+export function coreNotice(
+  link: OverviewLinkState,
+  serviceState: ServiceStatus['state'],
+  failures: number,
+  context: NoticeContext = DESKTOP,
+): CoreNotice | null {
+  if (context.authFailed && serviceState === 'running') {
+    return { title: 'Clash API 密钥不匹配', detail: '请在设置里修改 Clash API 密钥。', action: 'api', busy: false, alert: true }
+  }
   switch (link) {
     case 'live':
     case 'connecting':
@@ -81,6 +118,7 @@ export function coreNotice(link: OverviewLinkState, serviceState: ServiceStatus[
     case 'invalid':
       return { title: 'sing-box 连接地址无效', detail: '请在设置里修改 Clash API 地址。', action: 'api', busy: false, alert: true }
   }
+  if (context.android) return androidNotice(serviceState, context.rootMode, !!context.missingWorkingDir)
   switch (serviceState) {
     case 'starting':
       return { title: '正在启动 sing-box…', detail: '核心启动后自动显示实时数据。', action: null, busy: true, alert: false }
@@ -114,6 +152,17 @@ export function historySummary(points: readonly { name: number; value: number | 
   const peak = Math.max(...samples)
   const average = samples.reduce((sum, value) => sum + value, 0) / samples.length
   return `最近 ${samples.length} 秒峰值 ${format(peak)}，平均 ${format(average)}`
+}
+
+export function splitRate(text: string): { value: string; unit: string } {
+  const space = text.lastIndexOf(' ')
+  return space < 0 ? { value: text, unit: '' } : { value: text.slice(0, space), unit: text.slice(space + 1) }
+}
+
+export function modePhrase(mode: string | null | undefined): string {
+  if (!mode) return ''
+  const label = modeLabel(mode)
+  return label === mode ? `模式 ${mode}` : `${label}模式`
 }
 
 export function exitLabel(mode: string | null | undefined): { label: string; hint: string } {

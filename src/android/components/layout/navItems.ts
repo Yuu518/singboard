@@ -13,8 +13,8 @@ export interface NavItem {
 export const navItems: NavItem[] = [
   {
     path: '/home',
-    load: () => import('@/android/views/HomePage.vue'),
-    label: '首页',
+    load: () => import('@/views/OverviewPage.vue'),
+    label: '概览',
     icon: navIcons.home,
   },
   {

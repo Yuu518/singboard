@@ -8,10 +8,16 @@ import { useConnectionsStore } from '@/stores/connections'
 import { useConfigStore } from '@/stores/config'
 import { buildTopology, topologyHeight, topologyRanking, topologySummary, topologyTooltip, type TopologyData, type TopologyTooltipParams } from '@/utils/topology'
 import { CHART_TOOLTIP_CSS, inkColor, readChartInk, readTopologyColors, useReducedMotion } from '@/utils/chartTheme'
+import SegmentedControl from '@/components/common/SegmentedControl.vue'
+import { IS_ANDROID } from '@/platform'
 
 echarts.use([SankeyChart, TooltipComponent, CanvasRenderer])
 
-const NODE_WIDTH = 10
+const VIEW_OPTIONS = [
+  { value: 'chart', label: '图' },
+  { value: 'list', label: '列表' },
+] as const
+const NODE_WIDTH = 8
 const UPDATE_MS = 240
 const EMPTY: TopologyData = { nodes: [], links: [], connectionCount: 0 }
 
@@ -25,7 +31,8 @@ const userPaused = ref(false)
 const hoverPaused = ref(false)
 const paused = computed(() => userPaused.value || hoverPaused.value)
 const width = ref(0)
-const listView = ref(false)
+const view = ref<'chart' | 'list'>(IS_ANDROID ? 'list' : 'chart')
+const listView = computed(() => view.value === 'list')
 let myChart: echarts.ECharts | null = null
 let resizeOb: ResizeObserver | null = null
 let shown: TopologyData = { nodes: [], links: [], connectionCount: 0 }
@@ -36,6 +43,10 @@ const chartHeight = computed(() => topologyHeight(displayed.value))
 const summary = computed(() => topologySummary(displayed.value))
 const exitRanking = computed(() => topologyRanking(displayed.value, 3))
 const ruleRanking = computed(() => topologyRanking(displayed.value, 1))
+function share(count: number) {
+  const total = displayed.value.connectionCount
+  return total ? `${Math.max(2, Math.round((count / total) * 100))}%` : '0%'
+}
 const labelWidth = computed(() => {
   if (!width.value) return 120
   return Math.min(180, Math.max(56, Math.floor((width.value - NODE_WIDTH * 4) / 4) - 8))
@@ -69,12 +80,12 @@ function buildOptions(data: TopologyData) {
         layoutIterations: 0,
         data: data.nodes.map((node) => ({
           ...node,
-          itemStyle: { color: inkColor(palette[node.depth] ?? ink, node.merged ? 0.4 : 0.9) },
-          label: { color: inkColor(ink, node.merged ? 0.6 : 0.8) },
+          itemStyle: { color: inkColor(palette[node.depth] ?? ink, node.merged ? 0.35 : 0.75) },
+          label: { color: inkColor(ink, node.merged ? 0.5 : 0.72) },
         })),
         links: data.links,
-        emphasis: { focus: 'trajectory' as const, lineStyle: { opacity: 0.6 } },
-        lineStyle: { color: 'gradient' as const, opacity: 0.28, curveness: 0.5 },
+        emphasis: { focus: 'trajectory' as const, lineStyle: { opacity: 0.5 } },
+        lineStyle: { color: 'gradient' as const, opacity: 0.16, curveness: 0.5 },
         itemStyle: { borderWidth: 0 },
         label: {
           fontSize: 12,
@@ -83,7 +94,7 @@ function buildOptions(data: TopologyData) {
           ellipsis: '…',
           formatter: (params: { name?: string; data?: { name?: string } }) => params.data?.name ?? params.name ?? '',
         },
-        nodeGap: 10,
+        nodeGap: 12,
         nodeWidth: NODE_WIDTH,
         nodeAlign: 'left' as const,
         animation: animate,
@@ -148,92 +159,165 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="surface-card p-4 space-y-3" aria-labelledby="topology-title">
-    <div class="flex items-center justify-between gap-2">
-      <h2 id="topology-title" class="text-sm font-semibold">
-        连接拓扑
-        <span v-if="userPaused && props.live" class="ml-1 text-xs font-normal text-base-content/65">已暂停更新</span>
-      </h2>
-      <div v-if="props.live" class="flex items-center gap-1">
+  <section class="overview-section" aria-labelledby="topology-title">
+    <div class="overview-section-head">
+      <h2 id="topology-title">连接拓扑</h2>
+      <span class="overview-section-sub" data-topology-summary>
+        <template v-if="props.live">{{ userPaused ? `已暂停更新 · ${summary}` : summary }}</template>
+      </span>
+      <div v-if="props.live" class="overview-section-actions">
+        <SegmentedControl v-model="view" :options="VIEW_OPTIONS" label="连接拓扑的显示方式" data-action="toggle-view" />
         <button
           type="button"
-          class="btn btn-ghost btn-xs px-2 font-medium"
-          data-action="toggle-list"
-          @click="listView = !listView"
-        >
-          {{ listView ? '显示图表' : '显示列表' }}
-        </button>
-        <button
-          type="button"
-          class="btn btn-ghost btn-xs btn-circle"
+          class="topology-pause"
           aria-label="暂停更新连接拓扑"
           :title="userPaused ? '继续更新连接拓扑' : '暂停更新连接拓扑'"
           :aria-pressed="userPaused"
           data-action="toggle-pause"
           @click="userPaused = !userPaused"
         >
-          <svg v-if="!userPaused" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25v13.5m-7.5-13.5v13.5" />
+          <svg v-if="!userPaused" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M9 5.5v13M15 5.5v13" />
           </svg>
-          <svg v-else aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+          <svg v-else aria-hidden="true" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M7 5.65c0-.86.92-1.4 1.67-.99l10.4 6.35a1.13 1.13 0 0 1 0 1.97L8.67 19.34A1.13 1.13 0 0 1 7 18.35V5.65z" />
           </svg>
         </button>
       </div>
     </div>
-    <div
-      v-if="!props.live"
-      class="flex min-h-[160px] items-center justify-center px-6 text-center text-sm text-base-content/65"
-      role="status"
-      data-topology-waiting
-    >
-      {{ props.waiting || '暂时拿不到连接数据' }}
-    </div>
-    <div v-show="props.live && !listView" class="relative">
+    <div class="surface-card topology-card">
       <div
-        ref="chartEl"
-        class="w-full"
-        role="img"
-        :aria-label="`连接拓扑图：${summary}。选择“显示列表”可按出口和规则查看`"
-        :style="{ height: chartHeight + 'px' }"
-      />
-      <div
-        v-if="displayed.nodes.length === 0"
-        class="absolute inset-0 flex items-center justify-center text-base-content/55 text-sm"
+        v-if="!props.live"
+        class="flex min-h-[140px] items-center justify-center px-6 text-center text-sm text-base-content/65"
+        role="status"
+        data-topology-waiting
       >
-        暂无连接数据
+        {{ props.waiting || '暂时拿不到连接数据' }}
       </div>
-    </div>
-    <div v-if="props.live && listView" class="topology-list grid grid-cols-1 gap-3" data-topology-list>
-      <p v-if="displayed.nodes.length === 0" class="py-6 text-center text-sm text-base-content/55">暂无连接数据</p>
-      <template v-else>
-        <p class="text-xs text-base-content/65 topology-list-summary">{{ summary }}</p>
-        <section v-for="group in [{ title: '按出口', rows: exitRanking }, { title: '按规则', rows: ruleRanking }]" :key="group.title" class="min-w-0">
-          <h3 class="mb-1 text-xs font-medium text-base-content/70">{{ group.title }}</h3>
-          <ul class="text-sm">
-            <li
-              v-for="row in group.rows"
-              :key="row.id"
-              class="flex min-w-0 items-center justify-between gap-3 border-b-[0.5px] border-[color:var(--hairline)] py-1.5 last:border-b-0"
-            >
-              <span class="truncate" :class="{ 'text-base-content/65': row.merged }" :title="row.name">{{ row.name }}</span>
-              <span class="shrink-0 text-xs tabular-nums text-base-content/65">{{ row.count }} 条</span>
-            </li>
-          </ul>
-        </section>
-      </template>
+      <div v-show="props.live && !listView" class="relative">
+        <div
+          ref="chartEl"
+          class="w-full"
+          role="img"
+          :aria-label="`连接拓扑图：${summary}。切换到“列表”可按出口和规则查看`"
+          :style="{ height: chartHeight + 'px' }"
+        />
+        <div
+          v-if="displayed.nodes.length === 0"
+          class="absolute inset-0 flex items-center justify-center text-base-content/55 text-sm"
+        >
+          暂无连接数据
+        </div>
+      </div>
+      <div v-if="props.live && listView" class="topology-list" data-topology-list>
+        <p v-if="displayed.nodes.length === 0" class="py-6 text-center text-sm text-base-content/55">暂无连接数据</p>
+        <template v-else>
+          <section v-for="group in [{ title: '按出口', rows: exitRanking }, { title: '按规则', rows: ruleRanking }]" :key="group.title" class="min-w-0">
+            <h3 class="topology-list-title">{{ group.title }}</h3>
+            <ul>
+              <li v-for="row in group.rows" :key="row.id" class="topology-row">
+                <span class="truncate" :class="{ 'text-base-content/60': row.merged }" :title="row.name">{{ row.name }}</span>
+                <span class="topology-count">{{ row.count }} 条</span>
+                <i class="topology-bar" aria-hidden="true"><i :style="{ width: share(row.count) }"></i></i>
+              </li>
+            </ul>
+          </section>
+        </template>
+      </div>
     </div>
   </section>
 </template>
 
 <style scoped>
+.topology-card {
+  padding: 12px 14px 12px 18px;
+}
+
+.topology-pause {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 9999px;
+  background: var(--fill);
+  color: oklch(var(--bc) / 0.7);
+  transition: background-color 0.15s ease;
+}
+
+.topology-pause:hover {
+  background: var(--fill-strong);
+}
+
+.topology-pause[aria-pressed='true'] {
+  background: color-mix(in oklab, var(--selection-ink) 13%, transparent);
+  color: var(--selection-ink);
+}
+
+.topology-pause:focus-visible {
+  outline: 2px solid oklch(var(--p));
+  outline-offset: 2px;
+}
+
+.topology-pause svg {
+  width: 14px;
+  height: 14px;
+}
+
+.topology-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px 32px;
+  padding: 4px 4px 2px 0;
+}
+
+.topology-list-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: oklch(var(--bc) / 0.55);
+}
+
+.topology-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 12px;
+  padding: 5px 0 9px;
+  font-size: 13px;
+}
+
+.topology-count {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: oklch(var(--bc) / 0.55);
+}
+
+.topology-bar {
+  grid-column: 1 / -1;
+  display: block;
+  height: 3px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: var(--fill);
+}
+
+.topology-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgb(var(--chart-ink-rgb) / 0.4);
+}
+
 @container overview (min-width: 640px) {
   .topology-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
 
-  .topology-list-summary {
-    grid-column: 1 / -1;
+@media (prefers-reduced-motion: reduce) {
+  .topology-pause {
+    transition: none;
   }
 }
 </style>

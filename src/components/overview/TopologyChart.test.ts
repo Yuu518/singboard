@@ -177,11 +177,16 @@ describe('TopologyChart', () => {
     const canvas = host.querySelector('[role="img"]')!
     expect(canvas.getAttribute('aria-label')).toContain('3 条连接经 2 个出口，最多的是 HK 01（2 条）')
 
-    host.querySelector<HTMLButtonElement>('[data-action="toggle-list"]')!.click()
+    const options = [...host.querySelectorAll<HTMLButtonElement>('[data-action="toggle-view"] [role="radio"]')]
+    expect(options.map((option) => option.textContent?.trim())).toEqual(['图', '列表'])
+    expect(options[0].getAttribute('aria-checked')).toBe('true')
+    options[1].click()
     await flush()
     const list = host.querySelector('[data-topology-list]')!
     const rows = [...list.querySelectorAll('section')[0].querySelectorAll('li')].map((li) => [...li.querySelectorAll('span')].map((span) => span.textContent?.trim()).join(' '))
     expect(rows).toEqual(['HK 01 2 条', 'DIRECT 1 条'])
+    expect(list.querySelector<HTMLElement>('.topology-bar > i')!.style.width).toBe('67%')
+    expect(host.querySelector('[data-topology-summary]')!.textContent).toContain('3 条连接经 2 个出口')
     expect(list.textContent).toContain('按规则')
     unmount()
   })
@@ -196,7 +201,7 @@ describe('TopologyChart', () => {
     expect(waiting.getAttribute('role')).toBe('status')
     expect(waiting.textContent).toContain('恢复后显示连接拓扑')
     expect(host.querySelector('[role="img"]')!.parentElement!.style.display).toBe('none')
-    expect(host.querySelector('[data-action="toggle-list"]')).toBeNull()
+    expect(host.querySelector('[data-action="toggle-view"]')).toBeNull()
     expect(chart.cleared).toBeGreaterThan(0)
 
     connections.value.value = [conn('9', 'Stale')]

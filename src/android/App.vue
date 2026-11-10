@@ -24,14 +24,7 @@ import { useSingboxVersionStore } from '@/stores/singboxVersion'
 import { usePanelUpdateStore } from '@/stores/panelUpdate'
 import { useLogsLifecycle } from '@/stores/logs'
 import { keyboardVisible } from '@/android/stores/keyboard'
-import { getIPFromIpipnet, getIPFromIpsb } from '@/api/geoip'
-import {
-  getWechatLatency,
-  getBilibiliLatency,
-  getGithubLatency,
-  getCloudflareLatency,
-  getYoutubeLatency,
-} from '@/api/latency'
+import { useNetworkStore } from '@/stores/network'
 
 const { backgroundUrl, init: initBackground } = useBackgroundStore()
 const logsLifecycle = useLogsLifecycle()
@@ -44,6 +37,7 @@ const { reset: resetOverviewHistory } = useOverviewStore()
 const { resetOnRestart: resetConnections } = useConnectionsStore()
 const { detectVersion } = useSingboxVersionStore()
 const { checkOnStartup: checkPanelUpdateOnStartup } = usePanelUpdateStore()
+const network = useNetworkStore()
 
 const pageTitle = computed(() => navItems[pagerIndex.value]?.label ?? '')
 const scrolled = ref(false)
@@ -80,58 +74,6 @@ watch(
 
 const setupWizardVisible = ref(false)
 const setupWizardRef = ref<InstanceType<typeof SetupWizard> | null>(null)
-
-const NETWORK_CACHE_KEY = 'singboard-network'
-
-function runNetworkAutoTest() {
-  try {
-    const saved = sessionStorage.getItem(NETWORK_CACHE_KEY)
-    if (saved) {
-      const cached = JSON.parse(saved)
-      const hasIP = !!(cached?.chinaIP?.ip || cached?.globalIP?.ip)
-      const hasLatency = !!(cached?.latency?.wechat || cached?.latency?.cloudflare)
-      if (hasIP && hasLatency) return
-    }
-  } catch {}
-
-  const result: any = {
-    chinaIP: { ip: '', location: '', locationMasked: '' },
-    globalIP: { ip: '', location: '', locationMasked: '' },
-    latency: { wechat: '', bilibili: '', github: '', cloudflare: '', youtube: '' },
-  }
-
-  getIPFromIpipnet().then((res) => {
-    const loc = res.location.filter(Boolean)
-    result.chinaIP = {
-      ip: res.ip,
-      location: loc.join(' '),
-      locationMasked: loc.length > 0
-        ? loc[0] + ' ' + loc.slice(1).map(() => '**').join(' ')
-        : '',
-    }
-    sessionStorage.setItem(NETWORK_CACHE_KEY, JSON.stringify(result))
-  }).catch(() => {})
-
-  getIPFromIpsb().then((res) => {
-    const loc = [res.country, res.organization].filter(Boolean).join(' ')
-    result.globalIP = { ip: res.ip, location: loc, locationMasked: loc }
-    sessionStorage.setItem(NETWORK_CACHE_KEY, JSON.stringify(result))
-  }).catch(() => {})
-
-  const latencyTests = [
-    { fn: getWechatLatency, key: 'wechat' },
-    { fn: getBilibiliLatency, key: 'bilibili' },
-    { fn: getGithubLatency, key: 'github' },
-    { fn: getCloudflareLatency, key: 'cloudflare' },
-    { fn: getYoutubeLatency, key: 'youtube' },
-  ]
-  for (const { fn, key } of latencyTests) {
-    fn().then((ms) => {
-      result.latency[key] = ms ? ms.toFixed(0) : '超时'
-      sessionStorage.setItem(NETWORK_CACHE_KEY, JSON.stringify(result))
-    }).catch(() => {})
-  }
-}
 
 onMounted(async () => {
   void cleanupPanelUpdate().catch(() => {})
@@ -174,18 +116,20 @@ watch(
     endpointChanged = false
     if (reloadForEndpoint) void loadProxies(true)
     const instance = String(serviceStatus.value.pid ?? '')
-    if (instance === handledInstance) return
+    if (instance === handledInstance) {
+      if (reloadForEndpoint) network.scheduleAutoCheck()
+      return
+    }
     handledInstance = instance
     if (coreStartedOnce) {
       resetOverviewHistory()
       resetConnections()
-      sessionStorage.removeItem(NETWORK_CACHE_KEY)
     }
     coreStartedOnce = true
     void detectVersion()
     void refreshDuringCoreWarmup()
     void reloadRules()
-    setTimeout(runNetworkAutoTest, 3000)
+    network.scheduleAutoCheck()
   },
   { immediate: true },
 )
@@ -195,6 +139,7 @@ watch(
   (state) => {
     if (state === 'running') return
     handledInstance = null
+    network.reset()
     if (coreStartedOnce) {
       resetOverviewHistory()
       resetConnections()

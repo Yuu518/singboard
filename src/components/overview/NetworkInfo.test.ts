@@ -26,8 +26,7 @@ function makeStore() {
     setLatencyBusy: (value: boolean) => {
       latencyBusy.value = value
     },
-    checkIP: vi.fn(),
-    checkLatency: vi.fn(),
+    checkAll: vi.fn(() => Promise.resolve()),
   }
 }
 
@@ -50,8 +49,9 @@ describe('NetworkInfo', () => {
       return copy.textContent?.replace(/\s+/g, ' ').trim()
     })
     expect(labels.slice(0, 2)).toEqual(['直连出口 ipip.net', '代理出口 ip.sb'])
-    expect(host.querySelector('[data-network-ip-hint]')).toBeNull()
-    expect(host.querySelector('[data-network-latency-hint]')).toBeNull()
+    expect(host.querySelector('[data-network-hint]')).toBeNull()
+    expect(host.querySelector('h2')!.textContent).toBe('网络')
+    expect(host.querySelector('h2')!.closest('.surface-card')).toBeNull()
     unmount()
   })
 
@@ -69,7 +69,8 @@ describe('NetworkInfo', () => {
     const abroad = host.querySelector('[data-ip-row="abroad"] .settings-mono')!
     expect(abroad.className).toContain('break-all')
     expect(abroad.textContent).toMatch(/^[•:]+$/)
-    expect(host.querySelector('.absolute.right-2')).toBeNull()
+    expect(host.querySelector('[data-ip-row="abroad"]')!.textContent).toContain('Japan')
+    expect(host.querySelector('[data-ip-row="abroad"]')!.textContent).not.toContain('Example')
     unmount()
   })
 
@@ -77,13 +78,17 @@ describe('NetworkInfo', () => {
     const { host, unmount } = await mount()
     const text = (key: string) => host.querySelector(`[data-latency-row="${key}"]`)!.textContent!.replace(/\s+/g, ' ').trim()
     expect(text('wechat')).toBe('120ms')
-    expect(text('bilibili')).toBe('失败5 秒内无响应')
+    expect(text('bilibili')).toBe('5 秒内无响应失败')
     expect(text('github')).toBe('检测中')
     expect(text('cloudflare')).toBe('未测')
     expect(host.textContent).not.toContain('超时ms')
     expect(host.textContent).not.toContain('...ms')
-    const youtube = host.querySelector('[data-latency-row="youtube"] span')!
-    expect(youtube.className).toContain('bg-error/15')
+    const dot = (key: string) => host.querySelector(`[data-latency-row="${key}"] .overview-dot`)?.className ?? ''
+    expect(dot('wechat')).toContain('bg-success')
+    expect(dot('youtube')).toContain('bg-error')
+    expect(dot('bilibili')).toContain('bg-error')
+    expect(dot('cloudflare')).toContain('border')
+    expect(host.querySelector('[data-latency-row="github"] .loading')).not.toBeNull()
     unmount()
   })
 
@@ -91,10 +96,16 @@ describe('NetworkInfo', () => {
     const { host, unmount } = await mount()
     const label = (action: string) => host.querySelector(`[data-action="${action}"]`)!.getAttribute('aria-label')
     expect(label('toggle-ip')).toBe('显示完整出口 IP')
-    expect(label('check-ip')).toBe('重新检测出口 IP')
-    expect(label('check-latency')).toBe('重新检测访问延迟')
-    expect(host.querySelector('[data-action="check-ip"]')!.textContent?.trim()).toBe('重新检测')
-    expect(host.querySelector('[data-action="check-latency"]')!.getAttribute('aria-busy')).toBe('true')
+    expect(label('check-all')).toBe('重新检测出口 IP 和访问延迟')
+    const check = host.querySelector<HTMLButtonElement>('[data-action="check-all"]')!
+    expect(check.textContent?.trim()).toBe('重新检测')
+    expect(check.getAttribute('aria-busy')).toBe('true')
+    check.click()
+    expect(state.value.checkAll).not.toHaveBeenCalled()
+    state.value.setLatencyBusy(false)
+    await nextTick()
+    check.click()
+    expect(state.value.checkAll).toHaveBeenCalledTimes(1)
     unmount()
   })
 
@@ -113,9 +124,9 @@ describe('NetworkInfo', () => {
 
   it('stops offering checks and routing claims while the core is stopped', async () => {
     const { host, unmount } = await mount({ running: false })
-    expect(host.querySelector('[data-action="check-ip"]')).toBeNull()
-    expect(host.querySelector('[data-action="check-latency"]')).toBeNull()
-    expect(host.querySelector('[data-network-ip-hint]')!.textContent).toBe('sing-box 未运行，启动后自动检测。')
+    expect(host.querySelector('[data-action="check-all"]')).toBeNull()
+    expect(host.querySelector('[data-action="toggle-ip"]')).toBeNull()
+    expect(host.querySelector('[data-network-hint]')!.textContent).toBe('sing-box 未运行，启动后自动检测')
     expect(host.textContent).not.toContain('按 sing-box 路由规则发出')
     unmount()
   })
