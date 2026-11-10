@@ -40,6 +40,7 @@ import { describeEndpointStatus, type EndpointProbe } from '@/utils/endpointStat
 import { getRequestErrorReason } from '@/utils/requestError'
 import { failureMessage, humanizeError } from '@/utils/humanError'
 import { useLogsStore } from '@/stores/logs'
+import { navItems, resolveStartPage } from '@/components/layout/navItems'
 
 const {
   config,
@@ -68,6 +69,8 @@ const themeOptions = [
   { value: 'light', label: '浅色' },
   { value: 'dark', label: '深色' },
 ] as const
+
+const startPage = computed(() => resolveStartPage(config.value.startPage))
 
 const { backgroundUrl, hasBackground, setBackground, removeBackground } = useBackgroundStore()
 const personalizationExpanded = ref(false)
@@ -1115,6 +1118,21 @@ watch(
             labelledby="settings-theme-label"
             @update:model-value="updateConfig({ theme: $event })"
           />
+        </div>
+        <div class="settings-row">
+          <label for="settings-start-page" class="settings-row-copy">
+            <strong>默认启动页</strong>
+            <span id="settings-start-page-desc">启动面板时首先打开的页面，下次启动生效。</span>
+          </label>
+          <select
+            id="settings-start-page"
+            class="select select-sm select-bordered settings-row-control"
+            :value="startPage"
+            aria-describedby="settings-start-page-desc"
+            @change="updateConfig({ startPage: ($event.target as HTMLSelectElement).value })"
+          >
+            <option v-for="item in navItems" :key="item.path" :value="item.path">{{ item.label }}</option>
+          </select>
         </div>
         <div class="settings-row settings-row-stack">
           <button

@@ -43,3 +43,9 @@ export const navItems: NavItem[] = [
     icon: navIcons.settings,
   },
 ]
+
+export const DEFAULT_START_PAGE = '/proxies'
+
+export function resolveStartPage(path: string): string {
+  return navItems.some((item) => item.path === path) ? path : DEFAULT_START_PAGE
+}

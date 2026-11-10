@@ -51,3 +51,35 @@ describe('page navigation history', () => {
     expect(router.back).not.toHaveBeenCalled()
   })
 })
+
+describe('configured start page', () => {
+  async function loadPager(startPage: string) {
+    vi.resetModules()
+    localStorage.setItem('singboard-config', JSON.stringify({ startPage }))
+    const pager = await import('./pager')
+    localStorage.clear()
+    return pager
+  }
+
+  it('treats the chosen start page as the page back returns to', async () => {
+    const { launchPage, goToPage: go } = await loadPager('/proxies')
+    expect(launchPage).toBe('/proxies')
+
+    const fromStart = fakeRouter('/proxies')
+    go(fromStart.router as unknown as Router, '/logs')
+    expect(fromStart.router.push).toHaveBeenCalledWith('/logs')
+
+    const backToStart = fakeRouter('/logs', '/proxies')
+    go(backToStart.router as unknown as Router, '/proxies')
+    expect(backToStart.router.back).toHaveBeenCalledOnce()
+
+    const fromHome = fakeRouter('/home')
+    go(fromHome.router as unknown as Router, '/rules')
+    expect(fromHome.router.replace).toHaveBeenCalledWith('/rules')
+  })
+
+  it('opens on the home page when nothing or an unknown page was saved', async () => {
+    expect((await loadPager('')).launchPage).toBe('/home')
+    expect((await loadPager('/config')).launchPage).toBe('/home')
+  })
+})

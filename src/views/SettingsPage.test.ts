@@ -408,3 +408,26 @@ describe('SettingsPage text settings', () => {
     unmount()
   })
 })
+
+describe('SettingsPage start page', () => {
+  it('starts on the proxies page until another page is picked', async () => {
+    const { host, unmount } = await mountPage()
+    const select = host.querySelector<HTMLSelectElement>('#settings-start-page')!
+    expect(select.value).toBe('/proxies')
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual(['概览', '代理', '连接', '日志', '规则', '配置', '设置'])
+
+    select.value = '/overview'
+    select.dispatchEvent(new Event('change'))
+    await flush()
+    expect(JSON.parse(localStorage.getItem('singboard-config')!).startPage).toBe('/overview')
+    expect(select.value).toBe('/overview')
+    unmount()
+  })
+
+  it('falls back to the proxies page when the saved start page no longer exists', async () => {
+    localStorage.setItem('singboard-config', JSON.stringify({ startPage: '/gone' }))
+    const { host, unmount } = await mountPage()
+    expect(host.querySelector<HTMLSelectElement>('#settings-start-page')!.value).toBe('/proxies')
+    unmount()
+  })
+})

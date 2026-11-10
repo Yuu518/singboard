@@ -1,6 +1,9 @@
 import { ref } from 'vue'
 import type { Router } from 'vue-router'
-import { navItems } from '@/android/components/layout/navItems'
+import { resolveStartPage } from '@/android/components/layout/navItems'
+import { useConfigStore } from '@/stores/config'
+
+export const launchPage = resolveStartPage(useConfigStore().config.value.startPage)
 
 export const pagerIndex = ref(0)
 export const reselectRequest = ref(0)
@@ -12,7 +15,7 @@ export function requestReselect() {
 export function goToPage(router: Router, path: string) {
   const current = router.currentRoute.value.path
   if (path === current) return
-  const start = navItems[0].path
+  const start = launchPage
   if (path === start) {
     if (router.options.history.state.back === start) router.back()
     else void router.replace(start)

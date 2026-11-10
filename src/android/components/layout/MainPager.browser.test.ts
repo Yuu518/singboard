@@ -23,6 +23,7 @@ vi.mock('./navItems', () => ({
     icon: [],
     load: () => Promise.resolve(page(name)),
   })),
+  resolveStartPage: () => '/a',
 }))
 
 const { default: MainPager } = await import('./MainPager.vue')

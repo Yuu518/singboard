@@ -57,3 +57,7 @@ export const navItems: NavItem[] = [
   },
 ]
 
+export function resolveStartPage(path: string): string {
+  return navItems.some((item) => item.path === path) ? path : navItems[0].path
+}
+

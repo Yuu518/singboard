@@ -185,6 +185,7 @@ export interface AppConfig {
   configProfiles: ConfigProfile[]
   activeConfigProfileId: string
   closeToTray: boolean
+  startPage: string
   rootMode: boolean
   setupCompleted: boolean
   pageSwipe: boolean

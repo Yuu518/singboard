@@ -24,6 +24,7 @@ import PanelUpdateCard from '@/android/components/settings/PanelUpdateCard.vue'
 import BackgroundEditorDialog from '@/components/settings/BackgroundEditorDialog.vue'
 import GlassTintSlider from '@/components/common/GlassTintSlider.vue'
 import SettingsSelect from '@/android/components/settings/SettingsSelect.vue'
+import { navItems, resolveStartPage } from '@/android/components/layout/navItems'
 import { glassTintLabel } from '@/utils/glassTint'
 
 const {
@@ -46,6 +47,9 @@ const themeOptions = [
   { value: 'light', label: '浅色' },
   { value: 'dark', label: '深色' },
 ] as const
+
+const startPage = computed(() => resolveStartPage(config.value.startPage))
+const startPageOptions = navItems.map((item) => ({ value: item.path, label: item.label }))
 
 const { backgroundUrl, hasBackground, setBackground, removeBackground } = useBackgroundStore()
 const personalizationExpanded = ref(false)
@@ -805,6 +809,19 @@ watch(
               {{ theme.label }}
             </button>
           </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-copy">
+            <strong>默认启动页</strong>
+            <span>启动面板时首先打开的页面，下次启动生效。</span>
+          </div>
+          <SettingsSelect
+            class="settings-row-control"
+            :model-value="startPage"
+            :options="startPageOptions"
+            aria-label="默认启动页"
+            @update:model-value="updateConfig({ startPage: $event })"
+          />
         </div>
         <label class="settings-row settings-toggle-row">
           <span class="settings-row-copy">

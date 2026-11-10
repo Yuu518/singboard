@@ -127,6 +127,7 @@ function normalizeConfig(raw: any): AppConfig {
     configProfiles,
     activeConfigProfileId,
     closeToTray: typeof raw?.closeToTray === 'boolean' ? raw.closeToTray : false,
+    startPage: typeof raw?.startPage === 'string' ? raw.startPage : '',
     rootMode: IS_ANDROID && typeof raw?.rootMode === 'boolean' ? raw.rootMode : false,
     setupCompleted: typeof raw?.setupCompleted === 'boolean' ? raw.setupCompleted : false,
     pageSwipe: typeof raw?.pageSwipe === 'boolean' ? raw.pageSwipe : false,

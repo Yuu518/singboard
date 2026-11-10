@@ -1,11 +1,13 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useConfigStore } from '@/stores/config'
+import { resolveStartPage } from '@/components/layout/navItems'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
       path: '/',
-      redirect: '/proxies',
+      redirect: () => resolveStartPage(useConfigStore().config.value.startPage),
     },
     {
       path: '/overview',

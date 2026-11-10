@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { navItems } from '@/android/components/layout/navItems'
+import { launchPage } from '@/android/stores/pager'
 
 const PagerRoute = { render: () => null }
 
@@ -8,7 +9,7 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      redirect: '/home',
+      redirect: launchPage,
     },
     {
       path: '/overview',
@@ -21,7 +22,7 @@ const router = createRouter({
     })),
     {
       path: '/:pathMatch(.*)*',
-      redirect: '/home',
+      redirect: launchPage,
     },
   ],
 })
