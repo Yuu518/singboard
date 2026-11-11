@@ -3,7 +3,7 @@ members = ["service-host"]
 
 [package]
 name = "singboard"
-version = "4.9.1"
+version = "4.9.2"
 edition = "2024"
 default-run = "singboard"
 
