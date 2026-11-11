@@ -70,7 +70,7 @@ describe('OverviewHero on Android', () => {
   it('puts restart and power next to the state in root mode, with the core version', async () => {
     const { host, unmount } = await render({ link: 'live' })
     expect(host.querySelector('[data-hero-config]')).toBeNull()
-    expect(text(host.querySelector('[data-hero-meta]'))).toBe('· 1.12.4')
+    expect(text(host.querySelector('[data-hero-meta]'))).toBe('1.12.4')
     host.querySelector<HTMLButtonElement>('[data-hero-control="restart"]')!.click()
     host.querySelector<HTMLButtonElement>('[data-hero-control="stop"]')!.click()
     expect(run.mock.calls.map(([action]) => action)).toEqual(['restart', 'stop'])
@@ -93,7 +93,7 @@ describe('OverviewHero on Android', () => {
     status.value = ref({ state: 'running' })
     const { host, unmount } = await render({ link: 'live' })
     expect(text(host.querySelector('[data-hero-state]'))).toBe('已连接')
-    expect(text(host.querySelector('[data-hero-meta]'))).toBe('· 路由器')
+    expect(text(host.querySelector('[data-hero-meta]'))).toBe('路由器')
     expect(host.querySelector('[data-hero-control]')).toBeNull()
     unmount()
   })

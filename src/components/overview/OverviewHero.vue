@@ -159,22 +159,24 @@ async function handleStart() {
           <span v-else class="hero-dot" :class="noticeDot" aria-hidden="true" data-hero-notice-dot></span>
           <span class="hero-state" :role="notice.alert ? 'alert' : 'status'" data-hero-notice-title>{{ notice.title }}</span>
         </template>
-        <template v-else>
-          <span class="hero-dot" :class="live ? 'bg-success' : 'hero-dot-neutral'" aria-hidden="true"></span>
-          <span class="hero-state" data-hero-state>
-            {{ stateText }}<span v-if="uptime && link !== 'connecting'" class="tabular-nums">{{ ` ${uptime}` }}</span>
-          </span>
-          <span v-if="live && mode" class="hero-meta-sep" aria-hidden="true">·</span>
-          <button
-            v-if="live && mode"
-            type="button"
-            class="hero-meta-link"
-            title="打开设置页切换模式"
-            data-hero-mode
-            @click="router.push('/settings')"
-          >{{ modePhrase(mode) }}<span class="sr-only">，打开设置页</span></button>
-          <span v-if="metaDetail" class="hero-meta" data-hero-meta>· {{ metaDetail }}</span>
-        </template>
+        <div v-else class="hero-status">
+          <div class="hero-status-line">
+            <span class="hero-dot" :class="live ? 'bg-success' : 'hero-dot-neutral'" aria-hidden="true"></span>
+            <span class="hero-state" data-hero-state>
+              {{ stateText }}<span v-if="uptime && link !== 'connecting'" class="tabular-nums">{{ ` ${uptime}` }}</span>
+            </span>
+            <span v-if="live && mode" class="hero-meta-sep" aria-hidden="true">·</span>
+            <button
+              v-if="live && mode"
+              type="button"
+              class="hero-meta-link"
+              title="打开设置页切换模式"
+              data-hero-mode
+              @click="router.push('/settings')"
+            >{{ modePhrase(mode) }}<span class="sr-only">，打开设置页</span></button>
+          </div>
+          <span v-if="metaDetail" class="hero-meta" :title="metaDetail" data-hero-meta>{{ metaDetail }}</span>
+        </div>
         <div class="hero-aside">
           <button
             v-if="!IS_ANDROID"
@@ -302,6 +304,21 @@ async function handleStart() {
   font-size: 13px;
 }
 
+.hero-status {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hero-status-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
 .hero-dot {
   display: inline-block;
   width: 8px;
@@ -338,6 +355,8 @@ async function handleStart() {
 .hero-meta {
   min-width: 0;
   overflow: hidden;
+  padding-left: 18px;
+  font-size: 12px;
   text-overflow: ellipsis;
 }
 
@@ -559,12 +578,6 @@ async function handleStart() {
   margin-top: 2px;
   font-size: 12px;
   color: oklch(var(--bc) / 0.5);
-}
-
-@container overview (max-width: 349px) {
-  .hero-meta {
-    display: none;
-  }
 }
 
 @container overview (min-width: 640px) {
