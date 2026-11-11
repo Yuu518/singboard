@@ -63,7 +63,7 @@ function clear() {
   <div class="settings-row">
     <div class="settings-row-copy">
       <strong>GitHub Token<span v-if="hasToken" class="github-token-pill">已填写</span></strong>
-      <span>{{ hasToken ? '检查和下载面板更新优先走 GitHub API。' : '可选。不填时先走 Release 直链，失败再走 GitHub API。' }}</span>
+      <span>{{ hasToken ? '检查核心和面板更新时带上 Token，面板下载优先走 GitHub API。' : '可选。填写后检查核心和面板更新不受匿名限流影响。' }}</span>
     </div>
     <button type="button" class="btn btn-sm" :class="buttonClass" @click="show">
       {{ hasToken ? '修改' : '填写' }}
@@ -73,7 +73,7 @@ function clear() {
   <GlassDialog :open="open" title="GitHub Token" @close="close">
     <form class="space-y-4" novalidate @submit.prevent="save">
       <p :id="descId" class="text-sm leading-relaxed text-base-content/75">
-        填写后，检查和下载面板更新会优先通过 GitHub API 并带上这个 Token，不受匿名限流影响；API 失败时再改走 Release 直链。Token 只保存在本机，只发给 api.github.com。
+        填写后，检查核心和面板更新都会带上这个 Token，不受匿名限流影响；下载面板更新也会优先通过 GitHub API，失败时再改走 Release 直链。Token 只保存在本机，只发给 api.github.com。
       </p>
       <div class="space-y-1.5">
         <label :for="inputId" class="block text-xs text-base-content/70">Token</label>

@@ -168,6 +168,22 @@ describe('update cards', () => {
     }
   })
 
+  it('sends the GitHub token with the core update check', async () => {
+    const { config } = useConfigStore()
+    const token = `ghp_${'y'.repeat(36)}`
+    config.value.githubToken = token
+    try {
+      const wrapper = mount(CoreUpdateCard)
+      wrappers.push(wrapper)
+      await wrapper.get('button').trigger('click')
+      await flushPromises()
+
+      expect(tauri.invoke).toHaveBeenCalledWith('check_core_update', expect.objectContaining({ githubToken: token }))
+    } finally {
+      config.value.githubToken = ''
+    }
+  })
+
   it('does not label the current core release as an available update', async () => {
     const { config } = useConfigStore()
     config.value.singboxPath = 'C:\\sing-box\\sing-box.exe'

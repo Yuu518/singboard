@@ -97,6 +97,7 @@ The Overview, Proxies, Connections, Logs and Rules pages are shared between both
     - Sources: official SagerNet, reF1nd, or any `owner/repo`
     - Stable or testing channel, optional download mirror
     - SHA-256 verified, rolled back if the new core fails to start
+    - The release check sends the GitHub token when one is set, avoiding the anonymous rate limit
   - Panel updates: checked on startup, SHA-256 verified; the panel replaces itself without interrupting the proxy service
     - Downloads from the release link first and falls back to the GitHub API asset endpoint
     - With an optional GitHub token, checks and downloads go through the GitHub API first, avoiding the anonymous rate limit

@@ -22,8 +22,8 @@ export interface CoreUpdateProgress {
   total: number
 }
 
-export async function checkCoreUpdate(repo: string, channel: string): Promise<CoreUpdateInfo> {
-  return invoke<CoreUpdateInfo>('check_core_update', { repo, channel })
+export async function checkCoreUpdate(repo: string, channel: string, githubToken: string): Promise<CoreUpdateInfo> {
+  return invoke<CoreUpdateInfo>('check_core_update', { repo, channel, githubToken })
 }
 
 /** 下载资产并解压，返回其中 sing-box 核心的 SHA-256（用于同版本一致性校验） */

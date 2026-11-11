@@ -163,10 +163,6 @@ pub(crate) fn github_token(token: Option<&str>) -> Option<&str> {
     token.map(str::trim).filter(|token| !token.is_empty())
 }
 
-pub(crate) async fn github_get(url: &str) -> Result<reqwest::Response, String> {
-    github_get_with_token(url, None).await
-}
-
 pub(crate) async fn github_get_with_token(
     url: &str,
     token: Option<&str>,
@@ -247,14 +243,19 @@ fn newest_release(releases: Vec<GhRelease>) -> Option<GhRelease> {
 }
 
 #[tauri::command]
-pub async fn check_core_update(repo: String, channel: String) -> Result<CoreUpdateInfo, String> {
+pub async fn check_core_update(
+    repo: String,
+    channel: String,
+    github_token: Option<String>,
+) -> Result<CoreUpdateInfo, String> {
     let repo = repo.trim().to_string();
     validate_repo(&repo)?;
     let suffixes = platform::asset_suffixes()?;
+    let token = github_token.as_deref();
 
     let release = if channel == "testing" {
         let url = format!("https://api.github.com/repos/{}/releases?per_page=10", repo);
-        let releases: Vec<GhRelease> = github_get(&url)
+        let releases: Vec<GhRelease> = github_get_with_token(&url, token)
             .await?
             .json()
             .await
@@ -262,7 +263,7 @@ pub async fn check_core_update(repo: String, channel: String) -> Result<CoreUpda
         newest_release(releases).ok_or("该仓库暂无发布版本")?
     } else {
         let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
-        github_get(&url)
+        github_get_with_token(&url, token)
             .await?
             .json()
             .await

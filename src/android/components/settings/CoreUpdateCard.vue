@@ -149,7 +149,7 @@ async function handleCheck() {
   try {
     // 核心文件可能在面板运行期间被替换过，先重新检测当前版本再比较
     const [info] = await Promise.all([
-      checkCoreUpdate(repo.value, config.value.coreUpdateChannel),
+      checkCoreUpdate(repo.value, config.value.coreUpdateChannel, config.value.githubToken),
       detectVersion(),
     ])
     const checkedVersion = info.version.replace(/^v/, '')

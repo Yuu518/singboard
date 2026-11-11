@@ -121,7 +121,7 @@ async function check(): Promise<CoreCheckOutcome | null> {
   checking.value = true
   try {
     const [info] = await Promise.all([
-      checkCoreUpdate(repo, config.value.coreUpdateChannel),
+      checkCoreUpdate(repo, config.value.coreUpdateChannel, config.value.githubToken),
       detectVersion(),
     ])
     const checkedVersion = info.version.replace(/^v/, '')
