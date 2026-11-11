@@ -311,16 +311,22 @@ jobs:
           path: release
           merge-multiple: true
 
-      - name: Set build time
-        run: echo "DATE=$(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M:%S') UTC+8" >> "$GITHUB_ENV"
+      - name: Write release notes
+        run: |
+          git log -1 --format=%b "$RELEASE_TAG" |
+            awk '/^ +[^ ]/ && buf != "" { sub(/^ +/, " "); buf = buf $0; next } NR > 1 { print buf } { buf = $0 } END { if (NR) print buf }' > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            prev=$(git describe --tags --abbrev=0 "$RELEASE_TAG^" 2>/dev/null || true)
+            git log --no-merges --format='- %s' ${prev:+"$prev.."}"$RELEASE_TAG^" > release-notes.md
+          fi
+          cat release-notes.md
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3.0.2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: ${{ env.APP_VERSION }}
-          body: |
-            Build time: ${{ env.DATE }}
+          body_path: release-notes.md
           files: |
             release/singboard.exe
             release/*.apk
