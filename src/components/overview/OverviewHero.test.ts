@@ -81,6 +81,7 @@ describe('OverviewHero', () => {
     const { host, unmount } = await render({ link: 'live' })
     expect(text(host.querySelector('[data-hero-state]'))).toBe('运行中 7:05')
     expect(text(host.querySelector('[data-hero-mode]'))).toBe('规则模式，打开设置页')
+    expect(text(host.querySelector('[data-hero-meta]'))).toBe('1.12.4')
     expect(text(host.querySelector('[data-hero-exit-label]'))).toBe('默认代理')
     const exit = host.querySelector('[data-hero-exit]')!
     expect(text(exit.querySelector('.hero-node-name'))).toBe('香港 01')

@@ -54,8 +54,8 @@ const uptime = computed(() => {
 })
 const stateText = computed(() => (props.link === 'connecting' ? '正在连接 sing-box…' : statusText.value))
 const metaDetail = computed(() => {
-  if (!IS_ANDROID) return ''
-  return rootMode.value ? singboxVersion.value : activeClashApi.value?.name ?? ''
+  if (!IS_ANDROID || rootMode.value) return singboxVersion.value
+  return activeClashApi.value?.name ?? ''
 })
 
 const mode = ref<string | null>(null)
