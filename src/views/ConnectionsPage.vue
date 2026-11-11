@@ -350,6 +350,17 @@ function ruleLabel(conn: Connection): string {
   return ruleText(conn).replace(/\brule_set=/g, '')
 }
 
+function inboundType(conn: Connection): string {
+  const type = conn.metadata.type || ''
+  const slash = type.indexOf('/')
+  return slash < 0 ? type : type.slice(0, slash)
+}
+
+function connectionKind(conn: Connection): string {
+  const inbound = inboundType(conn)
+  return inbound ? `${inbound} ${conn.metadata.network}` : conn.metadata.network
+}
+
 function connectionDuration(conn: Connection): string {
   const text = formatDuration(conn.start, conn.closedAt)
   return conn.closedInBackground ? `≥ ${text}` : text
@@ -364,7 +375,7 @@ function rowStateText(row: Row): string {
 function rowLabel(row: Row): string {
   const conn = row.conn
   return [
-    `${conn.metadata.network.toUpperCase()} ${withPort(getHost(conn), conn.metadata.destinationPort)}`,
+    `${connectionKind(conn).toUpperCase()} ${withPort(getHost(conn), conn.metadata.destinationPort)}`,
     getProcess(conn),
     formatChains(conn.chains),
     `规则 ${ruleLabel(conn)}`,
@@ -772,11 +783,11 @@ onBeforeUnmount(() => {
             <div class="conn-line pointer-events-none" aria-hidden="true">
               <span class="flex min-w-0 flex-1 items-center gap-1.5">
                 <span
-                  class="shrink-0 rounded-full px-1.5 text-[11px] font-medium uppercase leading-[18px]"
+                  class="conn-kind shrink-0 rounded-full px-1.5 text-[11px] font-medium uppercase leading-[18px]"
                   :class="row.conn.metadata.network === 'tcp'
                     ? 'bg-info/15 text-[color:var(--tcp-ink)]'
                     : 'bg-accent/15 text-[color:var(--udp-ink)]'"
-                >{{ row.conn.metadata.network }}</span>
+                ><template v-if="inboundType(row.conn)">{{ inboundType(row.conn) }}<span class="conn-kind-sep"></span></template>{{ row.conn.metadata.network }}</span>
                 <span class="conn-host">{{ withPort(getHost(row.conn), row.conn.metadata.destinationPort) }}</span>
               </span>
               <span class="conn-time conn-nums">{{ row.state !== 'live' ? rowStateText(row) : connectionDuration(row.conn) }}</span>
@@ -825,11 +836,11 @@ onBeforeUnmount(() => {
             <div class="pointer-events-none min-w-0" aria-hidden="true">
               <div class="flex min-w-0 items-center gap-1.5 text-sm">
                 <span
-                  class="shrink-0 rounded-full px-1.5 text-xs font-medium uppercase leading-5"
+                  class="conn-kind shrink-0 rounded-full px-1.5 text-xs font-medium uppercase leading-5"
                   :class="row.conn.metadata.network === 'tcp'
                     ? 'bg-info/15 text-[color:var(--tcp-ink)]'
                     : 'bg-accent/15 text-[color:var(--udp-ink)]'"
-                >{{ row.conn.metadata.network }}</span>
+                ><template v-if="inboundType(row.conn)">{{ inboundType(row.conn) }}<span class="conn-kind-sep"></span></template>{{ row.conn.metadata.network }}</span>
                 <span class="min-w-0 truncate">{{ withPort(getHost(row.conn), row.conn.metadata.destinationPort) }}</span>
                 <span v-if="getProcess(row.conn)" class="min-w-0 max-w-[45%] shrink-[2] truncate text-xs text-base-content/65">· {{ getProcess(row.conn) }}</span>
               </div>
@@ -942,8 +953,10 @@ onBeforeUnmount(() => {
             <div class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
               <span class="text-base-content/65">ID</span>
               <span class="settings-mono break-all">{{ selectedConnection.id }}</span>
-              <span class="text-base-content/65">类型</span>
-              <span>{{ selectedConnection.metadata.network.toUpperCase() }} / {{ selectedConnection.metadata.type }}</span>
+              <span class="text-base-content/65">网络</span>
+              <span>{{ selectedConnection.metadata.network.toUpperCase() }}</span>
+              <span class="text-base-content/65">入站</span>
+              <span class="break-all">{{ selectedConnection.metadata.type || '-' }}</span>
               <span class="text-base-content/65">主机</span>
               <span class="break-all">{{ getHost(selectedConnection) }}</span>
               <span class="text-base-content/65">规则</span>
@@ -1037,6 +1050,21 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.conn-kind {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.conn-kind-sep {
+  width: 1px;
+  height: 0.85em;
+  margin-inline: 0.4em;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.35;
+}
+
 .conn-row:has(> [data-conn-row]:focus-visible) {
   outline: 2px solid oklch(var(--p));
   outline-offset: -2px;

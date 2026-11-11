@@ -24,7 +24,7 @@ function conn(id: string, host: string, start: string): Connection {
   return {
     id,
     metadata: {
-      network: 'tcp', type: 'tun', sourceIP: '172.19.0.1', destinationIP: '', sourcePort: '50000',
+      network: 'tcp', type: 'tun/tun-in', sourceIP: '172.19.0.1', destinationIP: '', sourcePort: '50000',
       destinationPort: '443', host, dnsMode: 'normal', process: 'com.android.chrome', processPath: '', sniffHost: '',
     },
     upload: 1024, download: 4096, start, chains: ['HK 01', 'Proxy'], rule: 'rule_set=geolocation-!cn',
@@ -75,6 +75,10 @@ describe('ConnectionsPage on Android', () => {
     expect(cards).toHaveLength(2)
     expect(cards[0].classList).toContain('surface-card')
     expect(cards[0].textContent).toContain('github.com:443')
+    const kind = cards[0].querySelector('.conn-kind')!
+    expect(kind.textContent).toBe('tuntcp')
+    expect(kind.querySelector('.conn-kind-sep')).not.toBeNull()
+    expect(cards[0].querySelector('[data-conn-row]')!.getAttribute('aria-label')).toMatch(/^TUN TCP github\.com:443/)
     expect(cards[0].textContent).not.toContain('com.android.chrome')
     expect(cards[0].querySelector('.conn-rule')!.textContent).toBe('geolocation-!cn')
     expect(cards[0].querySelector('.conn-chain')!.textContent).toBe('Proxy → HK 01')
