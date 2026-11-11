@@ -346,6 +346,10 @@ function ruleText(conn: Connection): string {
   return conn.rule || 'final'
 }
 
+function ruleLabel(conn: Connection): string {
+  return ruleText(conn).replace(/\brule_set=/g, '')
+}
+
 function connectionDuration(conn: Connection): string {
   const text = formatDuration(conn.start, conn.closedAt)
   return conn.closedInBackground ? `≥ ${text}` : text
@@ -363,7 +367,7 @@ function rowLabel(row: Row): string {
     `${conn.metadata.network.toUpperCase()} ${withPort(getHost(conn), conn.metadata.destinationPort)}`,
     getProcess(conn),
     formatChains(conn.chains),
-    `规则 ${ruleText(conn)}`,
+    `规则 ${ruleLabel(conn)}`,
     rowStateText(row),
   ].filter(Boolean).join('，')
 }
@@ -777,16 +781,14 @@ onBeforeUnmount(() => {
               </span>
               <span class="conn-time conn-nums">{{ row.state !== 'live' ? rowStateText(row) : connectionDuration(row.conn) }}</span>
             </div>
-            <div class="conn-line pointer-events-none" aria-hidden="true">
-              <span class="conn-muted conn-ellipsis">{{ getProcess(row.conn) ? `${getProcess(row.conn)} · ` : '' }}{{ ruleText(row.conn) }}</span>
-              <span class="conn-muted conn-nums">↓ {{ formatBytes(row.conn.download) }}&ensp;↑ {{ formatBytes(row.conn.upload) }}</span>
-            </div>
-            <div class="conn-line">
-              <span class="conn-chain conn-ellipsis pointer-events-none" aria-hidden="true">{{ formatChains(row.conn.chains) }}</span>
+            <div class="conn-rule conn-ellipsis pointer-events-none" aria-hidden="true">{{ ruleLabel(row.conn) }}</div>
+            <div class="conn-chain conn-ellipsis pointer-events-none" aria-hidden="true">{{ formatChains(row.conn.chains) }}</div>
+            <div class="conn-foot">
               <span v-if="row.state === 'live' && !row.conn.closedAt" class="conn-speed conn-nums pointer-events-none" aria-hidden="true">
                 <span :class="{ 'conn-muted': !row.conn.downloadSpeed }">↓ {{ formatSpeed(row.conn.downloadSpeed) }}</span>
                 <span :class="{ 'conn-muted': !row.conn.uploadSpeed }">↑ {{ formatSpeed(row.conn.uploadSpeed) }}</span>
               </span>
+              <span class="conn-total conn-muted conn-ellipsis pointer-events-none" aria-hidden="true">{{ formatBytes(row.conn.download) }} / {{ formatBytes(row.conn.upload) }}</span>
               <button
                 v-if="activeTab === 'active'"
                 type="button"
@@ -831,10 +833,8 @@ onBeforeUnmount(() => {
                 <span class="min-w-0 truncate">{{ withPort(getHost(row.conn), row.conn.metadata.destinationPort) }}</span>
                 <span v-if="getProcess(row.conn)" class="min-w-0 max-w-[45%] shrink-[2] truncate text-xs text-base-content/65">· {{ getProcess(row.conn) }}</span>
               </div>
-              <div class="mt-0.5 flex min-w-0 gap-1.5 text-xs text-base-content/65">
-                <span class="max-w-[70%] shrink-0 truncate">{{ formatChains(row.conn.chains) }}</span>
-                <span class="min-w-0 truncate">· {{ ruleText(row.conn) }}</span>
-              </div>
+              <div class="mt-0.5 truncate text-xs text-base-content/65">{{ ruleLabel(row.conn) }}</div>
+              <div class="mt-0.5 truncate text-xs text-base-content/80">{{ formatChains(row.conn.chains) }}</div>
             </div>
             <div class="pointer-events-none min-w-0 text-right text-xs tabular-nums leading-5" aria-hidden="true">
               <div v-if="row.state !== 'live'" class="truncate">{{ rowStateText(row) }}</div>
@@ -1059,8 +1059,8 @@ onBeforeUnmount(() => {
 .conn-card {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 11px 14px 10px;
+  gap: 4px;
+  padding: 11px 14px 0;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -1105,24 +1105,45 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.conn-line > .conn-ellipsis {
-  flex: 1 1 auto;
-}
-
 .conn-nums {
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
+.conn-rule {
+  font-size: 12px;
+  line-height: 17px;
+  color: oklch(var(--bc) / 0.6);
+}
+
 .conn-chain {
   font-size: 13px;
-  color: oklch(var(--bc) / 0.8);
+  line-height: 18px;
+  color: oklch(var(--bc) / 0.85);
+}
+
+.conn-foot {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 6px -14px 0;
+  padding: 5px 14px;
+  border-top: 0.5px solid var(--hairline);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .conn-speed {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.6rem;
+  color: oklch(var(--bc) / 0.85);
+}
+
+.conn-total {
+  flex: 0 1 auto;
+  margin-left: auto;
 }
 
 .conn-close {
@@ -1132,7 +1153,7 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  margin-block: -5px;
+  margin-right: -6px;
   border-radius: 9999px;
   background: var(--fill);
   color: oklch(var(--bc) / 0.6);
