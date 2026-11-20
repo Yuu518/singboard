@@ -2,8 +2,6 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use sha2::{Digest, Sha256};
-
 use crate::root::{self, SERVICE_HOME, quote};
 
 use super::{
@@ -119,30 +117,6 @@ async fn download_and_extract(
     .map_err(|e| format!("任务执行失败: {}", e))?
 }
 
-pub async fn probe_asset_core_hash(
-    app: super::UpdateContext,
-    asset_url: String,
-    asset_size: u64,
-    asset_digest: String,
-    mirror: Option<String>,
-) -> Result<String, String> {
-    core_asset_hash(&asset_digest)?;
-    let _guard = UPDATE_LOCK
-        .try_lock()
-        .map_err(|_| "更新正在进行中".to_string())?;
-
-    let staging = staging_dir(&app)?;
-    download_and_extract(&app, &staging, &asset_url, asset_size, &asset_digest, &mirror)
-        .await
-        .map_err(|e| {
-            let _ = std::fs::remove_dir_all(&staging);
-            e
-        })?;
-    let data = std::fs::read(staging.join("files").join(CORE_BIN_NAME))
-        .map_err(|e| format!("读取文件失败: {}", e))?;
-    Ok(format!("{:x}", Sha256::digest(&data)))
-}
-
 async fn swap_core(staged: &Path, target: &str) -> Result<(String, bool), String> {
     use crate::commands::service;
 
@@ -253,6 +227,7 @@ pub async fn perform_core_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn extracts_only_the_core_binary_from_a_verified_archive() {

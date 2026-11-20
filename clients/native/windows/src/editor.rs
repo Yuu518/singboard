@@ -1,9 +1,6 @@
 use crate::theme::Palette;
 use gpui::{prelude::*, *};
-use gpui_component::{
-    Root,
-    input::{Editor as CodeEditor, EditorState, InputEvent, Redo, Undo},
-};
+use gpui_component::input::{Editor as CodeEditor, EditorState, InputEvent, Redo, Undo};
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -188,63 +185,6 @@ pub fn inline(
         window,
         cx,
     ))
-}
-
-pub fn open(path: PathBuf, core: Option<Core>, cx: &mut App) -> Result<(), String> {
-    if let Some((handle, existing)) = cx.global::<OpenEditor>().0.clone() {
-        if let Some(editor) = existing.upgrade() {
-            let same = editor.read(cx).doc.path == path;
-            if handle.update(cx, |_, win, _| win.activate_window()).is_ok() {
-                return if same {
-                    Ok(())
-                } else {
-                    Err("请先关闭当前配置编辑器，再打开其他文件".into())
-                };
-            }
-        }
-    }
-    let doc = Document::open(path)?;
-    let title = format!(
-        "{} · 配置编辑器",
-        doc.path.file_name().unwrap_or_default().to_string_lossy()
-    );
-    let bounds = Bounds::centered(None, size(px(860.), px(640.)), cx);
-    cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(size(px(580.), px(360.))),
-            titlebar: Some(TitlebarOptions {
-                title: Some(title.into()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        |window, cx| {
-            crate::theme::set_caption(window, Palette::get(cx).0);
-            let editor = create_editor(doc, core, None, window, cx);
-            editor.update(cx, |_, cx| {
-                cx.observe_global_in::<crate::theme::Appearance>(window, |_, window, cx| {
-                    crate::theme::set_caption(window, Palette::get(cx).0)
-                })
-                .detach();
-            });
-            let weak = editor.downgrade();
-            window.on_window_should_close(cx, move |window, cx| {
-                weak.update(cx, |editor, cx| {
-                    if !editor.busy && !editor.dirty {
-                        true
-                    } else {
-                        editor.request(Pending::Close, window, cx);
-                        false
-                    }
-                })
-                .unwrap_or(true)
-            });
-            cx.new(|cx| Root::new(editor, window, cx))
-        },
-    )
-    .map_err(|e| format!("无法打开配置编辑器：{e}"))?;
-    Ok(())
 }
 
 fn create_editor(

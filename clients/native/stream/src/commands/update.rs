@@ -53,8 +53,6 @@ pub(crate) struct StagedCore {
 #[derive(Deserialize)]
 pub(crate) struct GhAsset {
     pub(crate) name: String,
-    #[serde(default)]
-    pub(crate) url: String,
     pub(crate) browser_download_url: String,
     pub(crate) size: u64,
     #[serde(default)]
@@ -262,6 +260,7 @@ pub async fn check_core_update(
     pick_asset(&release, &suffixes)
 }
 
+#[cfg(test)]
 pub(crate) fn panel_download_urls(
     mirror: &Option<String>,
     repo: &str,
@@ -386,6 +385,7 @@ pub(crate) fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch))
 }
 
+#[cfg(test)]
 pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
     match (parse_version(latest), parse_version(current)) {
         (Some(l), Some(c)) => l > c,
@@ -393,43 +393,7 @@ pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
     }
 }
 
-pub(crate) fn digest_hash(asset_digest: &str) -> Option<&str> {
-    asset_digest
-        .trim()
-        .strip_prefix("sha256:")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-}
-
-pub(crate) fn sha256_file(path: &Path) -> Result<String, String> {
-    let content = std::fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
-    Ok(format!("{:x}", Sha256::digest(&content)))
-}
-
-pub(crate) fn verify_digest(
-    file: &Path,
-    asset_digest: &str,
-    mirror: &Option<String>,
-) -> Result<(), String> {
-    let Some(expected) = digest_hash(asset_digest) else {
-        let mirrored = mirror
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|m| !m.is_empty());
-        if mirrored {
-            return Err("该版本缺少校验信息，已中止更新".into());
-        }
-        return Ok(());
-    };
-
-    let actual = sha256_file(file)?;
-    if actual.eq_ignore_ascii_case(expected) {
-        Ok(())
-    } else {
-        Err("文件校验失败，已中止更新".into())
-    }
-}
-
+#[cfg(test)]
 fn is_release_segment(segment: &str) -> bool {
     !segment.is_empty()
         && segment != "."
@@ -439,6 +403,7 @@ fn is_release_segment(segment: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'))
 }
 
+#[cfg(test)]
 pub fn is_release_page_url(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://github.com/") else {
         return false;
@@ -554,7 +519,6 @@ mod tests {
                 .iter()
                 .map(|name| GhAsset {
                     name: name.to_string(),
-                    url: String::new(),
                     browser_download_url: format!("https://example.com/{name}"),
                     size: 1,
                     digest: None,

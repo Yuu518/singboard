@@ -4,8 +4,8 @@ use std::time::Duration;
 use crate::service::scm;
 
 use super::{
-    CORE_PROGRESS_EVENT, CoreUpdateResult, STAGED_MANIFEST, StagedCore, UPDATE_LOCK, apply_mirror,
-    core_asset_hash, download_asset, emit_progress, staged_matches, verify_archive,
+    CORE_PROGRESS_EVENT, CoreUpdateResult, UPDATE_LOCK, apply_mirror, core_asset_hash,
+    download_asset, emit_progress, staged_matches, verify_archive,
 };
 
 const CORE_EXE_NAME: &str = "sing-box.exe";
@@ -231,68 +231,6 @@ pub(crate) fn swap_and_restart(
     Ok(was_running)
 }
 
-/// 下载资产并解压，返回其中 sing-box.exe 的 SHA-256。
-/// 用于版本号相同时比对本地核心与上游资产是否一致（缓存未命中时调用）
-pub async fn probe_asset_core_hash(
-    app: super::UpdateContext,
-    asset_url: String,
-    asset_size: u64,
-    asset_digest: String,
-    mirror: Option<String>,
-) -> Result<String, String> {
-    core_asset_hash(&asset_digest)?;
-    let _guard = UPDATE_LOCK
-        .try_lock()
-        .map_err(|_| "更新正在进行中".to_string())?;
-
-    let staging = app.directory.join("core-update");
-    let _ = std::fs::remove_dir_all(&staging);
-    std::fs::create_dir_all(&staging).map_err(|e| format!("创建临时目录失败: {}", e))?;
-    let cleanup = |msg: String| {
-        let _ = std::fs::remove_dir_all(&staging);
-        msg
-    };
-
-    let download_url = apply_mirror(&mirror, &asset_url);
-    let zip_path = staging.join("core.zip");
-    download_asset(
-        &app,
-        CORE_PROGRESS_EVENT,
-        &download_url,
-        asset_size,
-        &zip_path,
-    )
-    .await
-    .map_err(cleanup)?;
-
-    emit_progress(&app, CORE_PROGRESS_EVENT, "extract", 0, 0);
-    // 解压结果与清单留在 staging：用户确认重新安装时直接取用，不再下载一遍
-    let hash = {
-        let staging = staging.clone();
-        let asset_url = asset_url.clone();
-        tokio::task::spawn_blocking(move || {
-            let files_dir = staging.join("files");
-            extract_core_files(&zip_path, &files_dir, &asset_digest)?;
-            let exe_hash = crate::service::helper::sha256_file(&files_dir.join(CORE_EXE_NAME))?;
-            let manifest = serde_json::to_string(&StagedCore {
-                asset_url,
-                asset_size,
-                asset_digest,
-            })
-            .map_err(|e| format!("写入清单失败: {}", e))?;
-            std::fs::write(staging.join(STAGED_MANIFEST), manifest)
-                .map_err(|e| format!("写入清单失败: {}", e))?;
-            Ok::<String, String>(exe_hash)
-        })
-        .await
-        .map_err(|e| format!("任务执行失败: {}", e))
-        .and_then(|r| r)
-        .map_err(cleanup)?
-    };
-
-    Ok(hash)
-}
-
 pub async fn perform_core_update(
     app: super::UpdateContext,
     asset_url: String,
@@ -392,6 +330,7 @@ pub async fn perform_core_update(
 
 #[cfg(test)]
 mod tests {
+    use super::super::{STAGED_MANIFEST, StagedCore};
     use super::*;
     use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
