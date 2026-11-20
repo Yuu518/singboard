@@ -93,11 +93,16 @@ impl Overview {
         let ws = self.workspace.read(cx);
         let active = ws.page;
         let tint = ws.glass_tint;
-        let target = if ws.header_scrolled() { 1. } else { 0. };
-        let dt = self.title_tick.elapsed().as_secs_f32().min(0.033);
+        let target = ws.header_scroll_progress();
+        let dt = self.title_tick.elapsed().as_secs_f32().min(0.05);
         self.title_tick = std::time::Instant::now();
-        self.title_opacity += (target - self.title_opacity).clamp(-5. * dt, 5. * dt);
-        if (target - self.title_opacity).abs() > 0.001 { window.request_animation_frame(); }
+        let blend = 1. - (-16. * dt).exp();
+        self.title_opacity += (target - self.title_opacity) * blend;
+        if (target - self.title_opacity).abs() > 0.002 {
+            window.request_animation_frame();
+        } else {
+            self.title_opacity = target;
+        }
         let opacity = self.title_opacity;
         let page_title = PAGES.iter().find(|(page, _)| *page == active).map(|(_, label)| *label).unwrap_or("");
         let connected = ws.overview_live();
@@ -345,7 +350,7 @@ impl Overview {
                     .window_control_area(WindowControlArea::Drag)
                     .child(
                         div()
-                            .mt(px(4. * (1. - opacity)))
+                            .mt(px(6. * (1. - opacity)))
                             .opacity(opacity)
                             .text_size(px(15.))
                             .font_weight(FontWeight::SEMIBOLD)

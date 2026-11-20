@@ -52,6 +52,36 @@ void main() {
     expect(changes, [2, 2]);
   });
 
+  testWidgets('底栏胶囊跟随外部页面滑动进度并在结束后归位', (tester) async {
+    const destinations = [
+      GlassBottomNavItem('home', '概览'),
+      GlassBottomNavItem('proxies', '代理'),
+      GlassBottomNavItem('connections', '连接'),
+    ];
+    final progress = ValueNotifier<double?>(null);
+    addTearDown(progress.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          bottomNavigationBar: GlassBottomNav(
+            index: 0,
+            items: destinations,
+            pageProgress: progress,
+            onChanged: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    progress.value = 0.6;
+    await tester.pump(const Duration(milliseconds: 60));
+    progress.value = 1.0;
+    await tester.pump(const Duration(milliseconds: 60));
+    progress.value = null;
+    await tester.pumpAndSettle();
+    expect(find.byType(GlassBottomNav), findsOneWidget);
+  });
+
   testWidgets('API 不可用时拦截操作，恢复后可在同一页面继续', (tester) async {
     var clicks = 0;
     Widget page((String, String, bool)? mask) => MaterialApp(

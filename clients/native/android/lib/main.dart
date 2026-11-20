@@ -22,6 +22,77 @@ const _platformChannel = MethodChannel('singboard/config');
 
 void main() => runApp(const Panel());
 
+class _GlassScrollBehavior extends MaterialScrollBehavior {
+  const _GlassScrollBehavior();
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      const BouncingScrollPhysics(decelerationRate: ScrollDecelerationRate.normal);
+
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) => child;
+}
+
+class _GentlePageScrollPhysics extends PageScrollPhysics {
+  const _GentlePageScrollPhysics({super.parent});
+
+  @override
+  _GentlePageScrollPhysics applyTo(ScrollPhysics? ancestor) =>
+      _GentlePageScrollPhysics(parent: buildParent(ancestor));
+
+  @override
+  SpringDescription get spring => SpringDescription.withDampingRatio(
+    mass: 1.0,
+    stiffness: 260.0,
+    ratio: 1.05,
+  );
+}
+
+class _SwipePageTransition extends StatelessWidget {
+  final PageController controller;
+  final int index;
+  final int activeTab;
+  final Widget child;
+
+  const _SwipePageTransition({
+    required this.controller,
+    required this.index,
+    required this.activeTab,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (MediaQuery.disableAnimationsOf(context)) return child;
+    return AnimatedBuilder(
+      animation: controller,
+      child: child,
+      builder: (_, content) {
+        final page =
+            controller.positions.length == 1 && controller.position.haveDimensions
+            ? (controller.page ?? activeTab.toDouble())
+            : activeTab.toDouble();
+        final delta = (index - page).clamp(-1.0, 1.0);
+        final abs = delta.abs();
+        final scale = abs < 0.0005 ? 1.0 : 1.0 - 0.035 * abs;
+        final opacity = abs < 0.0005 ? 1.0 : (1.0 - 0.32 * abs).clamp(0.68, 1.0);
+        final dx = abs < 0.0005 ? 0.0 : -delta * 18.0;
+        return Opacity(
+          opacity: opacity,
+          child: Transform.translate(
+            offset: Offset(dx, 0),
+            child: Transform.scale(scale: scale, child: content),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class Panel extends StatelessWidget {
   const Panel({super.key});
 
@@ -31,6 +102,7 @@ class Panel extends StatelessWidget {
     builder: (_, __) => MaterialApp(
       title: 'Singboard',
       debugShowCheckedModeBanner: false,
+      scrollBehavior: const _GlassScrollBehavior(),
       themeMode: _theme.value,
       theme: ThemeData(
         useMaterial3: true,
@@ -172,9 +244,13 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   }
   final _pager = PageController();
   final _pageKeys = List.generate(6, (_) => GlobalKey());
-  final _scrolled = List.filled(6, false);
-  late final _pageFade = AnimationController(vsync: this, duration: const Duration(milliseconds: 150), value: 1);
-  late final _pageOpacity = _pageFade.drive(CurveTween(curve: Curves.easeOut));
+  final _scrollProgress = List<double>.filled(6, 0.0);
+  final _headerScroll = ValueNotifier<int>(0);
+  final _swipeProgress = ValueNotifier<double?>(null);
+  bool _userSwiping = false;
+  late final _pageFade = AnimationController(vsync: this, duration: const Duration(milliseconds: 220), value: 1);
+  late final _pageOpacity = _pageFade.drive(CurveTween(curve: Curves.easeOutCubic));
+  double _pageSlideDir = 0;
   int? _targetPage;
 
   void _selectTab(int next) {
@@ -187,7 +263,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
             if (MediaQuery.disableAnimationsOf(context)) {
               scroll.jumpTo(scroll.minScrollExtent);
             } else {
-              scroll.animateTo(scroll.minScrollExtent, duration: const Duration(milliseconds: 240), curve: Curves.easeOut);
+              scroll.animateTo(scroll.minScrollExtent, duration: const Duration(milliseconds: 300), curve: Curves.easeOutQuart);
             }
           }
         }
@@ -196,6 +272,9 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       _pageKeys[next].currentContext?.visitChildElements(scrollTop);
       return;
     }
+    final prev = tab;
+    _userSwiping = false;
+    _swipeProgress.value = null;
     setState(() => tab = next);
     if (!_pager.hasClients) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -203,14 +282,24 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       });
       return;
     }
-    if (preferences['pageSwipe'] == true && !MediaQuery.disableAnimationsOf(context)) {
+    final swipeOn = preferences['pageSwipe'] == true;
+    final animated = !MediaQuery.disableAnimationsOf(context);
+    if (swipeOn && animated && (next - prev).abs() == 1) {
       _targetPage = next;
-      _pager.animateToPage(next, duration: const Duration(milliseconds: 260), curve: Curves.easeOutCubic)
+      _pageSlideDir = 0;
+      _pageFade.value = 1;
+      _pager.animateToPage(next, duration: const Duration(milliseconds: 340), curve: Curves.easeOutQuart)
           .whenComplete(() { if (_targetPage == next) _targetPage = null; });
     } else {
       _targetPage = null;
       _pager.jumpToPage(next);
-      if (!MediaQuery.disableAnimationsOf(context)) _pageFade.forward(from: 0);
+      if (animated) {
+        _pageSlideDir = next > prev ? 1 : -1;
+        _pageFade.forward(from: 0);
+      } else {
+        _pageSlideDir = 0;
+        _pageFade.value = 1;
+      }
     }
   }
   final entries = <Map<String, dynamic>>[];
@@ -510,92 +599,110 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     final nextFailures = (batch['failures'] as num?)?.toInt() ?? 0;
     final trafficFailures = (sample['failures'] as num?)?.toInt() ?? 0;
     final connectionFailures = (snapshot['failures'] as num?)?.toInt() ?? 0;
-    if (lines.isEmpty &&
-        samples.isEmpty &&
-        snapshot['connections'] == null &&
-        snapshot['closed'] == null &&
-        snapshot['memory'] == null &&
-        (coreMemory == null || snapshot['memory_open'] == true) &&
-        (metrics.isEmpty || snapshot['has_frame'] == true) &&
-        (!hasTraffic || sample['has_frame'] == true) &&
-        connectionStatus == snapshot['status'] &&
-        logStatus == batch['status'] &&
-        _logFailures == nextFailures &&
-        _trafficFailures == trafficFailures &&
-        _connectionFailures == connectionFailures &&
-        trafficStatus == sample['status']) {
+    final statusChanged =
+        (metrics.isNotEmpty && snapshot['has_frame'] != true) ||
+        (hasTraffic && sample['has_frame'] != true) ||
+        connectionStatus != snapshot['status'] ||
+        logStatus != batch['status'] ||
+        _logFailures != nextFailures ||
+        _trafficFailures != trafficFailures ||
+        _connectionFailures != connectionFailures ||
+        trafficStatus != sample['status'];
+    final hasConnections = snapshot['connections'] != null;
+    final hasClosed = snapshot['closed'] != null;
+    final hasMemory =
+        snapshot['memory'] != null ||
+        (coreMemory != null && snapshot['memory_open'] != true);
+    final hasLogs = lines.isNotEmpty || (batch['dropped'] as int) > 0;
+    if (!statusChanged &&
+        !hasConnections &&
+        !hasClosed &&
+        !hasMemory &&
+        lines.isEmpty &&
+        samples.isEmpty) {
       return;
     }
-    setState(() {
-      final prevLogStatus = logStatus;
-      logStatus = batch['status'] as String;
-      _logFailures = nextFailures;
-      _trafficFailures = trafficFailures;
-      _connectionFailures = connectionFailures;
-      trafficStatus = sample['status'] as String;
-      connectionStatus = snapshot['status'] as String;
-      _syncNetwork();
-      if (snapshot['connections'] case final Map data) {
-        active = (data['connections'] as List? ?? []).cast<Item>();
-        metrics = data['metrics'] as Item? ?? {};
-        appendSample(connectionTrend, active.length);
-      }
-      if (snapshot['memory'] case final int bytes) {
-        coreMemory = bytes;
-        appendSample(memoryTrend, bytes);
-      }
-      if (snapshot['memory_open'] != true) coreMemory = null;
-      if (snapshot['has_frame'] != true) {
-        active = [];
-        metrics = {};
-        frozenTopology = hoveredTopology = null;
-      }
-      if (snapshot['closed'] case final List finished) {
-        history = [...finished.cast<Item>(), ...history].take(500).toList();
-      }
-      if (sample['has_frame'] != true) hasTraffic = false;
-      if (prevLogStatus == '已连接' && logStatus != '已连接') {
+    final prevLogStatus = logStatus;
+    logStatus = batch['status'] as String;
+    _logFailures = nextFailures;
+    _trafficFailures = trafficFailures;
+    _connectionFailures = connectionFailures;
+    trafficStatus = sample['status'] as String;
+    connectionStatus = snapshot['status'] as String;
+    _syncNetwork();
+    if (snapshot['connections'] case final Map data) {
+      active = (data['connections'] as List? ?? []).cast<Item>();
+      metrics = data['metrics'] as Item? ?? {};
+      appendSample(connectionTrend, active.length);
+    }
+    if (snapshot['memory'] case final int bytes) {
+      coreMemory = bytes;
+      appendSample(memoryTrend, bytes);
+    }
+    if (snapshot['memory_open'] != true) coreMemory = null;
+    if (snapshot['has_frame'] != true) {
+      active = [];
+      metrics = {};
+      frozenTopology = hoveredTopology = null;
+    }
+    if (snapshot['closed'] case final List finished) {
+      history = [...finished.cast<Item>(), ...history].take(500).toList();
+    }
+    if (sample['has_frame'] != true) hasTraffic = false;
+    var addedLogMarker = false;
+    if (prevLogStatus == '已连接' && logStatus != '已连接') {
+      final now = DateTime.now();
+      _logGapSince ??=
+          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
+    } else if (logStatus == '已连接') {
+      if (_logGapSince != null && entries.isNotEmpty) {
         final now = DateTime.now();
-        _logGapSince ??=
+        final end =
             '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
-      } else if (logStatus == '已连接') {
-        if (_logGapSince != null && entries.isNotEmpty) {
-          final now = DateTime.now();
-          final end =
-              '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
-          entries.add({
-            'seq': _logSeq++,
-            'type': 'marker',
-            'time': now.millisecondsSinceEpoch,
-            'payload': '与核心的连接中断，期间的日志未收到（$_logGapSince–$end）',
-          });
-        }
-        _logGapSince = null;
-      }
-      total += lines.length + (batch['dropped'] as int);
-      for (final raw in lines) {
-        entries.add({...raw, 'seq': _logSeq++});
-      }
-      if (entries.length > limit) {
-        entries.removeRange(0, entries.length - limit);
-      }
-      if (lines.isNotEmpty && tab == 3 && frozen == null && _logAutoScroll) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_logScroll.hasClients && _logAutoScroll) {
-            _logScroll.jumpTo(_logScroll.position.maxScrollExtent);
-          }
+        entries.add({
+          'seq': _logSeq++,
+          'type': 'marker',
+          'time': now.millisecondsSinceEpoch,
+          'payload': '与核心的连接中断，期间的日志未收到（$_logGapSince–$end）',
         });
+        addedLogMarker = true;
       }
-      if (samples.isNotEmpty && trafficStatus == '已连接') {
-        hasTraffic = true;
-        up = samples.last['up'] as int;
-        down = samples.last['down'] as int;
-        for (final value in samples) {
-          appendSample(downTrend, value['down']);
-          appendSample(upTrend, value['up']);
+      _logGapSince = null;
+    }
+    total += lines.length + (batch['dropped'] as int);
+    for (final raw in lines) {
+      entries.add({...raw, 'seq': _logSeq++});
+    }
+    if (entries.length > limit) {
+      entries.removeRange(0, entries.length - limit);
+    }
+    if (lines.isNotEmpty && tab == 3 && frozen == null && _logAutoScroll) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_logScroll.hasClients && _logAutoScroll) {
+          _logScroll.jumpTo(_logScroll.position.maxScrollExtent);
         }
+      });
+    }
+    final hasTrafficSample = samples.isNotEmpty && trafficStatus == '已连接';
+    if (hasTrafficSample) {
+      hasTraffic = true;
+      up = samples.last['up'] as int;
+      down = samples.last['down'] as int;
+      for (final value in samples) {
+        appendSample(downTrend, value['down']);
+        appendSample(upTrend, value['up']);
       }
-    });
+    }
+    final shouldRebuild = statusChanged ||
+        (!_userSwiping &&
+            switch (tab) {
+              0 => hasConnections || hasMemory || hasTrafficSample,
+              1 => hasConnections,
+              2 => hasConnections || hasClosed,
+              3 => hasLogs || addedLogMarker,
+              _ => false,
+            });
+    if (shouldRebuild) setState(() {});
   }
 
   void disconnect() {
@@ -641,6 +748,8 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     HardwareKeyboard.instance.removeHandler(_logShortcut);
     _logSearchCtrl.dispose();
     _pager.dispose();
+    _headerScroll.dispose();
+    _swipeProgress.dispose();
     _pageFade.dispose();
     _logScroll.dispose();
     _logSearchFocus.dispose();
@@ -2761,9 +2870,14 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     };
     return _PagerPanel(key: _pageKeys[index], child: NotificationListener<ScrollNotification>(
       onNotification: (event) {
-        if ((index == 0 || index == 5) && event.metrics.axis == Axis.vertical && event.depth == 0) {
-          final scrolled = event.metrics.pixels > event.metrics.minScrollExtent;
-          if (_scrolled[index] != scrolled) setState(() => _scrolled[index] = scrolled);
+        if (index != 3 && event.metrics.axis == Axis.vertical && event.depth == 0) {
+          final raw = ((event.metrics.pixels - event.metrics.minScrollExtent) / 32.0).clamp(0.0, 1.0);
+          final next = raw * raw * (3.0 - 2.0 * raw);
+          final prev = _scrollProgress[index];
+          if ((prev - next).abs() > 0.015 || (next == 0 && prev != 0) || (next == 1 && prev != 1)) {
+            _scrollProgress[index] = next;
+            _headerScroll.value++;
+          }
         }
         return false;
       },
@@ -2778,6 +2892,12 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     final state = rootService['state'];
     final busy = rootEnabled && (probing || state == 'starting' || state == 'stopping');
     final uptime = rootRunning ? rootService['uptimeSeconds'] as int? : null;
+    final statusText = uptime != null ? _uptime(uptime) : state == 'starting' ? '启动中'
+        : state == 'stopping' ? '停止中' : rootEnabled ? (running ? '运行中' : '已停止')
+        : running ? '已连接' : overviewConnecting ? '连接中' : '未连接';
+    final onStatusTap = rootEnabled && !busy && (running || state == 'stopped' || state == 'not_installed')
+        ? () => rootOperation(rootRunning ? 'root_stop' : 'root_start', rootRunning ? '停止核心' : '启动核心')
+        : null;
     return PopScope(
       canPop: tab == 0,
       onPopInvokedWithResult: (popped, _) {
@@ -2791,32 +2911,76 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
               extendBody: true,
               body: Column(
                 children: [
-                  GlassAppHeader(
-                    title: _scrolled[tab] ? _titles[tab] : 'singboard',
-                    scrolled: _scrolled[tab],
-                    showStatusPill: tab != 0,
-                    connected: running,
-                    busy: busy,
-                    statusText: uptime != null ? _uptime(uptime) : state == 'starting' ? '启动中'
-                        : state == 'stopping' ? '停止中' : rootEnabled ? (running ? '运行中' : '已停止')
-                        : running ? '已连接' : overviewConnecting ? '连接中' : '未连接',
-                    onStatusTap: rootEnabled && !busy && (running || state == 'stopped' || state == 'not_installed')
-                        ? () => rootOperation(rootRunning ? 'root_stop' : 'root_start', rootRunning ? '停止核心' : '启动核心')
-                        : null,
-                  ),
-                  Expanded(child: FadeTransition(opacity: _pageOpacity, child: PageView.builder(
-                    controller: _pager,
-                    itemCount: _titles.length,
-                    physics: preferences['pageSwipe'] == true ? null : const NeverScrollableScrollPhysics(),
-                    onPageChanged: (i) {
-                      if (_targetPage == null && tab != i) setState(() => tab = i);
+                  AnimatedBuilder(
+                    animation: Listenable.merge([_pager, _headerScroll]),
+                    builder: (_, __) {
+                      final pos = _pager.positions.length == 1 && _pager.position.haveDimensions
+                          ? (_pager.page ?? tab.toDouble())
+                          : tab.toDouble();
+                      final lo = pos.floor().clamp(0, _scrollProgress.length - 1);
+                      final hi = pos.ceil().clamp(0, _scrollProgress.length - 1);
+                      final frac = (pos - lo).clamp(0.0, 1.0);
+                      final headerProgress =
+                          _scrollProgress[lo] + (_scrollProgress[hi] - _scrollProgress[lo]) * frac;
+                      final titleIdx = _scrollProgress[lo] >= _scrollProgress[hi] ? lo : hi;
+                      return GlassAppHeader(
+                        title: 'singboard',
+                        scrolledTitle: titleIdx != 3 && headerProgress > 0.01
+                            ? _titles[titleIdx]
+                            : null,
+                        scrollProgress: headerProgress,
+                        showStatusPill: tab != 0,
+                        connected: running,
+                        busy: busy,
+                        statusText: statusText,
+                        onStatusTap: onStatusTap,
+                      );
                     },
-                    itemBuilder: (_, i) => _page(i),
-                  ))),
+                  ),
+                  Expanded(child: FadeTransition(
+                    opacity: _pageOpacity,
+                    child: AnimatedBuilder(
+                      animation: _pageOpacity,
+                      builder: (_, child) => Transform.translate(
+                        offset: Offset(_pageSlideDir * 20.0 * (1.0 - _pageOpacity.value), 0),
+                        child: child,
+                      ),
+                      child: NotificationListener<ScrollNotification>(
+                        onNotification: (event) {
+                          if (event.depth != 0) return false;
+                          if (event is ScrollStartNotification && event.dragDetails != null) {
+                            _userSwiping = true;
+                          } else if (event is ScrollUpdateNotification && _userSwiping && _pager.positions.length == 1) {
+                            _swipeProgress.value = _pager.page;
+                          } else if (event is ScrollEndNotification && _userSwiping) {
+                            _userSwiping = false;
+                            _swipeProgress.value = null;
+                          }
+                          return false;
+                        },
+                        child: PageView.builder(
+                          controller: _pager,
+                          itemCount: _titles.length,
+                          physics: preferences['pageSwipe'] == true
+                              ? const _GentlePageScrollPhysics(parent: BouncingScrollPhysics())
+                              : const NeverScrollableScrollPhysics(),
+                          onPageChanged: (i) {
+                            if (_targetPage == null && tab != i) setState(() => tab = i);
+                          },
+                          itemBuilder: (_, i) => _SwipePageTransition(
+                            controller: _pager,
+                            index: i,
+                            activeTab: tab,
+                            child: _page(i),
+                          ),
+                        ),
+                      ),
+                    ),
+                  )),
                 ],
               ),
               bottomNavigationBar: MediaQuery.viewInsetsOf(context).bottom > 0 ? null : GlassBottomNav(
-                index: tab, onChanged: _selectTab,
+                index: tab, onChanged: _selectTab, pageProgress: _swipeProgress,
                 items: const [
                   GlassBottomNavItem('home', '概览'), GlassBottomNavItem('proxies', '代理'),
                   GlassBottomNavItem('connections', '连接'), GlassBottomNavItem('logs', '日志'),

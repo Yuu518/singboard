@@ -22,7 +22,7 @@ pub(super) struct RuleDetail {
     query: String,
     status: String,
     match_status: String,
-    scroll: UniformListScrollHandle,
+    pub(super) scroll: UniformListScrollHandle,
     task: Option<Task<()>>,
 }
 
@@ -597,6 +597,7 @@ impl Workspace {
         d.active_type = rule_type;
         rebuild_rule_detail_shown(d);
         d.scroll.scroll_to_item(0, ScrollStrategy::Top);
+        self.cancel_scroll(scrolling::ScrollTarget::RuleDetail);
         cx.notify();
     }
 
@@ -636,6 +637,7 @@ impl Workspace {
                 });
             }));
         }
+        self.cancel_scroll(scrolling::ScrollTarget::RuleDetail);
         cx.notify();
     }
 
@@ -831,7 +833,17 @@ impl Workspace {
                     .into_any_element()
             } else if show_providers {
                 let usage_map = std::sync::Arc::new(provider_usage);
-                uniform_list(
+                div()
+                    .relative()
+                    .size_full()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .relative()
+                            .top(self.overscroll_offset(scrolling::ScrollTarget::PageList))
+                            .size_full()
+                            .child(
+                                uniform_list(
                     "rule-providers-list",
                     count,
                     cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
@@ -1009,11 +1021,24 @@ impl Workspace {
                     }),
                 )
                 .track_scroll(&self.page_list_scroll)
-                .size_full()
-                .into_any_element()
+                .size_full(),
+                    ),
+                )
+                    .child(self.smooth_scroll_capture(scrolling::ScrollTarget::PageList, cx))
+                    .into_any_element()
             } else {
                 let total_rows = count;
-                uniform_list(
+                div()
+                    .relative()
+                    .size_full()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .relative()
+                            .top(self.overscroll_offset(scrolling::ScrollTarget::PageList))
+                            .size_full()
+                            .child(
+                                uniform_list(
                     "rules-flow-list",
                     count,
                     cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
@@ -1312,8 +1337,11 @@ impl Workspace {
                     }),
                 )
                 .track_scroll(&self.page_list_scroll)
-                .size_full()
-                .into_any_element()
+                .size_full(),
+                    ),
+                )
+                    .child(self.smooth_scroll_capture(scrolling::ScrollTarget::PageList, cx))
+                    .into_any_element()
             })
             .when(count > 0, |card| card.vertical_scrollbar(&self.page_list_scroll));
 
@@ -1591,7 +1619,12 @@ impl Workspace {
                             .p(px(4.))
                             .overflow_hidden()
                             .child(
-                                uniform_list(
+                                div()
+                                    .relative()
+                                    .top(self.overscroll_offset(scrolling::ScrollTarget::RuleDetail))
+                                    .size_full()
+                                    .child(
+                                        uniform_list(
                                     "rule-detail-entries",
                                     d.shown.len(),
                                     cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
@@ -1690,7 +1723,9 @@ impl Workspace {
                                 )
                                 .track_scroll(&d.scroll)
                                 .size_full(),
+                                    ),
                             )
+                            .child(self.smooth_scroll_capture(scrolling::ScrollTarget::RuleDetail, cx))
                             .vertical_scrollbar(&d.scroll),
                     );
                 }

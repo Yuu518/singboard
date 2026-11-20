@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/scheduler.dart' show Ticker;
 
 part 'glass_navigation.dart';
@@ -273,13 +274,21 @@ class GlassBackdrop extends StatelessWidget {
             fit: BoxFit.cover,
             gaplessPlayback: true,
             errorBuilder: (_, __, ___) => RepaintBoundary(
-              child: CustomPaint(painter: _DefaultAuroraPainter(c.dark)),
+              child: CustomPaint(
+                painter: _DefaultAuroraPainter(c.dark),
+                isComplex: true,
+                willChange: false,
+              ),
             ),
           ),
           ColoredBox(color: c.backdropVeil),
         ] else
           RepaintBoundary(
-            child: CustomPaint(painter: _DefaultAuroraPainter(c.dark)),
+            child: CustomPaint(
+              painter: _DefaultAuroraPainter(c.dark),
+              isComplex: true,
+              willChange: false,
+            ),
           ),
         child,
       ],
@@ -368,32 +377,74 @@ class GlassCard extends StatelessWidget {
     final c = SingboardColors.of(context);
     final scope = GlassScope.of(context);
     final t = scope.tint.clamp(0.0, 1.0);
+    final useBackdrop = scope.hasWallpaper || popover || floating;
     final alpha = popover ? scope.alpha(.42 + .30 * t, .70) : floating ? scope.alpha(0.14 + 0.46 * t, .55) : scope.alpha(0.30 + 0.32 * t, .6);
-    final blur = popover ? 4.0 + 26.0 * t : 3.0 + 22.0 * t;
+    final blur = useBackdrop ? (popover ? 4.0 + 18.0 * t : 3.0 + 14.0 * t) : 0.0;
     final bg = tintColor ?? c.glassRgb.withValues(alpha: alpha);
     final border =
         borderColor ??
         (c.dark
             ? Colors.white.withValues(alpha: 0.14)
             : Colors.white.withValues(alpha: 0.72));
+    final shape = BorderRadius.circular(radius);
+    if (!useBackdrop) {
+      return RepaintBoundary(
+        child: Container(
+          decoration: BoxDecoration(
+            color: bg,
+            image: scope.grain,
+            borderRadius: shape,
+            border: Border.all(color: border, width: 0.5),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: c.dark ? .30 : .08),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Padding(padding: padding, child: child),
+        ),
+      );
+    }
     final box = Container(
       decoration: BoxDecoration(
         color: bg,
         image: scope.grain,
-        borderRadius: BorderRadius.circular(radius),
+        borderRadius: shape,
         border: Border.all(color: border, width: 0.5),
       ),
       child: Padding(padding: padding, child: child),
     );
-    return CustomPaint(painter: _GlassCardShadow(radius, c.dark), child: ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
+    final clipped = ClipRRect(
+      borderRadius: shape,
       child: blur > 0
           ? _GlassFilter(
               blur: blur, radius: radius, rim: popover ? 14 : 24, amount: popover ? 12 : 24,
               child: box,
             )
           : box,
-    ));
+    );
+    if (t >= 0.7) {
+      return RepaintBoundary(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: shape,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: c.dark ? .34 : .10),
+                blurRadius: 18,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: clipped,
+        ),
+      );
+    }
+    return RepaintBoundary(
+      child: CustomPaint(painter: _GlassCardShadow(radius, c.dark), child: clipped),
+    );
   }
 }
 
@@ -460,7 +511,9 @@ class GlassApiGate extends StatelessWidget {
 
 class GlassAppHeader extends StatelessWidget {
   final String title;
+  final String? scrolledTitle;
   final bool scrolled;
+  final double scrollProgress;
   final bool showStatusPill;
   final bool connected;
   final bool busy;
@@ -470,7 +523,9 @@ class GlassAppHeader extends StatelessWidget {
   const GlassAppHeader({
     super.key,
     required this.title,
-    required this.scrolled,
+    this.scrolledTitle,
+    this.scrolled = false,
+    this.scrollProgress = 0.0,
     required this.showStatusPill,
     required this.connected,
     this.busy = false,
@@ -483,22 +538,75 @@ class GlassAppHeader extends StatelessWidget {
     final c = SingboardColors.of(context);
     final scope = GlassScope.of(context);
     final t = scope.tint.clamp(0.0, 1.0);
-    final filled = scope.hasWallpaper || scrolled;
-    final blur = filled ? (3.0 + 22.0 * t) : 0.0;
-    final bar = AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
+    final progress = (scrollProgress > 0 ? scrollProgress : (scrolled ? 1.0 : 0.0)).clamp(0.0, 1.0);
+    final surface = scope.hasWallpaper ? 1.0 : progress;
+    final blur = surface > 0.01 && scope.hasWallpaper ? (3.0 + 14.0 * t) * surface : 0.0;
+    final titleStyle = TextStyle(
+      fontSize: 15,
+      fontWeight: FontWeight.w600,
+      letterSpacing: -0.2,
+      color: c.ink,
+    );
+    final Widget titleWidget = scrolledTitle != null && scrolledTitle != title
+        ? Stack(
+            alignment: Alignment.centerLeft,
+            children: [
+              Opacity(
+                opacity: (1.0 - progress).clamp(0.0, 1.0),
+                child: Transform.translate(
+                  offset: Offset(0, -4.0 * progress),
+                  child: Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: titleStyle,
+                  ),
+                ),
+              ),
+              Opacity(
+                opacity: progress,
+                child: Transform.translate(
+                  offset: Offset(0, 6.0 * (1.0 - progress)),
+                  child: Text(
+                    scrolledTitle!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: titleStyle,
+                  ),
+                ),
+              ),
+            ],
+          )
+        : Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: titleStyle,
+          );
+    final bar = Container(
       padding: EdgeInsets.only(
         top: MediaQuery.paddingOf(context).top,
         left: panelGutter(context) + 4 + MediaQuery.paddingOf(context).left,
         right: panelGutter(context) + 4 + MediaQuery.paddingOf(context).right,
       ),
       decoration: BoxDecoration(
-        color: filled
-            ? c.glassRgb.withValues(alpha: scope.alpha(0.35 + 0.45 * t, .6))
+        color: surface > 0.01
+            ? c.glassRgb.withValues(
+                alpha:
+                    (scope.hasWallpaper
+                        ? scope.alpha(0.35 + 0.45 * t, .6)
+                        : (0.72 + 0.16 * t)) *
+                    surface,
+              )
             : Colors.transparent,
-        image: filled ? scope.grain : null,
-        border: filled
-            ? Border(bottom: BorderSide(color: c.hairline, width: 0.5))
+        image: surface > 0.01 ? scope.grain : null,
+        border: surface > 0.01
+            ? Border(
+                bottom: BorderSide(
+                  color: c.hairline.withValues(alpha: c.hairline.a * surface),
+                  width: 0.5,
+                ),
+              )
             : null,
       ),
       child: SizedBox(
@@ -510,19 +618,7 @@ class GlassAppHeader extends StatelessWidget {
               child: Image.asset('assets/favicon.png', width: 24, height: 24),
             ),
             const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: -0.2,
-                  color: c.ink,
-                ),
-              ),
-            ),
+            Expanded(child: titleWidget),
             if (showStatusPill)
               GestureDetector(
                 onTap: onStatusTap,

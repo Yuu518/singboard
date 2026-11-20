@@ -38,11 +38,13 @@ class GlassBottomNav extends StatefulWidget {
   final List<GlassBottomNavItem> items;
   final int index;
   final ValueChanged<int> onChanged;
+  final ValueListenable<double?>? pageProgress;
   const GlassBottomNav({
     super.key,
     required this.items,
     required this.index,
     required this.onChanged,
+    this.pageProgress,
   });
 
   @override
@@ -72,6 +74,35 @@ class _GlassBottomNavState extends State<GlassBottomNav>
   int? _pointer, _focused;
   double _travel = 0;
   bool _releasing = false;
+  double? _externalPage;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.pageProgress?.addListener(_onPageProgress);
+  }
+
+  void _onPageProgress() {
+    if (!mounted || _pointer != null) return;
+    final p = widget.pageProgress?.value;
+    if (p != null) {
+      final clamped = p.clamp(0.0, (widget.items.length - 1).toDouble());
+      final still = MediaQuery.disableAnimationsOf(context);
+      _externalPage = clamped;
+      _releasing = false;
+      _position.target = clamped;
+      _glow.target = still ? 0 : .55;
+      _scaleX.target = still ? 1 : 1.05;
+      _scaleY.target = still ? 1 : 1.05;
+      _animate();
+    } else if (_externalPage != null) {
+      _externalPage = null;
+      _position.target = widget.index.toDouble();
+      _glow.target = 0;
+      _scaleX.target = _scaleY.target = 1;
+      _animate();
+    }
+  }
 
   void _animate() {
     if (!_ticker.isActive) {
@@ -86,7 +117,7 @@ class _GlassBottomNavState extends State<GlassBottomNav>
     final prior = _position.value;
     final still = MediaQuery.disableAnimationsOf(context);
     _position.step(dt);
-    _speed.target = !still && (_pointer != null || _releasing)
+    _speed.target = !still && (_pointer != null || _releasing || _externalPage != null)
         ? (_position.value - prior) / dt / (widget.items.length - 1)
         : 0;
     if (_releasing &&
@@ -104,14 +135,21 @@ class _GlassBottomNavState extends State<GlassBottomNav>
       }
     }
     setState(() {});
-    if (!_releasing && _springs.every((spring) => spring.settled))
+    if (!_releasing &&
+        _externalPage == null &&
+        _springs.every((spring) => spring.settled)) {
       _ticker.stop();
+    }
   }
 
   @override
   void didUpdateWidget(GlassBottomNav old) {
     super.didUpdateWidget(old);
-    if (old.index != widget.index && _pointer == null) {
+    if (old.pageProgress != widget.pageProgress) {
+      old.pageProgress?.removeListener(_onPageProgress);
+      widget.pageProgress?.addListener(_onPageProgress);
+    }
+    if (old.index != widget.index && _pointer == null && _externalPage == null) {
       _position.target = widget.index.toDouble();
       _animate();
     }
@@ -131,6 +169,7 @@ class _GlassBottomNavState extends State<GlassBottomNav>
 
   @override
   void dispose() {
+    widget.pageProgress?.removeListener(_onPageProgress);
     _ticker.dispose();
     super.dispose();
   }
@@ -216,6 +255,7 @@ class _GlassBottomNavState extends State<GlassBottomNav>
                 onPointerDown: (e) {
                   if (_pointer != null) return;
                   _pointer = e.pointer;
+                  _externalPage = null;
                   _travel = 0;
                   _releasing = false;
                   _position.target = ((e.localPosition.dx - 4) / tabWidth)
@@ -265,7 +305,7 @@ class _GlassBottomNavState extends State<GlassBottomNav>
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(32),
                         child: _GlassFilter(
-                          blur: 3 + 22 * scope.tint,
+                          blur: 3 + 14 * scope.tint,
                           spread: 0,
                           child: Stack(
                             fit: StackFit.expand,

@@ -614,240 +614,227 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
       _frozenRows = null;
     }
 
-    return Column(
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(
-            panelGutter(context),
-            0,
-            panelGutter(context),
-            12,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              LayoutBuilder(
-                builder: (context, bounds) {
-                  final title = Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '连接',
-                        style: TextStyle(
-                          fontSize: 26,
-                          height: 1.25,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -.65,
-                          color: scope.backdropInk(c),
-                          shadows: scope.backdropShadows(),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      GlassSegmented<bool>(
-                        items: [
-                          (false, '活跃 (${activeMatches.length})'),
-                          (true, '已关闭 (${historyMatches.length})'),
-                        ],
-                        value: closed,
-                        onChanged: (v) => setState(() => closed = v),
-                      ),
-                    ],
-                  );
-                  final actions = Wrap(
-                    alignment: WrapAlignment.end,
-                    spacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      GlassControl(
-                        radius: 999,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 6,
-                          ),
-                          child: Text.rich(
-                            TextSpan(
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: c.ink,
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
-                              ),
-                              children: [
-                                TextSpan(
-                                  text: '↓ ',
-                                  style: TextStyle(color: c.muted),
-                                ),
-                                TextSpan(
-                                  text: formatBytes(
-                                    frozen?.$3 ?? widget.download,
-                                  ),
-                                ),
-                                TextSpan(
-                                  text: ' · ',
-                                  style: TextStyle(color: c.muted),
-                                ),
-                                TextSpan(
-                                  text: '↑ ',
-                                  style: TextStyle(color: c.muted),
-                                ),
-                                TextSpan(
-                                  text: formatBytes(
-                                    frozen?.$4 ?? widget.upload,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        constraints: const BoxConstraints.tightFor(
-                          width: 32,
-                          height: 32,
-                        ),
-                        padding: EdgeInsets.zero,
-                        tooltip: frozen == null ? '暂停刷新' : '继续刷新',
-                        style: IconButton.styleFrom(
-                          backgroundColor: frozen == null
-                              ? Colors.transparent
-                              : c.primarySoft,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        onPressed: () => setState(
-                          () => frozen = frozen == null
-                              ? (
-                                  List<Item>.of(widget.active),
-                                  List<Item>.of(widget.history),
-                                  widget.download,
-                                  widget.upload,
-                                )
-                              : null,
-                        ),
-                        icon: PlaybackIcon(
-                          paused: frozen != null,
-                          color: frozen != null
-                              ? c.selectionInk
-                              : scope.backdropInk(c),
-                        ),
-                      ),
-                      Visibility(
-                        visible: !closed,
-                        maintainSize: true,
-                        maintainState: true,
-                        maintainAnimation: true,
-                        child: GlassControl(
-                          radius: 999,
-                          tint: c.dangerSoft,
-                          child: TextButton(
-                            onPressed: busy || liveRows.isEmpty
-                                ? null
-                                : () => disconnect(
-                                    liveRows,
-                                    all: query.isEmpty,
-                                    batch: true,
-                                  ),
-                            style: TextButton.styleFrom(
-                              backgroundColor: Colors.transparent,
-                              foregroundColor: c.dangerInk,
-                              minimumSize: const Size(0, 32),
-                              padding: const EdgeInsets.symmetric(horizontal: 12),
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              textStyle: Theme.of(context).textTheme.bodyMedium
-                                  ?.copyWith(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                            ),
-                            child: Text(
-                              query.isEmpty
-                                  ? '断开全部'
-                                  : '断开筛选结果 (${liveRows.length})',
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                  return SizedBox(
-                    width: bounds.maxWidth,
-                    child: Wrap(
-                      alignment: WrapAlignment.spaceBetween,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      runSpacing: 8,
-                      spacing: 12,
-                      children: [
-                        title,
-                        Align(
-                          widthFactor: bounds.maxWidth < 570 ? null : 1,
-                          alignment: Alignment.centerRight,
-                          child: actions,
-                        ),
-                      ],
+        LayoutBuilder(
+          builder: (context, bounds) {
+            final title = Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '连接',
+                  style: TextStyle(
+                    fontSize: 26,
+                    height: 1.25,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -.65,
+                    color: scope.backdropInk(c),
+                    shadows: scope.backdropShadows(),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                GlassSegmented<bool>(
+                  items: [
+                    (false, '活跃 (${activeMatches.length})'),
+                    (true, '已关闭 (${historyMatches.length})'),
+                  ],
+                  value: closed,
+                  onChanged: (v) => setState(() => closed = v),
+                ),
+              ],
+            );
+            final actions = Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                GlassControl(
+                  radius: 999,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
                     ),
-                  );
-                },
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: GlassSearchField(
-                      controller: _searchCtrl,
-                      hint: '搜索域名、IP、端口、进程、规则或节点',
-                      value: query,
-                      onChanged: (v) =>
-                          setState(() => query = v.trim().toLowerCase()),
+                    child: Text.rich(
+                      TextSpan(
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: c.ink,
+                          fontFeatures: const [
+                            FontFeature.tabularFigures(),
+                          ],
+                        ),
+                        children: [
+                          TextSpan(
+                            text: '↓ ',
+                            style: TextStyle(color: c.muted),
+                          ),
+                          TextSpan(
+                            text: formatBytes(
+                              frozen?.$3 ?? widget.download,
+                            ),
+                          ),
+                          TextSpan(
+                            text: ' · ',
+                            style: TextStyle(color: c.muted),
+                          ),
+                          TextSpan(
+                            text: '↑ ',
+                            style: TextStyle(color: c.muted),
+                          ),
+                          TextSpan(
+                            text: formatBytes(
+                              frozen?.$4 ?? widget.upload,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  PopupMenuButton<String>(
-                    initialValue: effectiveSort,
-                    onSelected: selectSort,
-                    itemBuilder: (_) => [
-                      for (final e in sorts.entries)
-                        if (!closed || !{'download', 'upload'}.contains(e.key))
-                          PopupMenuItem(value: e.key, child: Text(e.value)),
-                    ],
-                    child: GlassControl(
-                      radius: 10,
-                      child: SizedBox(
-                        height: 32,
-                        width: 102,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 11),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  sorts[effectiveSort] ?? '最新',
-                                  style: TextStyle(fontSize: 13, color: c.ink),
-                                ),
-                              ),
-                              PanelIcon('select-caret', size: 16, color: c.ink),
-                            ],
-                          ),
-                        ),
+                ),
+                IconButton(
+                  constraints: const BoxConstraints.tightFor(
+                    width: 32,
+                    height: 32,
+                  ),
+                  padding: EdgeInsets.zero,
+                  tooltip: frozen == null ? '暂停刷新' : '继续刷新',
+                  style: IconButton.styleFrom(
+                    backgroundColor: frozen == null
+                        ? Colors.transparent
+                        : c.primarySoft,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: () => setState(
+                    () => frozen = frozen == null
+                        ? (
+                            List<Item>.of(widget.active),
+                            List<Item>.of(widget.history),
+                            widget.download,
+                            widget.upload,
+                          )
+                        : null,
+                  ),
+                  icon: PlaybackIcon(
+                    paused: frozen != null,
+                    color: frozen != null
+                        ? c.selectionInk
+                        : scope.backdropInk(c),
+                  ),
+                ),
+                Visibility(
+                  visible: !closed,
+                  maintainSize: true,
+                  maintainState: true,
+                  maintainAnimation: true,
+                  child: GlassControl(
+                    radius: 999,
+                    tint: c.dangerSoft,
+                    child: TextButton(
+                      onPressed: busy || liveRows.isEmpty
+                          ? null
+                          : () => disconnect(
+                              liveRows,
+                              all: query.isEmpty,
+                              batch: true,
+                            ),
+                      style: TextButton.styleFrom(
+                        backgroundColor: Colors.transparent,
+                        foregroundColor: c.dangerInk,
+                        minimumSize: const Size(0, 32),
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        textStyle: Theme.of(context).textTheme.bodyMedium
+                            ?.copyWith(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ),
+                      child: Text(
+                        query.isEmpty
+                            ? '断开全部'
+                            : '断开筛选结果 (${liveRows.length})',
                       ),
                     ),
+                  ),
+                ),
+              ],
+            );
+            return SizedBox(
+              width: bounds.maxWidth,
+              child: Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                runSpacing: 8,
+                spacing: 12,
+                children: [
+                  title,
+                  Align(
+                    widthFactor: bounds.maxWidth < 570 ? null : 1,
+                    alignment: Alignment.centerRight,
+                    child: actions,
                   ),
                 ],
               ),
-            ],
-          ),
+            );
+          },
         ),
-        if (busy) const LinearProgressIndicator(minHeight: 2),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: GlassSearchField(
+                controller: _searchCtrl,
+                hint: '搜索域名、IP、端口、进程、规则或节点',
+                value: query,
+                onChanged: (v) =>
+                    setState(() => query = v.trim().toLowerCase()),
+              ),
+            ),
+            const SizedBox(width: 8),
+            PopupMenuButton<String>(
+              initialValue: effectiveSort,
+              onSelected: selectSort,
+              itemBuilder: (_) => [
+                for (final e in sorts.entries)
+                  if (!closed || !{'download', 'upload'}.contains(e.key))
+                    PopupMenuItem(value: e.key, child: Text(e.value)),
+              ],
+              child: GlassControl(
+                radius: 10,
+                child: SizedBox(
+                  height: 32,
+                  width: 102,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 11),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            sorts[effectiveSort] ?? '最新',
+                            style: TextStyle(fontSize: 13, color: c.ink),
+                          ),
+                        ),
+                        PanelIcon('select-caret', size: 16, color: c.ink),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (busy)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: LinearProgressIndicator(minHeight: 2),
+          ),
         if (frozen != null)
           Padding(
-            padding: EdgeInsets.fromLTRB(
-              panelGutter(context),
-              0,
-              panelGutter(context),
-              12,
-            ),
+            padding: const EdgeInsets.only(top: 12),
             child: GlassCard(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               child: Row(
@@ -871,264 +858,276 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
           ),
         if (frozen == null && widget.status != '已连接')
           Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Text(
-              widget.status,
-              style: TextStyle(
-                fontSize: 12,
-                color: scope.backdropMuted(c),
-                shadows: scope.backdropShadows(),
+            padding: const EdgeInsets.only(top: 8),
+            child: Center(
+              child: Text(
+                widget.status,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: scope.backdropMuted(c),
+                  shadows: scope.backdropShadows(),
+                ),
               ),
             ),
           ),
-        Expanded(
-          child: rows.isEmpty
-              ? Center(
-                  child: Text(
-                    query.isEmpty
-                        ? (closed ? '暂无已关闭的连接' : '暂无活跃连接')
-                        : '没有找到匹配的连接',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: scope.backdropMuted(c),
-                      shadows: scope.backdropShadows(),
-                    ),
-                  ),
-                )
-              : MouseRegion(
-                  onEnter: (_) => _setHovered(true),
-                  onExit: (_) => _setHovered(false),
-                  child: Listener(
-                    onPointerDown: (_) => _onTouchStart(),
-                    onPointerUp: (_) => _releaseTouchLater(),
-                    onPointerCancel: (_) => _releaseTouchLater(),
-                    child: NotificationListener<ScrollNotification>(
-                      onNotification: (_) {
-                        if (_touchReleaseTimer != null) _releaseTouchLater();
-                        return false;
-                      },
-                      child: ListView.separated(
-                        padding: EdgeInsets.fromLTRB(
-                          panelGutter(context),
-                          4,
-                          panelGutter(context),
-                          108,
-                        ),
-                        itemCount: rows.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (_, i) {
-                          final entry = rows[i];
-                          final row = entry.conn;
-                          final isLive = entry.state == _RowState.live;
-                          final stateText = entry.state == _RowState.closing
-                              ? '正在断开…'
-                              : '已结束';
-                          final m = row['metadata'] as Item? ?? {};
-                          final h = host(row);
-                          final port = m['destinationPort']?.toString() ?? '';
-                          final target = port.isEmpty
-                              ? h
-                              : h.contains(':') && !h.startsWith('[')
-                              ? '[$h]:$port'
-                              : '$h:$port';
-                          final net = (m['network']?.toString() ?? '').toUpperCase();
-                          final kind = (m['type']?.toString() ?? '')
-                              .split('/')
-                              .first
-                              .toUpperCase();
-                          final udp = net == 'UDP';
-                          final badge = udp ? c.udp : c.tcp;
-                          final rule = (row['rule']?.toString() ?? '').replaceAll(
-                            RegExp(r'\brule_set='),
-                            '',
-                          );
-                          final chain = (row['chains'] as List? ?? []).reversed.join(
-                            ' → ',
-                          );
-                          final dl = formatBytes((row['download'] as num?) ?? 0);
-                          final ul = formatBytes((row['upload'] as num?) ?? 0);
-                          final rates = [
-                            ('↓', (row['downloadSpeed'] as num?)?.toInt() ?? 0),
-                            ('↑', (row['uploadSpeed'] as num?)?.toInt() ?? 0),
-                          ];
-                          final small = TextStyle(
-                            fontSize: 12,
-                            height: 1.5,
-                            color: c.muted,
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                          );
+        const SizedBox(height: 12),
+      ],
+    );
 
-                          return AnimatedOpacity(
-                            opacity: isLive ? 1 : .5,
-                            duration: const Duration(milliseconds: 180),
-                            child: GestureDetector(
-                              onTap: () => _showDetail(row, target),
-                              child: GlassCard(
-                                padding: EdgeInsets.zero,
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Padding(
-                                      padding: const EdgeInsets.fromLTRB(14, 11, 14, 0),
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              if (net.isNotEmpty ||
-                                                  kind.isNotEmpty) ...[
-                                                Container(
-                                                  padding: const EdgeInsets.symmetric(
-                                                    horizontal: 6,
-                                                  ),
-                                                  height: 18,
-                                                  decoration: BoxDecoration(
-                                                    color: udp ? c.udpSoft : c.tcpSoft,
-                                                    borderRadius: BorderRadius.circular(
-                                                      999,
-                                                    ),
-                                                  ),
-                                                  child: DefaultTextStyle.merge(
-                                                    style: TextStyle(
-                                                      fontSize: 11,
-                                                      height: 1.4,
-                                                      fontWeight: FontWeight.w500,
-                                                      color: badge,
-                                                    ),
-                                                    child: Row(
-                                                      mainAxisSize: MainAxisSize.min,
-                                                      children: [
-                                                        if (kind.isNotEmpty) ...[
-                                                          Text(kind),
-                                                          Container(
-                                                            margin:
-                                                                const EdgeInsets.symmetric(
-                                                                  horizontal: 4,
-                                                                ),
-                                                            width: 1,
-                                                            height: 9,
-                                                            color: badge.withValues(
-                                                              alpha: .35,
-                                                            ),
-                                                          ),
-                                                        ],
-                                                        Text(net),
-                                                      ],
-                                                    ),
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 6),
-                                              ],
-                                              Expanded(
-                                                child: Text(
-                                                  target,
-                                                  maxLines: 1,
-                                                  overflow: TextOverflow.ellipsis,
-                                                  style: TextStyle(
-                                                    fontSize: 14,
-                                                    height: 20 / 14,
-                                                    fontWeight: FontWeight.w600,
-                                                    color: c.ink,
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Text(
-                                                isLive ? durationLabel(row) : stateText,
-                                                style: small,
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            rule.isEmpty ? 'final' : rule,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: small.copyWith(height: 17 / 12),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            chain.isEmpty ? '-' : chain,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              fontSize: 13,
-                                              height: 18 / 13,
-                                              color: c.ink.withValues(alpha: .85),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    const SizedBox(height: 10),
-                                    Container(
-                                      constraints: const BoxConstraints(minHeight: 38),
-                                      padding: const EdgeInsets.fromLTRB(14, 4, 8, 4),
-                                      decoration: BoxDecoration(
-                                        border: Border(
-                                          top: BorderSide(color: c.hairline, width: .5),
-                                        ),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          if (isLive && !closed)
-                                            for (final (arrow, speed) in rates) ...[
-                                              Text(
-                                                '$arrow ${formatSpeedParts(speed).$1} ${formatSpeedParts(speed).$2}',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: small.copyWith(
-                                                  color: speed > 0 ? c.ink : c.muted,
-                                                ),
-                                              ),
-                                              const SizedBox(width: 9),
-                                            ],
-                                          Expanded(
-                                            child: Text(
-                                              '$dl / $ul',
-                                              textAlign: TextAlign.right,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: small,
-                                            ),
-                                          ),
-                                          if (!closed) ...[
-                                            const SizedBox(width: 9),
-                                            GestureDetector(
-                                              onTap: !isLive || busy
-                                                  ? null
-                                                  : () => disconnect([row]),
-                                              child: Container(
-                                                width: 28,
-                                                height: 28,
-                                                alignment: Alignment.center,
-                                                decoration: BoxDecoration(
-                                                  shape: BoxShape.circle,
-                                                  color: c.fill,
-                                                ),
-                                                child: PanelIcon(
-                                                  'close-detail',
-                                                  size: 15,
-                                                  color: c.muted,
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-                        },
+    return MouseRegion(
+      onEnter: (_) => _setHovered(true),
+      onExit: (_) => _setHovered(false),
+      child: Listener(
+        onPointerDown: (_) => _onTouchStart(),
+        onPointerUp: (_) => _releaseTouchLater(),
+        onPointerCancel: (_) => _releaseTouchLater(),
+        child: NotificationListener<ScrollNotification>(
+          onNotification: (_) {
+            if (_touchReleaseTimer != null) _releaseTouchLater();
+            return false;
+          },
+          child: ListView.builder(
+            padding: EdgeInsets.fromLTRB(
+              panelGutter(context),
+              0,
+              panelGutter(context),
+              108,
+            ),
+            itemCount: rows.isEmpty ? 2 : rows.length + 1,
+            itemBuilder: (_, index) {
+              if (index == 0) return header;
+              if (rows.isEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.only(top: 72),
+                  child: Center(
+                    child: Text(
+                      query.isEmpty
+                          ? (closed ? '暂无已关闭的连接' : '暂无活跃连接')
+                          : '没有找到匹配的连接',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: scope.backdropMuted(c),
+                        shadows: scope.backdropShadows(),
                       ),
                     ),
                   ),
+                );
+              }
+              final i = index - 1;
+              final entry = rows[i];
+              final row = entry.conn;
+              final isLive = entry.state == _RowState.live;
+              final stateText = entry.state == _RowState.closing
+                  ? '正在断开…'
+                  : '已结束';
+              final m = row['metadata'] as Item? ?? {};
+              final h = host(row);
+              final port = m['destinationPort']?.toString() ?? '';
+              final target = port.isEmpty
+                  ? h
+                  : h.contains(':') && !h.startsWith('[')
+                  ? '[$h]:$port'
+                  : '$h:$port';
+              final net = (m['network']?.toString() ?? '').toUpperCase();
+              final kind = (m['type']?.toString() ?? '')
+                  .split('/')
+                  .first
+                  .toUpperCase();
+              final udp = net == 'UDP';
+              final badge = udp ? c.udp : c.tcp;
+              final rule = (row['rule']?.toString() ?? '').replaceAll(
+                RegExp(r'\brule_set='),
+                '',
+              );
+              final chain = (row['chains'] as List? ?? []).reversed.join(
+                ' → ',
+              );
+              final dl = formatBytes((row['download'] as num?) ?? 0);
+              final ul = formatBytes((row['upload'] as num?) ?? 0);
+              final rates = [
+                ('↓', (row['downloadSpeed'] as num?)?.toInt() ?? 0),
+                ('↑', (row['uploadSpeed'] as num?)?.toInt() ?? 0),
+              ];
+              final small = TextStyle(
+                fontSize: 12,
+                height: 1.5,
+                color: c.muted,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              );
+
+              final card = AnimatedOpacity(
+                opacity: isLive ? 1 : .5,
+                duration: const Duration(milliseconds: 180),
+                child: GestureDetector(
+                  onTap: () => _showDetail(row, target),
+                  child: GlassCard(
+                    padding: EdgeInsets.zero,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 11, 14, 0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  if (net.isNotEmpty ||
+                                      kind.isNotEmpty) ...[
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                      ),
+                                      height: 18,
+                                      decoration: BoxDecoration(
+                                        color: udp ? c.udpSoft : c.tcpSoft,
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
+                                      ),
+                                      child: DefaultTextStyle.merge(
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          height: 1.4,
+                                          fontWeight: FontWeight.w500,
+                                          color: badge,
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            if (kind.isNotEmpty) ...[
+                                              Text(kind),
+                                              Container(
+                                                margin:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 4,
+                                                    ),
+                                                width: 1,
+                                                height: 9,
+                                                color: badge.withValues(
+                                                  alpha: .35,
+                                                ),
+                                              ),
+                                            ],
+                                            Text(net),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                  ],
+                                  Expanded(
+                                    child: Text(
+                                      target,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        height: 20 / 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: c.ink,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    isLive ? durationLabel(row) : stateText,
+                                    style: small,
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                rule.isEmpty ? 'final' : rule,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: small.copyWith(height: 17 / 12),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                chain.isEmpty ? '-' : chain,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  height: 18 / 13,
+                                  color: c.ink.withValues(alpha: .85),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Container(
+                          constraints: const BoxConstraints(minHeight: 38),
+                          padding: const EdgeInsets.fromLTRB(14, 4, 8, 4),
+                          decoration: BoxDecoration(
+                            border: Border(
+                              top: BorderSide(color: c.hairline, width: .5),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              if (isLive && !closed)
+                                for (final (arrow, speed) in rates) ...[
+                                  Text(
+                                    '$arrow ${formatSpeedParts(speed).$1} ${formatSpeedParts(speed).$2}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: small.copyWith(
+                                      color: speed > 0 ? c.ink : c.muted,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 9),
+                                ],
+                              Expanded(
+                                child: Text(
+                                  '$dl / $ul',
+                                  textAlign: TextAlign.right,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: small,
+                                ),
+                              ),
+                              if (!closed) ...[
+                                const SizedBox(width: 9),
+                                GestureDetector(
+                                  onTap: !isLive || busy
+                                      ? null
+                                      : () => disconnect([row]),
+                                  child: Container(
+                                    width: 28,
+                                    height: 28,
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: c.fill,
+                                    ),
+                                    child: PanelIcon(
+                                      'close-detail',
+                                      size: 15,
+                                      color: c.muted,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
+              );
+              if (i + 1 >= rows.length) return card;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: card,
+              );
+            },
+          ),
         ),
-      ],
+      ),
     );
   }
 }

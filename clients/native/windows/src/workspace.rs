@@ -173,8 +173,9 @@ pub struct Workspace {
     log_focus: Option<FocusHandle>,
     log_active_row: Option<u64>,
     pub(super) page_scroll: ScrollHandle,
-    scroll_motion: Option<scrolling::ScrollMotion>,
+    scroll_motion: Option<scrolling::SmoothScroll>,
     page_list_scroll: UniformListScrollHandle,
+    conn_detail_scroll: ScrollHandle,
     log_list: ListState,
     log_list_len: usize,
     log_list_head: Option<u64>,
@@ -442,6 +443,7 @@ impl Workspace {
             page_scroll: ScrollHandle::new(),
             scroll_motion: None,
             page_list_scroll: UniformListScrollHandle::new(),
+            conn_detail_scroll: ScrollHandle::new(),
             log_list,
             log_list_len: 0,
             log_list_head: None,
@@ -913,10 +915,13 @@ impl Workspace {
                 })
     }
 
-    pub fn header_scrolled(&self) -> bool {
+    pub fn header_scroll_progress(&self) -> f32 {
         match self.page {
-            Page::Overview | Page::Settings => self.page_scroll.offset().y < px(0.),
-            _ => false,
+            Page::Overview | Page::Settings => {
+                let scrolled = (-f32::from(self.page_scroll.offset().y)).max(0.);
+                scrolling::smoothstep(0., 32., scrolled)
+            }
+            _ => 0.,
         }
     }
 
@@ -944,6 +949,7 @@ impl Workspace {
             self.proxy_ui.cancel_reveal();
             self.page_scroll = ScrollHandle::new();
             self.page_list_scroll = UniformListScrollHandle::new();
+            self.conn_detail_scroll = ScrollHandle::new();
         }
         self.page = page;
         if self.service_checked.is_none() {
@@ -1296,6 +1302,8 @@ impl Workspace {
             }
             Action::Detail(row) => {
                 self.leaving_dialog = None;
+                self.cancel_scroll(scrolling::ScrollTarget::ConnDetail);
+                self.conn_detail_scroll = ScrollHandle::new();
                 let ip = row["metadata"]["destinationIP"].as_str().unwrap_or("").to_owned();
                 self.detail = Some(row);
                 self.geo = None;
@@ -1303,13 +1311,18 @@ impl Workspace {
                     self.apply(Action::Geo(ip), cx);
                 }
             }
-            Action::RuleDetail(tag) => self.open_rule_detail(tag,cx),
+            Action::RuleDetail(tag) => {
+                self.cancel_scroll(scrolling::ScrollTarget::RuleDetail);
+                self.open_rule_detail(tag, cx);
+            }
             Action::CloseRuleDetail => {
+                self.cancel_scroll(scrolling::ScrollTarget::RuleDetail);
                 if let Some(detail) = self.rule_browser.detail.take() {
                     self.leave_dialog(dialog::LeavingDialog::Rule(detail), cx);
                 }
             }
             Action::Dismiss => {
+                self.cancel_scroll(scrolling::ScrollTarget::ConnDetail);
                 if let Some(detail) = self.detail.take() {
                     self.leave_dialog(dialog::LeavingDialog::Connection(detail), cx);
                 }

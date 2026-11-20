@@ -1491,211 +1491,250 @@ class _CatalogPageState extends State<CatalogPage> {
     final usageMap = !widget.proxies && providers ? _ruleProviderUsage() : const <String, List<(int, String)>>{};
 
     final scope = GlassScope.of(context);
-    return Column(
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(panelGutter(context), 0, panelGutter(context), 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Text(
-                    widget.proxies ? '代理' : '规则',
-                    style: TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -0.4,
-                      color: scope.backdropInk(c),
-                      shadows: scope.backdropShadows(),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Flexible(child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: GlassSegmented<bool>(
-                      items: [
-                        (
-                          false,
-                          widget.proxies
-                              ? '代理组 (${items.length})'
-                              : '规则 (${items.length})',
-                        ),
-                        if (providersAvailable) (
-                          true,
-                          widget.proxies
-                              ? '代理提供商 (${providerItems.length})'
-                              : '规则提供商 (${providerItems.length})',
-                        ),
-                      ],
-                      value: providers,
-                      onChanged: (v) {
-                        setState(() { providers = v; query = ''; _searchCtrl.clear(); });
-                        if (!widget.proxies) scheduleMatch();
-                      },
-                    ),
-                  )),
-                  if (providers)
-                    GestureDetector(
-                      onTap: updating || providerItems.isEmpty ? null : () => providerAction({}, 'update_providers'),
-                      child: GlassControl(
-                        radius: 999,
-                        child: SizedBox(
-                          width: 32,
-                          height: 32,
-                          child: PanelIcon('refresh', size: 16, color: providerItems.isEmpty ? c.muted : c.ink),
-                        ),
-                      ),
-                    ),
-                ],
+        Row(
+          children: [
+            Text(
+              widget.proxies ? '代理' : '规则',
+              style: TextStyle(
+                fontSize: 26,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.4,
+                color: scope.backdropInk(c),
+                shadows: scope.backdropShadows(),
               ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: GlassSearchField(
-                      controller: _searchCtrl,
-                      hint: widget.proxies
-                          ? '搜索节点或代理组'
-                          : providers
-                              ? (readable ? '输入域名或 IP，查找命中的规则提供商' : '开启 root 模式后可按域名或 IP 查找')
-                              : (readable ? '搜索规则、出站、域名或 IP' : '搜索规则或出站'),
-                      value: query,
-                      onChanged: (v) {
-                        setState(() => query = v.trim().toLowerCase());
-                        if (!widget.proxies) scheduleMatch();
-                      },
-                    ),
+            ),
+            const SizedBox(width: 10),
+            Flexible(child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: GlassSegmented<bool>(
+                items: [
+                  (
+                    false,
+                    widget.proxies
+                        ? '代理组 (${items.length})'
+                        : '规则 (${items.length})',
                   ),
-                  if (widget.proxies && !providers) ...[
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () {
-                        setState(() => sortByLatency = !sortByLatency);
-                        widget.preferences['proxySortLatency'] = sortByLatency;
-                        _savePreference('set_proxy_sort', {'enabled': sortByLatency});
-                      },
-                      child: GlassControl(
-                        radius: 999,
-                        tint: sortByLatency ? c.primarySoft : c.fill,
-                        child: SizedBox(
-                          width: 32,
-                          height: 32,
-                          child: PanelIcon('sort', size: 18, color: sortByLatency ? c.selectionInk : c.ink),
-                        ),
-                      ),
-                    ),
-                  ],
+                  if (providersAvailable) (
+                    true,
+                    widget.proxies
+                        ? '代理提供商 (${providerItems.length})'
+                        : '规则提供商 (${providerItems.length})',
+                  ),
                 ],
+                value: providers,
+                onChanged: (v) {
+                  setState(() { providers = v; query = ''; _searchCtrl.clear(); });
+                  if (!widget.proxies) scheduleMatch();
+                },
+              ),
+            )),
+            if (providers)
+              GestureDetector(
+                onTap: updating || providerItems.isEmpty ? null : () => providerAction({}, 'update_providers'),
+                child: GlassControl(
+                  radius: 999,
+                  child: SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: PanelIcon('refresh', size: 16, color: providerItems.isEmpty ? c.muted : c.ink),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: GlassSearchField(
+                controller: _searchCtrl,
+                hint: widget.proxies
+                    ? '搜索节点或代理组'
+                    : providers
+                        ? (readable ? '输入域名或 IP，查找命中的规则提供商' : '开启 root 模式后可按域名或 IP 查找')
+                        : (readable ? '搜索规则、出站、域名或 IP' : '搜索规则或出站'),
+                value: query,
+                onChanged: (v) {
+                  setState(() => query = v.trim().toLowerCase());
+                  if (!widget.proxies) scheduleMatch();
+                },
+              ),
+            ),
+            if (widget.proxies && !providers) ...[
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () {
+                  setState(() => sortByLatency = !sortByLatency);
+                  widget.preferences['proxySortLatency'] = sortByLatency;
+                  _savePreference('set_proxy_sort', {'enabled': sortByLatency});
+                },
+                child: GlassControl(
+                  radius: 999,
+                  tint: sortByLatency ? c.primarySoft : c.fill,
+                  child: SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: PanelIcon('sort', size: 18, color: sortByLatency ? c.selectionInk : c.ink),
+                  ),
+                ),
               ),
             ],
-          ),
+          ],
         ),
-        if (matchError.isNotEmpty) Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text(matchError, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: c.dangerInk))),
-        if (busy || updating || matching) const LinearProgressIndicator(minHeight: 2),
-        Expanded(
-          child: error.isNotEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: GlassCard(
+        if (matchError.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              matchError,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, color: c.dangerInk),
+            ),
+          ),
+        if (busy || updating || matching)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: LinearProgressIndicator(minHeight: 2),
+          ),
+        SizedBox(height: widget.proxies ? 12 : 8),
+      ],
+    );
+
+    final hasPlaceholder = error.isNotEmpty || shown.isEmpty;
+    return ListView.builder(
+      padding: EdgeInsets.fromLTRB(panelGutter(context), 0, panelGutter(context), 108),
+      itemCount: hasPlaceholder ? 2 : shown.length + 1,
+      itemBuilder: (_, index) {
+        if (index == 0) return header;
+        if (error.isNotEmpty) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(12, 56, 12, 24),
+            child: GlassCard(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    widget.proxies ? '无法读取代理列表' : '无法读取规则列表',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: c.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    error,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12.5, color: c.muted),
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton(onPressed: load, child: const Text('重试')),
+                ],
+              ),
+            ),
+          );
+        }
+        if (shown.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 72),
+            child: Center(
+              child: !widget.proxies && providers && !busy && providerItems.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.all(16),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            widget.proxies ? '无法读取代理列表' : '无法读取规则列表',
+                            '当前配置里没有规则提供商',
                             style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: c.ink,
+                              fontSize: 14,
+                              color: scope.backdropInk(c),
+                              shadows: scope.backdropShadows(),
                             ),
                           ),
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 4),
                           Text(
-                            error,
+                            '在 config.json 的 route.rule_set 中添加规则集后，这里会列出它们。',
                             textAlign: TextAlign.center,
-                            style: TextStyle(fontSize: 12.5, color: c.muted),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: scope.backdropMuted(c),
+                              shadows: scope.backdropShadows(),
+                            ),
                           ),
-                          const SizedBox(height: 12),
-                          FilledButton(onPressed: load, child: const Text('重试')),
                         ],
                       ),
-                    ),
-                  ),
-                )
-              : shown.isEmpty
-                  ? Center(
-                      child: !widget.proxies && providers && !busy && providerItems.isEmpty
-                          ? Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    '当前配置里没有规则提供商',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: scope.backdropInk(c),
-                                      shadows: scope.backdropShadows(),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '在 config.json 的 route.rule_set 中添加规则集后，这里会列出它们。',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: scope.backdropMuted(c),
-                                      shadows: scope.backdropShadows(),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            )
-                          : Text(
-                        busy
-                            ? '正在读取…'
-                            : query.isEmpty
-                                ? '暂无记录'
-                                : '没有找到匹配项',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: scope.backdropMuted(c),
-                          shadows: scope.backdropShadows(),
-                        ),
-                      ),
                     )
-                  : ListView.separated(
-                      padding: EdgeInsets.fromLTRB(panelGutter(context), 0, panelGutter(context), 108),
-                      itemCount: shown.length,
-                      separatorBuilder: (_, __) =>
-                          SizedBox(height: widget.proxies ? 12 : 8),
-                      itemBuilder: (_, i) {
-                        final item = shown[i];
-                        if (providers) {
-                          return widget.proxies
-                              ? _buildProxyProviderCard(item, c)
-                              : _buildRuleProviderCard(item, usageMap, c);
-                        }
-                        if (widget.proxies) {
-                          final name = item['name'] as String;
-                          return Focus(key: ValueKey(name), canRequestFocus: false,
-                            onFocusChange: (focused) {
-                              if (focused) { _focused.add(name); _holdOrder(item); }
-                              else { setState(() { _focused.remove(name); _releaseOrder(name); }); }
-                            }, child: MouseRegion(
-                              onEnter: (_) { _pointed.add(name); _holdOrder(item); },
-                              onExit: (_) => setState(() { _pointed.remove(name); _releaseOrder(name); }),
-                              child: _buildProxyGroupCard(item, c)));
-                        }
-                        final tags = _tokenizeRule(item).where((t) => t.kind == 'set').map((t) => t.full)
-                            .where((tag) => providerItems.any((p) => p['name'] == tag)).toSet();
-                        return GestureDetector(onTap: readable && tags.length == 1 ? () => rulesTool(tags.single) : null,
-                            child: _buildRuleCard(item, items.indexOf(item), c));
-                      },
+                  : Text(
+                      busy
+                          ? '正在读取…'
+                          : query.isEmpty
+                              ? '暂无记录'
+                              : '没有找到匹配项',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: scope.backdropMuted(c),
+                        shadows: scope.backdropShadows(),
+                      ),
                     ),
-        ),
-      ],
+            ),
+          );
+        }
+        final i = index - 1;
+        final item = shown[i];
+        final Widget card;
+        if (providers) {
+          card = widget.proxies
+              ? _buildProxyProviderCard(item, c)
+              : _buildRuleProviderCard(item, usageMap, c);
+        } else if (widget.proxies) {
+          final name = item['name'] as String;
+          card = Focus(
+            key: ValueKey(name),
+            canRequestFocus: false,
+            onFocusChange: (focused) {
+              if (focused) {
+                _focused.add(name);
+                _holdOrder(item);
+              } else {
+                setState(() {
+                  _focused.remove(name);
+                  _releaseOrder(name);
+                });
+              }
+            },
+            child: MouseRegion(
+              onEnter: (_) {
+                _pointed.add(name);
+                _holdOrder(item);
+              },
+              onExit: (_) => setState(() {
+                _pointed.remove(name);
+                _releaseOrder(name);
+              }),
+              child: _buildProxyGroupCard(item, c),
+            ),
+          );
+        } else {
+          final tags = _tokenizeRule(item)
+              .where((t) => t.kind == 'set')
+              .map((t) => t.full)
+              .where((tag) => providerItems.any((p) => p['name'] == tag))
+              .toSet();
+          card = GestureDetector(
+            onTap: readable && tags.length == 1 ? () => rulesTool(tags.single) : null,
+            child: _buildRuleCard(item, items.indexOf(item), c),
+          );
+        }
+        if (i + 1 >= shown.length) return card;
+        return Padding(
+          padding: EdgeInsets.only(bottom: widget.proxies ? 12 : 8),
+          child: card,
+        );
+      },
     );
   }
 }

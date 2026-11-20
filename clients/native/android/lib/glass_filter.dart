@@ -145,6 +145,20 @@ class _GlassFilterState extends State<_GlassFilter> {
   @override
   Widget build(BuildContext context) {
     final tint = GlassScope.of(context).tint;
+    final needsLens =
+        widget.lens &&
+        tint < .5 &&
+        widget.amount > 0 &&
+        ui.ImageFilter.isShaderFilterSupported;
+    if (widget.blur <= 0 && !needsLens) return widget.child;
+    ui.FragmentShader? shader;
+    if (needsLens) {
+      shader = _shader;
+      if (shader == null) {
+        if (!_attempted) _load();
+        if (widget.blur <= 0) return widget.child;
+      }
+    }
     final saturation = 1.5 + .3 * tint;
     final r = .2126 * (1 - saturation),
         g = .7152 * (1 - saturation),
@@ -176,26 +190,18 @@ class _GlassFilterState extends State<_GlassFilter> {
         outer: filter,
         inner: ui.ImageFilter.blur(sigmaX: widget.blur, sigmaY: widget.blur),
       );
-    if (widget.lens &&
-        tint < .5 &&
-        widget.amount > 0 &&
-        ui.ImageFilter.isShaderFilterSupported) {
-      final shader = _shader;
-      if (shader == null) {
-        if (!_attempted) _load();
-      } else {
-        shader
-          ..setFloat(2, MediaQuery.devicePixelRatioOf(context))
-          ..setFloat(3, widget.radius)
-          ..setFloat(4, widget.rim)
-          ..setFloat(5, widget.amount)
-          ..setFloat(6, widget.spread)
-          ..setFloat(7, widget.depth);
-        filter = ui.ImageFilter.compose(
-          outer: ui.ImageFilter.shader(shader),
-          inner: filter,
-        );
-      }
+    if (shader != null) {
+      shader
+        ..setFloat(2, MediaQuery.devicePixelRatioOf(context))
+        ..setFloat(3, widget.radius)
+        ..setFloat(4, widget.rim)
+        ..setFloat(5, widget.amount)
+        ..setFloat(6, widget.spread)
+        ..setFloat(7, widget.depth);
+      filter = ui.ImageFilter.compose(
+        outer: ui.ImageFilter.shader(shader),
+        inner: filter,
+      );
     }
     return BackdropFilter(filter: filter, child: widget.child);
   }

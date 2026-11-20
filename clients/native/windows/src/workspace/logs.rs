@@ -49,6 +49,7 @@ impl Workspace {
         };
         let (index, seq) = lines[next];
         self.log_active_row = Some(seq);
+        self.cancel_scroll(scrolling::ScrollTarget::Logs);
         self.log_list.scroll_to_reveal_item(index);
         cx.stop_propagation();
         cx.notify();
@@ -98,6 +99,7 @@ impl Workspace {
             .map(|r| r.seq);
 
         if filter_key != self.log_list_filter || shown == 0 || self.log_list_len == 0 {
+            self.cancel_scroll(scrolling::ScrollTarget::Logs);
             self.log_list.reset_with_uniform_height(shown, px(26.));
             self.log_auto_scroll = true;
             self.log_list.set_follow_mode(FollowMode::Tail);
@@ -106,11 +108,13 @@ impl Workspace {
                 self.log_list
                     .splice(self.log_list_len..self.log_list_len, shown - self.log_list_len);
             } else if shown < self.log_list_len {
+                self.cancel_scroll(scrolling::ScrollTarget::Logs);
                 self.log_list.reset_with_uniform_height(shown, px(26.));
                 self.log_auto_scroll = true;
                 self.log_list.set_follow_mode(FollowMode::Tail);
             }
         } else {
+            self.cancel_scroll(scrolling::ScrollTarget::Logs);
             self.log_list.reset_with_uniform_height(shown, px(26.));
             if self.log_auto_scroll {
                 self.log_list.set_follow_mode(FollowMode::Tail);
@@ -717,7 +721,15 @@ impl Workspace {
             div()
                 .relative()
                 .size_full()
-                .child(list_el)
+                .overflow_hidden()
+                .child(
+                    div()
+                        .relative()
+                        .top(self.overscroll_offset(scrolling::ScrollTarget::Logs))
+                        .size_full()
+                        .child(list_el),
+                )
+                .child(self.smooth_scroll_capture(scrolling::ScrollTarget::Logs, cx))
                 .vertical_scrollbar(&self.log_list)
                 .into_any_element()
         };
@@ -769,6 +781,7 @@ impl Workspace {
                                 .child("回到最新"),
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
+                            this.cancel_scroll(scrolling::ScrollTarget::Logs);
                             this.log_auto_scroll = true;
                             this.log_list.set_follow_mode(FollowMode::Tail);
                             this.log_list.scroll_to_end();

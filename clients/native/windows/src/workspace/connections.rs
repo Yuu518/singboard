@@ -558,14 +558,21 @@ impl Workspace {
             } else {
                 div()
                     .id("conn-list-hover")
+                    .relative()
                     .size_full()
+                    .overflow_hidden()
                     .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                         if this.conn_ui.set_hovered(*hovered) {
                             cx.notify();
                         }
                     }))
                     .child(
-                        uniform_list(
+                        div()
+                            .relative()
+                            .top(self.overscroll_offset(scrolling::ScrollTarget::PageList))
+                            .size_full()
+                            .child(
+                                uniform_list(
                             "connections-list",
                             count,
                             cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
@@ -806,7 +813,9 @@ impl Workspace {
                         )
                         .track_scroll(&self.page_list_scroll)
                         .size_full(),
-                    )
+                    ),
+                )
+                    .child(self.smooth_scroll_capture(scrolling::ScrollTarget::PageList, cx))
                     .into_any_element()
             })
             .when(count > 0, |card| card.vertical_scrollbar(&self.page_list_scroll));
@@ -889,8 +898,23 @@ impl Workspace {
                     .child(div().text_lg().font_weight(FontWeight::BOLD).truncate().child(format!("{}{}",dashboard::host(r),if open { "" } else { "  已关闭" })))
                     .child(dialog::keyboard_action(div().id("conn-detail-close").cursor_pointer().p_2().child(svg().path("close-detail").size(px(12.)).text_color(palette.muted()))
                         .on_click(cx.listener(|this,_,_,cx| this.apply(Action::Dismiss,cx))), Action::Dismiss, cx));
-                let mut body = div().id("conn-detail-body").flex_1().min_h_0().overflow_y_scroll().flex().flex_col().gap_4()
-                    .child(section("基本信息", basic)).child(section("网络信息", network));
+                let mut body = div()
+                    .relative()
+                    .top(self.overscroll_offset(scrolling::ScrollTarget::ConnDetail))
+                    .w_full()
+                    .min_h_full()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
+                        if this.handle_smooth_wheel_for(scrolling::ScrollTarget::ConnDetail, event)
+                        {
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                    }))
+                    .child(section("基本信息", basic))
+                    .child(section("网络信息", network));
                 if singboard_stream::tools::public_ip(&ip) {
                     body = body.child(match &self.geo {
                         Some(Ok(v)) => section("IP 地理信息",vec![("IP",ip.clone()),("ASN", if v["asn"].is_null() {String::new()} else {format!("AS{}",field(v,"asn"))}),
@@ -900,6 +924,21 @@ impl Workspace {
                         None => section("IP 地理信息",vec![("", "正在查询…".into())])
                     });
                 }
+                let body_pane = div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .id("conn-detail-body")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.conn_detail_scroll)
+                            .child(body.child(section("流量信息", traffic))),
+                    )
+                    .vertical_scrollbar(&self.conn_detail_scroll);
                 let footer = div().flex().justify_end().gap_2().when(open, |el| {
                     let id = field(r, "id");
                     el.child(self.button("conn-detail-disconnect", "断开连接", Action::Run(Command::Disconnect { id }), cx)
@@ -907,7 +946,7 @@ impl Workspace {
                 }).child(self.button("conn-done","完成",Action::Dismiss,cx));
                 el.child(dialog::surface("conn-details-pop", self.page_dialog("conn-details", Action::Dismiss, cx), popover_card(palette, tint)
                     .id("conn-dialog-card").w(px(672.)).max_w_full().max_h(px(modal_height)).p_5().gap_3().flex().flex_col()
-                    .on_click(|_,_,cx| cx.stop_propagation()).child(header).child(body.child(section("流量信息",traffic))).child(footer), 672., leaving, cx))
+                    .on_click(|_,_,cx| cx.stop_propagation()).child(header).child(body_pane).child(footer), 672., leaving, cx))
             })
             .when_some(confirm, |el, cmd| {
                 let (title, message) = match cmd {
