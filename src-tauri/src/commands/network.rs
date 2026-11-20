@@ -56,7 +56,7 @@ fn get_system_proxy() -> Option<String> {
     }
 }
 
-pub(crate) fn build_client(timeout: Option<Duration>) -> Result<reqwest::Client, reqwest::Error> {
+pub fn build_client(timeout: Option<Duration>) -> Result<reqwest::Client, reqwest::Error> {
     let mut builder = reqwest::Client::builder();
 
     if let Some(t) = timeout {
@@ -87,7 +87,7 @@ fn describe_fetch_error(error: reqwest::Error) -> String {
     }
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn fetch_url(url: String, user_agent: Option<String>) -> Result<String, String> {
     let client = build_client(Some(FETCH_TIMEOUT)).map_err(|e| e.to_string())?;
     let mut request = client.get(&url);
@@ -102,7 +102,7 @@ pub async fn fetch_url(url: String, user_agent: Option<String>) -> Result<String
     resp.text().await.map_err(describe_fetch_error)
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn http_ping(url: String, count: u32) -> Result<f64, String> {
     let client = build_client(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
 
@@ -181,7 +181,7 @@ fn name_server(ip: IpAddr, port: u16) -> NameServerConfig {
 }
 
 #[cfg(windows)]
-fn system_resolver(_app: &tauri::AppHandle) -> Result<Resolver<TokioRuntimeProvider>, String> {
+fn system_resolver(_reported: &[String]) -> Result<Resolver<TokioRuntimeProvider>, String> {
     hickory_resolver::TokioResolver::builder_tokio()
         .map_err(|e| e.to_string())?
         .with_options(ResolverOpts::default())
@@ -190,8 +190,7 @@ fn system_resolver(_app: &tauri::AppHandle) -> Result<Resolver<TokioRuntimeProvi
 }
 
 #[cfg(not(windows))]
-fn system_resolver(app: &tauri::AppHandle) -> Result<Resolver<TokioRuntimeProvider>, String> {
-    let reported = crate::native::dns_servers(app);
+fn system_resolver(reported: &[String]) -> Result<Resolver<TokioRuntimeProvider>, String> {
     let servers: Vec<IpAddr> = reported
         .iter()
         .filter_map(|s| s.trim().trim_start_matches('/').parse().ok())
@@ -227,6 +226,7 @@ fn display_dns_value(data: &hickory_resolver::proto::rr::RData) -> String {
     }
 }
 
+#[cfg(singboard_tauri)]
 #[tauri::command]
 pub async fn dns_query(
     app: tauri::AppHandle,
@@ -234,6 +234,14 @@ pub async fn dns_query(
     record_type: String,
     server: Option<String>,
 ) -> Result<DnsQueryResult, String> {
+    #[cfg(windows)]
+    let reported = { let _ = app; Vec::new() };
+    #[cfg(not(windows))]
+    let reported = crate::native::dns_servers(&app);
+    lookup_dns(domain, record_type, server, &reported).await
+}
+
+pub async fn lookup_dns(domain:String, record_type:String, server:Option<String>, reported:&[String])->Result<DnsQueryResult,String>{
     let domain = domain.trim().trim_end_matches('.').to_string();
     if domain.is_empty() {
         return Err("domain is empty".to_string());
@@ -253,7 +261,7 @@ pub async fn dns_query(
         let (ip, port) = parse_dns_server(server_text)?;
         custom_resolver(vec![name_server(ip, port)])?
     } else {
-        system_resolver(&app)?
+        system_resolver(reported)?
     };
 
     let lookup = resolver

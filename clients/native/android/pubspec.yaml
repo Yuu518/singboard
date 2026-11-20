@@ -1,0 +1,24 @@
+name: singboard_native
+description: Singboard native Android client
+publish_to: none
+version: 4.9.2+40902
+environment:
+  sdk: ">=3.13.0 <4.0.0"
+  flutter: ">=3.47.0"
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.4
+  flutter_svg: ^2.2.0
+  material_ui: ^1.11.1
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icons/
+    - assets/favicon.png
+    - assets/glass_grain.png
+  shaders:
+    - assets/glass_lens.frag

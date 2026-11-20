@@ -3778,6 +3778,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
+ "tempfile",
  "tokio",
  "windows-service",
  "windows-sys 0.59.0",

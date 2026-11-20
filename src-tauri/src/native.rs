@@ -80,6 +80,14 @@ pub fn install_apk<R: Runtime>(app: &AppHandle<R>, path: String) -> Result<(), S
     call::<R, serde_json::Value>(app, "installApk", InstallArgs { path }).map(|_| ())
 }
 
+#[tauri::command]
+pub async fn export_native_settings(app: AppHandle, content: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let result: serde_json::Value = call(&app, "exportSettings", serde_json::json!({ "content": content }))?;
+        Ok(result["saved"].as_bool().unwrap_or(false))
+    }).await.map_err(|e| e.to_string())?
+}
+
 #[derive(Serialize)]
 struct OpenUrlArgs {
     url: String,

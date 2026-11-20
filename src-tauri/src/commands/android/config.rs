@@ -153,7 +153,7 @@ fn quoted_list<'a>(paths: impl Iterator<Item = &'a String>) -> String {
     paths.map(|p| quote(p)).collect::<Vec<_>>().join(" ")
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn detect_runtime_files(base_dir: Option<String>) -> Result<DetectedRuntimeFiles, String> {
     let base = base_dir
         .map(|dir| dir.trim().trim_end_matches('/').to_string())
@@ -231,7 +231,7 @@ pub(crate) async fn run_singbox_check(
     .map(|_| "Configuration is valid".to_string())
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn validate_config(
     singbox_path: String,
     config_path: String,

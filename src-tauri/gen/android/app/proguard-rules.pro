@@ -21,4 +21,5 @@
 #-renamesourcefileattribute SourceFile
 -keep class io.github.Yuu518.singboard.SingboardPlugin { *; }
 -keep class io.github.Yuu518.singboard.InstallApkArgs { *; }
+-keep class io.github.Yuu518.singboard.SettingsExportArgs { *; }
 -keep class io.github.Yuu518.singboard.SystemBarsArgs { *; }

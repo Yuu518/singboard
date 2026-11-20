@@ -5,7 +5,14 @@
   --radius-tile: 12px;
   --radius-control: 10px;
 
-  --page-bg: #f2f2f7;
+  --page-bg: #eef2fa;
+  --page-backdrop:
+    radial-gradient(66% 52% at 13% 16%, rgb(86 172 255 / 0.36) 0%, transparent 72%),
+    radial-gradient(62% 50% at 86% 18%, rgb(142 130 255 / 0.28) 0%, transparent 72%),
+    radial-gradient(70% 48% at 22% 88%, rgb(72 214 238 / 0.25) 0%, transparent 74%),
+    radial-gradient(60% 46% at 80% 78%, rgb(238 156 224 / 0.20) 0%, transparent 72%),
+    linear-gradient(155deg, rgb(255 255 255 / 0.42) 34%, transparent 56%),
+    linear-gradient(135deg, #e7f0fd 0%, #f3f5fb 52%, #f2edfa 100%);
   --surface: #ffffff;
   --surface-edge: 0 0 0 0.5px rgb(0 0 0 / 0.06);
   --backdrop-veil: rgb(255 255 255 / 0.28);
@@ -56,7 +63,14 @@
 }
 
 [data-theme='dark'] {
-  --page-bg: #0f0f11;
+  --page-bg: #0b0f19;
+  --page-backdrop:
+    radial-gradient(68% 52% at 12% 16%, rgb(18 118 255 / 0.34) 0%, transparent 72%),
+    radial-gradient(62% 50% at 86% 18%, rgb(104 88 246 / 0.28) 0%, transparent 72%),
+    radial-gradient(70% 48% at 20% 88%, rgb(16 178 214 / 0.22) 0%, transparent 74%),
+    radial-gradient(60% 48% at 82% 80%, rgb(172 76 218 / 0.18) 0%, transparent 72%),
+    linear-gradient(155deg, rgb(96 184 255 / 0.12) 36%, transparent 58%),
+    linear-gradient(135deg, #080d1a 0%, #0c0f18 52%, #110d1d 100%);
   --surface: #2b2b2f;
   --surface-edge: 0 0 0 0.5px rgb(255 255 255 / 0.07);
   --backdrop-veil: rgb(0 0 0 / 0.38);

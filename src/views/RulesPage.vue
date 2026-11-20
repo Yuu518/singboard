@@ -390,6 +390,43 @@ function detailTypeLabel(type: string): string {
   return FIELD_LABELS[type] ?? type
 }
 
+const RULE_TYPE_ORDER: Record<string, number> = {
+  domain_suffix: 0,
+  domain: 1,
+  domain_keyword: 2,
+  domain_regex: 3,
+  ip_cidr: 4,
+  source_ip_cidr: 5,
+}
+
+function detailTypeOrder(type: string): number {
+  return RULE_TYPE_ORDER[type] ?? 6
+}
+
+function detailTypeBadgeClass(type: string): string {
+  if (type === 'domain_suffix') return 'rules-entry-badge--suffix'
+  if (type === 'domain') return 'rules-entry-badge--domain'
+  if (type === 'domain_keyword') return 'rules-entry-badge--keyword'
+  if (type === 'domain_regex') return 'rules-entry-badge--regex'
+  if (type === 'ip_cidr' || type === 'source_ip_cidr') return 'rules-entry-badge--ip'
+  return 'rules-entry-badge--other'
+}
+
+function sortDetailRules(entries: Array<{ type: string; value: string }>): Array<{ type: string; value: string }> {
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => {
+      const ord = detailTypeOrder(a.entry.type) - detailTypeOrder(b.entry.type)
+      if (ord !== 0) return ord
+      const typeCmp = a.entry.type.localeCompare(b.entry.type)
+      if (typeCmp !== 0) return typeCmp
+      if (a.entry.type === 'ip_cidr' || a.entry.type === 'source_ip_cidr') return a.index - b.index
+      const lowerCmp = a.entry.value.toLowerCase().localeCompare(b.entry.value.toLowerCase())
+      return lowerCmp !== 0 ? lowerCmp : a.entry.value.localeCompare(b.entry.value)
+    })
+    .map((item) => item.entry)
+}
+
 const searchInput = ref<HTMLInputElement | null>(null)
 const ruleQuery = computed(() => filterText.value.trim())
 const ruleSetSearch = ref<{ query: string; outcome: MatchOutcome } | null>(null)
@@ -586,7 +623,17 @@ const detailName = computed(() => providerNameParts(detailProvider.value?.name ?
 const detailLoading = ref(false)
 const detailError = ref('')
 const detailRules = ref<Array<{ type: string; value: string }>>([])
+const detailTypeFilter = ref<string | null>(null)
 const detailFilterText = ref('')
+const detailTypeCounts = computed(() => {
+  const counts: Array<{ type: string; count: number }> = []
+  for (const rule of detailRules.value) {
+    const last = counts[counts.length - 1]
+    if (last && last.type === rule.type) last.count++
+    else counts.push({ type: rule.type, count: 1 })
+  }
+  return counts
+})
 const detailDialog = ref<HTMLElement | null>(null)
 const detailSearchInput = ref<HTMLInputElement | null>(null)
 let detailOpener: HTMLElement | null = null
@@ -710,14 +757,20 @@ function parseIpRange(text: string): IpRange | null {
 
 function runDetailFilter() {
   const q = detailFilterText.value.trim().toLowerCase()
+  const activeType = detailTypeFilter.value
+  const source = activeType ? detailRules.value.filter((r) => r.type === activeType) : detailRules.value
   if (!q) {
-    filteredDetailRules.value = detailRules.value
+    filteredDetailRules.value = source
     return
   }
   const qRange = parseIpRange(q)
-  filteredDetailRules.value = detailRules.value.filter((r) => {
+  filteredDetailRules.value = source.filter((r) => {
     // 文本包含
-    if (r.value.toLowerCase().includes(q) || r.type.toLowerCase().includes(q)) return true
+    if (
+      r.value.toLowerCase().includes(q)
+      || r.type.toLowerCase().includes(q)
+      || detailTypeLabel(r.type).toLowerCase().includes(q)
+    ) return true
     // IP CIDR 语义匹配：查询区间与规则区间有交集即命中
     if (qRange && (r.type === 'ip_cidr' || r.type === 'source_ip_cidr')) {
       const ruleRange = parseIpRange(r.value)
@@ -735,13 +788,30 @@ function runDetailFilter() {
   })
 }
 
+function selectDetailType(type: string | null) {
+  if (detailTypeFilter.value === type) return
+  detailTypeFilter.value = type
+  detailScrollTop.value = 0
+  if (detailScrollRef.value) detailScrollRef.value.scrollTop = 0
+  runDetailFilter()
+}
+
+async function copyDetailValue(value: string) {
+  try {
+    await navigator.clipboard.writeText(value)
+    pushToast({ type: 'info', message: `已复制 ${value}` })
+  } catch {
+    pushToast({ type: 'error', message: '复制失败' })
+  }
+}
+
 watch(detailFilterText, () => {
   if (filterTimer) clearTimeout(filterTimer)
   filterTimer = setTimeout(runDetailFilter, 300)
 })
 
 watch(detailRules, () => {
-  filteredDetailRules.value = detailRules.value
+  runDetailFilter()
 })
 
 async function searchInDetail() {
@@ -800,7 +870,7 @@ const detailMismatchNote = computed(() => {
 })
 
 // 虚拟滚动
-const ROW_HEIGHT = 28
+const ROW_HEIGHT = 30
 const OVERSCAN = 10
 const detailScrollTop = ref(0)
 const detailContainerHeight = ref(400)
@@ -853,7 +923,7 @@ async function loadDetailRules(provider: RuleProvider) {
       config.value.singboxPath ?? '',
       provider.name,
     )
-    if (request === detailRequest) detailRules.value = entries
+    if (request === detailRequest) detailRules.value = sortDetailRules(entries)
   } catch (error) {
     if (request === detailRequest) detailError.value = srsFailureReason(error, provider.name)
   } finally {
@@ -864,6 +934,7 @@ async function loadDetailRules(provider: RuleProvider) {
 function openProviderDetail(provider: RuleProvider) {
   if (!detailProvider.value) detailOpener = document.activeElement as HTMLElement | null
   detailProvider.value = provider
+  detailTypeFilter.value = null
   detailFilterText.value = ''
   detailScrollTop.value = 0
   void nextTick(() => (IS_ANDROID ? detailDialog.value : detailSearchInput.value)?.focus())
@@ -875,6 +946,7 @@ function closeProviderDetail() {
   detailMatchRequest++
   detailProvider.value = null
   detailRules.value = []
+  detailTypeFilter.value = null
   detailFilterText.value = ''
   detailError.value = ''
   detailLoading.value = false
@@ -1442,35 +1514,65 @@ onBeforeUnmount(() => {
             <button type="button" class="btn btn-sm btn-glass mt-3 px-5" @click="detailProvider && loadDetailRules(detailProvider)">重试</button>
           </div>
           <template v-else>
+            <div v-if="detailTypeCounts.length > 1" class="rules-type-chips">
+              <button
+                type="button"
+                class="rules-type-chip"
+                :class="{ 'rules-type-chip--active rules-entry-badge--suffix': detailTypeFilter === null }"
+                @click="selectDetailType(null)"
+              >
+                <span>全部</span>
+                <span class="tabular-nums opacity-75">{{ detailRules.length.toLocaleString() }}</span>
+              </button>
+              <button
+                v-for="item in detailTypeCounts"
+                :key="item.type"
+                type="button"
+                class="rules-type-chip"
+                :class="detailTypeFilter === item.type ? ['rules-type-chip--active', detailTypeBadgeClass(item.type)] : undefined"
+                @click="selectDetailType(item.type)"
+              >
+                <span>{{ detailTypeLabel(item.type) }}</span>
+                <span class="tabular-nums opacity-75">{{ item.count.toLocaleString() }}</span>
+              </button>
+            </div>
             <div
               ref="detailScrollRef"
               class="rules-entries card-scroll"
               @scroll="onDetailScroll"
             >
               <p v-if="filteredDetailRules.length === 0" class="py-10 text-center text-sm text-base-content/65">
-                {{ detailRules.length === 0 ? '这个规则提供商没有规则' : `没有包含“${detailQuery}”的条目` }}
+                {{ detailRules.length === 0 ? '这个规则提供商没有规则' : detailQuery ? `没有包含“${detailQuery}”的条目` : '没有符合条件的条目' }}
               </p>
               <div v-else :style="{ height: virtualSlice.totalHeight + 'px', position: 'relative' }">
                 <div :style="{ transform: `translateY(${virtualSlice.offsetY}px)` }">
                   <div
                     v-for="(rule, j) in virtualSlice.items"
                     :key="virtualSlice.startIdx + j"
-                    class="rules-entry"
+                    class="rules-entry-wrap"
+                    :class="{ 'rules-entry-wrap--break': virtualSlice.startIdx + j > 0 && filteredDetailRules[virtualSlice.startIdx + j - 1]?.type !== rule.type }"
                     :style="{ height: ROW_HEIGHT + 'px' }"
                   >
-                    <span class="rules-entry-index">{{ virtualSlice.startIdx + j + 1 }}</span>
-                    <span class="rules-entry-type">{{ filteredDetailRules[virtualSlice.startIdx + j - 1]?.type === rule.type && j > 0 ? '' : detailTypeLabel(rule.type) }}</span>
-                    <span class="rules-entry-value" :title="`${detailTypeLabel(rule.type)} ${rule.value}`">{{ rule.value }}</span>
+                    <button
+                      type="button"
+                      class="rules-entry"
+                      :title="`点击复制 ${rule.value}`"
+                      @click="copyDetailValue(rule.value)"
+                    >
+                      <span class="rules-entry-index">{{ virtualSlice.startIdx + j + 1 }}</span>
+                      <span class="rules-entry-badge" :class="detailTypeBadgeClass(rule.type)">{{ detailTypeLabel(rule.type) }}</span>
+                      <span class="rules-entry-value" :title="`${detailTypeLabel(rule.type)} ${rule.value}`">{{ rule.value }}</span>
+                    </button>
                   </div>
                 </div>
               </div>
             </div>
             <p v-if="detailRules.length > 0" class="text-xs tabular-nums text-base-content/65 pt-2 shrink-0">
-              <template v-if="detailQuery">
-                显示 {{ filteredDetailRules.length }} / 共 {{ detailRules.length }} 条
+              <template v-if="detailQuery || detailTypeFilter">
+                显示 {{ filteredDetailRules.length.toLocaleString() }} / 共 {{ detailRules.length.toLocaleString() }} 条
               </template>
               <template v-else>
-                共 {{ detailRules.length }} 条
+                共 {{ detailRules.length.toLocaleString() }} 条
               </template>
               <template v-if="detailMismatchNote"> · {{ detailMismatchNote }}</template>
             </p>
@@ -1727,21 +1829,71 @@ button.rules-provider-name:hover .rules-name-prefix {
   color: var(--selection-ink);
 }
 
+.rules-type-chips {
+  @apply mb-2 flex shrink-0 flex-wrap items-center gap-1.5;
+}
+
+.rules-type-chip {
+  @apply inline-flex h-6 items-center gap-1 rounded-full bg-[var(--fill)] px-2.5 text-xs text-base-content/65 transition-colors hover:bg-[var(--fill-strong)];
+}
+
+.rules-type-chip--active {
+  @apply font-medium;
+}
+
 .rules-entries {
-  @apply min-h-0 flex-1 overflow-auto rounded-[var(--radius-tile)] bg-[var(--fill)] px-1;
+  @apply min-h-0 flex-1 overflow-auto rounded-[var(--radius-tile)] bg-[var(--fill)] p-1;
+}
+
+.rules-entry-wrap {
+  @apply w-full;
+}
+
+.rules-entry-wrap--break {
+  border-top: 1px solid var(--hairline);
 }
 
 .rules-entry {
-  @apply grid items-center gap-x-2.5 rounded-lg px-2.5 hover:bg-base-content/[0.05];
-  grid-template-columns: 2.5rem 6rem minmax(0, 1fr);
+  @apply grid h-full w-full items-center gap-x-2.5 rounded-lg px-2 text-left transition-colors hover:bg-base-content/[0.05];
+  grid-template-columns: 2.25rem 4.5rem minmax(0, 1fr);
 }
 
 .rules-entry-index {
   @apply text-right text-[11px] tabular-nums text-base-content/55;
 }
 
-.rules-entry-type {
-  @apply truncate text-xs text-base-content/65;
+.rules-entry-badge {
+  @apply inline-flex h-5 w-[4.5rem] items-center justify-center truncate rounded-md px-1.5 text-[11px] font-medium;
+}
+
+.rules-entry-badge--suffix {
+  background: color-mix(in oklab, var(--selection-ink) 14%, transparent);
+  color: var(--selection-ink);
+}
+
+.rules-entry-badge--domain {
+  background: color-mix(in oklab, var(--latency-ok-ink) 14%, transparent);
+  color: var(--latency-ok-ink);
+}
+
+.rules-entry-badge--keyword {
+  background: color-mix(in oklab, var(--latency-slow-ink) 15%, transparent);
+  color: var(--latency-slow-ink);
+}
+
+.rules-entry-badge--regex {
+  background: color-mix(in oklab, var(--tcp-ink) 14%, transparent);
+  color: var(--tcp-ink);
+}
+
+.rules-entry-badge--ip {
+  background: color-mix(in oklab, var(--udp-ink) 14%, transparent);
+  color: var(--udp-ink);
+}
+
+.rules-entry-badge--other {
+  background: var(--fill);
+  color: oklch(var(--bc) / 0.72);
 }
 
 .rules-entry-value {
@@ -1830,7 +1982,7 @@ button.rules-provider-name:hover .rules-name-prefix {
 
 @media (max-width: 639px) {
   .rules-entry {
-    grid-template-columns: 5.5rem minmax(0, 1fr);
+    grid-template-columns: 4.5rem minmax(0, 1fr);
   }
 
   .rules-entry-index {

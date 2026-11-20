@@ -7,6 +7,8 @@
 
 The Overview, Proxies, Connections, Logs and Rules pages are shared between both platforms, so improvements reach both. Android keeps its own glass cards, touch sizes and bottom-nav layout.
 
+The native migration is underway in [clients/native](clients/native/README.md). The Windows GPUI Fast client and the Android Flutter client share a Rust Clash API implementation. Native preview builds are available alongside the current release.
+
 ## Windows features
 
 - **Window**
@@ -326,10 +328,3 @@ Android APKs are built only when all four `ANDROID_*` secrets are set. Without t
 - The Android app talks to the Clash API over HTTP, so cleartext traffic is allowed.
 - Rule provider content search reads `cache.db`, `.srs` and source `.json` rule sets from the working directory; on Android it needs root mode.
 - Remote config profiles must be sing-box JSON. Clash YAML and base64 subscriptions are not converted.
-
----
-
-> 🤖 **AI-Assisted Development**
->
-> This project is an exploration of AI's project-level coding capabilities. Code generated using **Claude Code(Claude Opus 4.6)** and **GPT-5.3-Codex** models via **Visual Studio Code**.
->

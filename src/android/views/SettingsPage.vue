@@ -21,6 +21,7 @@ import OverflowingText from '@/components/common/OverflowingText.vue'
 import DnsQueryTool from '@/components/settings/DnsQueryTool.vue'
 import CoreUpdateCard from '@/android/components/settings/CoreUpdateCard.vue'
 import PanelUpdateCard from '@/android/components/settings/PanelUpdateCard.vue'
+import SettingsExport from '@/components/settings/SettingsExport.vue'
 import BackgroundEditorDialog from '@/components/settings/BackgroundEditorDialog.vue'
 import GlassTintSlider from '@/components/common/GlassTintSlider.vue'
 import SettingsSelect from '@/android/components/settings/SettingsSelect.vue'
@@ -893,6 +894,7 @@ watch(
       <h2 class="settings-group-title">更新</h2>
       <CoreUpdateCard v-if="config.rootMode" />
       <PanelUpdateCard />
+      <SettingsExport />
     </section>
   </div>
 </template>

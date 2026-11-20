@@ -45,6 +45,7 @@ pub fn run() {
             self_update::check_panel_update,
             self_update::perform_panel_update,
             self_update::cleanup_panel_update,
+            native::export_native_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

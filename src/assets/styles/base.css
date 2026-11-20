@@ -33,12 +33,15 @@ body,
 }
 
 :root {
-  background: var(--page-bg);
+  background-color: var(--page-bg);
+  background-image: var(--page-backdrop);
+  background-attachment: fixed;
 }
 
 html.has-mica,
 html.has-mica body {
   background: transparent;
+  background-image: none;
 }
 
 .emoji-font {

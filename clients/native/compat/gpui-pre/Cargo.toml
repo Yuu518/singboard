@@ -1,0 +1,17 @@
+[package]
+name = "gpui-pre"
+version = "0.3.12"
+edition = "2024"
+publish = false
+
+[lib]
+name = "gpui"
+path = "lib.rs"
+
+[dependencies]
+gpui.workspace = true
+
+[features]
+default = ["gpui/default"]
+inspector = ["gpui/inspector"]
+test-support = ["gpui/test-support"]

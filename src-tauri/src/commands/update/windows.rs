@@ -239,9 +239,9 @@ pub(crate) fn swap_and_restart(
 
 /// 下载资产并解压，返回其中 sing-box.exe 的 SHA-256。
 /// 用于版本号相同时比对本地核心与上游资产是否一致（缓存未命中时调用）
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn probe_asset_core_hash(
-    app: tauri::AppHandle,
+    app: super::UpdateContext,
     asset_url: String,
     asset_size: u64,
     asset_digest: String,
@@ -252,7 +252,10 @@ pub async fn probe_asset_core_hash(
         .try_lock()
         .map_err(|_| "更新正在进行中".to_string())?;
 
+    #[cfg(singboard_tauri)]
     let staging = staging_dir();
+    #[cfg(not(singboard_tauri))]
+    let staging = app.directory.join("core-update");
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| format!("创建临时目录失败: {}", e))?;
     let cleanup = |msg: String| {
@@ -300,9 +303,9 @@ pub async fn probe_asset_core_hash(
     Ok(hash)
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn perform_core_update(
-    app: tauri::AppHandle,
+    app: super::UpdateContext,
     asset_url: String,
     asset_size: u64,
     asset_digest: String,
@@ -310,7 +313,10 @@ pub async fn perform_core_update(
     singbox_path: String,
 ) -> Result<CoreUpdateResult, String> {
     core_asset_hash(&asset_digest)?;
+    #[cfg(singboard_tauri)]
     let service_name = crate::service::component::app_service_name(&app)?;
+    #[cfg(not(singboard_tauri))]
+    let service_name = crate::service::service_name()?;
     let _guard = UPDATE_LOCK
         .try_lock()
         .map_err(|_| "更新正在进行中".to_string())?;
@@ -325,7 +331,10 @@ pub async fn perform_core_update(
     }
 
     // 临时目录
+    #[cfg(singboard_tauri)]
     let staging = staging_dir();
+    #[cfg(not(singboard_tauri))]
+    let staging = app.directory.join("core-update");
     let cleanup = |msg: String| {
         let _ = std::fs::remove_dir_all(&staging);
         msg
@@ -383,18 +392,17 @@ pub async fn perform_core_update(
         files.push((name, hash));
     }
     emit_progress(&app, CORE_PROGRESS_EVENT, "replace", 0, 0);
-    let restarted = crate::service::elevation::request(
-        &app,
-        crate::service::elevation::Operation::UpdateCore {
+    let operation = crate::service::admin::Operation::UpdateCore {
             service: service_name,
             staging: files_dir,
             target,
             files,
-        },
-    )
-    .await
-    .map_err(cleanup)?
-    .as_bool()
+        };
+    #[cfg(singboard_tauri)]
+    let result=crate::service::elevation::request(&app,operation).await;
+    #[cfg(not(singboard_tauri))]
+    let result=crate::service::request_value(operation).await;
+    let restarted=result.map_err(cleanup)?.as_bool()
     .ok_or("更新进程返回了无效结果")?;
     // 步骤 10：清理
     let _ = std::fs::remove_dir_all(&staging);

@@ -15,6 +15,8 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import app.tauri.annotation.Command
+import androidx.activity.result.ActivityResult
+import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
@@ -23,6 +25,11 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import java.io.File
 import java.util.Locale
+
+@InvokeArg
+class SettingsExportArgs {
+  lateinit var content: String
+}
 
 @InvokeArg
 class InstallApkArgs {
@@ -121,6 +128,29 @@ class SingboardPlugin(private val activity: Activity) : Plugin(activity) {
     val ret = JSObject()
     ret.put("servers", servers)
     invoke.resolve(ret)
+  }
+
+  @Command
+  fun exportSettings(invoke: Invoke) {
+    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+      .setType("application/json").putExtra(Intent.EXTRA_TITLE, "singboard-settings.json")
+    startActivityForResult(invoke, intent, "onSettingsExport")
+  }
+
+  @ActivityCallback
+  fun onSettingsExport(invoke: Invoke, result: ActivityResult) {
+    val uri = result.data?.data
+    try {
+      val saved = result.resultCode == Activity.RESULT_OK && uri != null
+      if (saved) {
+        val bytes = invoke.parseArgs(SettingsExportArgs::class.java).content.toByteArray(Charsets.UTF_8)
+        val output = activity.contentResolver.openOutputStream(requireNotNull(uri), "wt") ?: error("无法写入备份")
+        output.use { it.write(bytes) }
+      }
+      invoke.resolve(JSObject().apply { put("saved", saved) })
+    } catch (e: Exception) {
+      invoke.reject(e.localizedMessage ?: "设置导出失败")
+    }
   }
 
   @Command

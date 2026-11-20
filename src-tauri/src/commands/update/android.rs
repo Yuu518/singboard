@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
+#[cfg(singboard_tauri)]
 use tauri::Manager;
 
 use crate::root::{self, SERVICE_HOME, quote};
@@ -31,7 +32,10 @@ pub(super) fn asset_suffixes() -> Result<Vec<String>, String> {
         .collect())
 }
 
-fn staging_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn staging_dir(app: &super::UpdateContext) -> Result<PathBuf, String> {
+    #[cfg(not(singboard_tauri))]
+    return Ok(app.directory.join("core-update"));
+    #[cfg(singboard_tauri)]
     app.path()
         .app_cache_dir()
         .map(|dir| dir.join("core-update"))
@@ -85,7 +89,7 @@ fn extract_core(archive_path: &Path, files_dir: &Path, asset_digest: &str) -> Re
 }
 
 async fn download_and_extract(
-    app: &tauri::AppHandle,
+    app: &super::UpdateContext,
     staging: &Path,
     asset_url: &str,
     asset_size: u64,
@@ -123,9 +127,9 @@ async fn download_and_extract(
     .map_err(|e| format!("任务执行失败: {}", e))?
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn probe_asset_core_hash(
-    app: tauri::AppHandle,
+    app: super::UpdateContext,
     asset_url: String,
     asset_size: u64,
     asset_digest: String,
@@ -204,9 +208,9 @@ async fn swap_core(staged: &Path, target: &str) -> Result<(String, bool), String
     Err("新核心启动失败，已恢复旧版本".into())
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn perform_core_update(
-    app: tauri::AppHandle,
+    app: super::UpdateContext,
     asset_url: String,
     asset_size: u64,
     asset_digest: String,

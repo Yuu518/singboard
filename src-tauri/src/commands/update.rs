@@ -3,7 +3,15 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(singboard_tauri)]
 use tauri::Emitter;
+#[cfg(singboard_tauri)]
+pub type UpdateContext = tauri::AppHandle;
+#[cfg(not(singboard_tauri))]
+pub struct UpdateContext {
+    pub directory: std::path::PathBuf,
+    pub progress: Box<dyn Fn(&str, u64, u64) + Send + Sync>,
+}
 use tokio::io::AsyncWriteExt;
 
 #[cfg_attr(windows, path = "update/windows.rs")]
@@ -21,14 +29,14 @@ pub(crate) const STAGED_MANIFEST: &str = "staged.json";
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CoreUpdateInfo {
-    version: String,
-    prerelease: bool,
-    published_at: String,
-    asset_name: String,
-    asset_url: String,
-    asset_size: u64,
+    pub version: String,
+    pub prerelease: bool,
+    pub published_at: String,
+    pub asset_name: String,
+    pub asset_url: String,
+    pub asset_size: u64,
     /// GitHub 资产的 SHA-256（形如 "sha256:..."），个别源可能缺失则为空串
-    asset_digest: String,
+    pub asset_digest: String,
 }
 
 #[derive(Serialize)]
@@ -132,12 +140,15 @@ pub(crate) fn staged_matches(
 }
 
 pub(crate) fn emit_progress(
-    app: &tauri::AppHandle,
+    app: &UpdateContext,
     event: &str,
     phase: &'static str,
     downloaded: u64,
     total: u64,
 ) {
+    #[cfg(not(singboard_tauri))]
+    { let _=event; (app.progress)(phase,downloaded,total); }
+    #[cfg(singboard_tauri)]
     let _ = app.emit(
         event,
         UpdateProgress {
@@ -242,7 +253,7 @@ fn newest_release(releases: Vec<GhRelease>) -> Option<GhRelease> {
     })
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn check_core_update(
     repo: String,
     channel: String,
@@ -294,7 +305,7 @@ pub(crate) fn panel_download_urls(
 }
 
 pub(crate) async fn download_asset(
-    app: &tauri::AppHandle,
+    app: &UpdateContext,
     event: &str,
     url: &str,
     expected_size: u64,
@@ -304,7 +315,7 @@ pub(crate) async fn download_asset(
 }
 
 pub(crate) async fn download_asset_from(
-    app: &tauri::AppHandle,
+    app: &UpdateContext,
     event: &str,
     urls: &[String],
     token: Option<&str>,
@@ -327,7 +338,7 @@ pub(crate) async fn download_asset_from(
 }
 
 async fn fetch_to_file(
-    app: &tauri::AppHandle,
+    app: &UpdateContext,
     event: &str,
     client: &reqwest::Client,
     url: &str,
@@ -464,6 +475,7 @@ pub fn is_release_page_url(url: &str) -> bool {
     }
 }
 
+#[cfg(singboard_tauri)]
 #[tauri::command]
 pub fn open_release_page(app: tauri::AppHandle, url: String) -> Result<(), String> {
     if !is_release_page_url(&url) {

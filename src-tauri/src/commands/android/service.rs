@@ -168,7 +168,7 @@ pub(crate) async fn stop() -> Result<(), String> {
     }
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn service_status() -> Result<ServiceStatus, String> {
     if !root::enabled() {
         return Ok(with_state("unknown"));
@@ -176,17 +176,17 @@ pub async fn service_status() -> Result<ServiceStatus, String> {
     query_status().await
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn service_start() -> Result<(), String> {
     start().await
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn service_stop() -> Result<(), String> {
     stop().await
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn service_restart() -> Result<(), String> {
     stop().await?;
     start().await
@@ -221,7 +221,7 @@ fn boot_hook_script() -> String {
     )
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn service_install(
     singbox_path: String,
     config_path: String,
@@ -256,7 +256,7 @@ pub async fn service_install(
     root::run_async(script).await.map(|_| ())
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn service_component_sync() -> Result<String, String> {
     sync_component().await
 }
@@ -288,12 +288,12 @@ async fn sync_component() -> Result<String, String> {
     Ok("updated".into())
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn service_error_log() -> Result<String, String> {
     run_action("log").await.or_else(|_| Ok(String::new()))
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn service_boot_hook_exists() -> bool {
     if !root::enabled() {
         return false;
@@ -303,7 +303,7 @@ pub async fn service_boot_hook_exists() -> bool {
         .is_ok()
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn service_create_boot_hook() -> Result<(), String> {
     root::run_async(format!(
         "set -e\n[ -f {s} ] || {{ echo '服务未安装'; exit 1; }}\n{hook}",
@@ -314,7 +314,7 @@ pub async fn service_create_boot_hook() -> Result<(), String> {
     .map(|_| ())
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub async fn service_delete_boot_hook() -> Result<(), String> {
     root::run_async(format!("rm -f {}", quote(BOOT_HOOK)))
         .await

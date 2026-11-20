@@ -1,0 +1,19 @@
+[workspace]
+members = ["stream", "windows"]
+resolver = "2"
+
+[workspace.dependencies]
+gpui = { package = "gpui-fast", version = "=0.1.17", default-features = false }
+
+[patch.crates-io]
+gpui-pre = { path = "compat/gpui-pre" }
+
+[profile.release]
+strip = true
+
+[profile.windows-release]
+inherits = "release"
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+panic = "abort"

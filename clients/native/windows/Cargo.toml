@@ -1,0 +1,38 @@
+[package]
+name = "singboard-gpui"
+version = "4.9.2"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "singboard"
+path = "src/main.rs"
+
+[build-dependencies]
+embed-resource = "3"
+
+[dependencies]
+zip = { version = "4", default-features = false, features = ["deflate"] }
+reqwest = { version = "0.12", default-features = false, features = ["json","rustls-tls"] }
+rusty-leveldb = "4"
+anyhow = "1"
+gpui = { workspace = true, features = ["windows-manifest-provided-by-host"] }
+gpui_platform = { package = "gpui-fast-platform", version = "=0.1.17", default-features = false }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "webp"] }
+singboard-stream = { path = "../stream" }
+tray-icon = { version = "0.21", default-features = false }
+winreg = "0.55"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+singboard-service = { path = "../../../src-tauri/service-host" }
+raw-window-handle = "0.6"
+gpui-component = { version = "=0.10.0", default-features = false, features = ["gpui-fast", "tree-sitter"] }
+gpui-kit-assets = { version = "=0.10.0", features = ["gpui-fast"] }
+tempfile = "3"
+window-vibrancy = "0.6"
+tokio = { version = "1", features = ["process", "fs"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Services", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(singboard_tauri)"] }

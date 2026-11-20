@@ -33,6 +33,7 @@ import { glassTintLabel } from '@/utils/glassTint'
 import DnsQueryTool from '@/components/settings/DnsQueryTool.vue'
 import CoreUpdateCard from '@/components/settings/CoreUpdateCard.vue'
 import PanelUpdateCard from '@/components/settings/PanelUpdateCard.vue'
+import SettingsExport from '@/components/settings/SettingsExport.vue'
 import BackgroundEditorDialog from '@/components/settings/BackgroundEditorDialog.vue'
 import { removeEntry, restoreEntry, type RemovedEntry } from '@/utils/orderedRecord'
 import { buildApiUrl, hostForDisplay, parseApiUrl, type EndpointField, type EndpointProtocol } from '@/utils/clashEndpoint'
@@ -1215,6 +1216,7 @@ watch(
       <h2 class="settings-group-title">更新</h2>
       <CoreUpdateCard />
       <PanelUpdateCard />
+      <SettingsExport />
     </section>
   </div>
 </template>

@@ -1466,14 +1466,14 @@ pub(crate) fn srs_list_bytes(data: &[u8]) -> Result<Vec<RuleEntry>, String> {
     Ok(entries)
 }
 
-#[tauri::command]
+#[cfg_attr(singboard_tauri, tauri::command)]
 pub fn srs_match(path: String, query: String) -> Result<bool, String> {
     let data = std::fs::read(&path).map_err(|e| format!("read '{}': {}", path, e))?;
     let q = parse_query(&query);
     srs_match_bytes(&data, &q)
 }
 
-#[tauri::command(async)]
+#[cfg_attr(singboard_tauri, tauri::command(async))]
 pub fn srs_list_provider(
     working_dir: String,
     config_path: String,
@@ -1483,7 +1483,7 @@ pub fn srs_list_provider(
     super::ruleset::resolve(&working_dir, &config_path, &singbox_path, &tag)?.list()
 }
 
-#[tauri::command(async)]
+#[cfg_attr(singboard_tauri, tauri::command(async))]
 pub fn srs_match_provider(
     working_dir: String,
     config_path: String,

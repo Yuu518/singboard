@@ -1,4 +1,6 @@
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(singboard_tauri)");
+    println!("cargo:rustc-cfg=singboard_tauri");
     let target_windows = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
     if target_windows {
         // Prepare the embedded payload after the Tauri hook builds the release host.
