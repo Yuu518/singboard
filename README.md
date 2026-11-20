@@ -8,8 +8,8 @@
 ## Windows features
 
 - **Window**
-  - Frameless glass window with a Mica backdrop on Windows 11
-  - Remembers window size and position; only one instance can run
+  - Frameless translucent glass window with an aurora backdrop (or custom wallpaper)
+  - Remembers window size, position and maximized state; only one instance can run
   - Optional close to tray. The tray menu can open the panel, start, stop or restart the service, and quit
   - Optional launch at startup; the panel starts hidden in the tray
 - **First-run setup wizard**
@@ -74,7 +74,7 @@
     - Keeps JSONC comments, with batch comment and uncomment
     - Undo and redo, format, validate, save (`Ctrl+S`)
     - Warns about unsaved changes
-  - Applying a profile writes the running config and offers to restart the core
+  - Applying a profile validates it, switches the active config path, and offers to restart the core to activate a new protected snapshot
 - **Settings**
   - Core and service:
     - Start, restart and stop the core, with a reachability check after start
@@ -96,9 +96,9 @@
     - Stable or testing channel, optional download mirror
     - SHA-256 verified, rolled back if the new core fails to start
     - The release check sends the GitHub token when one is set, avoiding the anonymous rate limit
-  - Panel updates: checked on startup, SHA-256 verified; the panel replaces itself without interrupting the proxy service
-    - Downloads from the release link first and falls back to the GitHub API asset endpoint
-    - With an optional GitHub token, checks and downloads go through the GitHub API first, avoiding the anonymous rate limit
+  - Panel updates: checked on startup, SHA-256 verified (including same-version digest mismatch detection); the panel replaces itself without interrupting the proxy service
+    - Tries the configured download mirror first, then the GitHub release link and GitHub API asset endpoint
+    - With an optional GitHub token, checks and downloads prefer the GitHub API to avoid anonymous rate limits
 
 ## Android features
 
@@ -110,17 +110,20 @@
   - Clash API URL and secret
   - Optionally, a sing-box working directory for root mode
   - Can be skipped and finished later in Settings
-- **Overview** (opens first): the shared page described above
+- **Overview** (opens first): traffic wave, connection/memory trends, exit IPs, site latencies, and connection topology
   - Root mode adds the core version, restart and power buttons, the core process's CPU usage and resident memory, and asks for a working directory when none is set
   - Remote mode shows the endpoint name, and points to the Clash API settings when the core cannot be reached
-- **Proxies, Connections, Logs, Rules**: the shared pages described above. Each page shows a clear state when the core is stopped, the Clash API is unreachable, or the secret is wrong
+- **Proxies, Connections, Logs, Rules**: full native Flutter pages powered by `singboard-stream`. Each page shows a clear state when the core is stopped, the Clash API is unreachable, or the secret is wrong
+- **Config** (root mode, from Settings):
+  - Manage remote sing-box JSON subscriptions (with optional auto-update) and edit local or root config files
+  - Whole-file or top-level module JSON/JSONC editing, formatting, `sing-box check` validation, and `.bak` restore
 - **Settings**
   - Core and service (root mode):
     - Start, restart and stop
     - Working directory detection
     - Start on boot
   - Clash API endpoints, network test URLs, DNS query tool
-  - Theme, glass tint slider, custom wallpaper, page swiping
+  - Theme, glass tint slider, custom wallpaper with image editor (crop, rotate, mirror), page swiping
   - Core updates (root mode) and app updates
 - **Remote mode** (no root required)
   - Connects to sing-box running on a router, a PC or another app
@@ -140,9 +143,9 @@
     - Without an existing core, it installs to `bin/sing-box` (or `sing-box` in the working directory)
   - Every root operation goes through one long-lived `su` shell, so the root manager prompts once
 - **In-app updates**
-  - Checks `Yuu518/singboard` releases on startup (can be disabled)
-  - Downloads the APK for the device ABI, verifies its SHA-256 digest, then opens the system installer
-  - Same download order as Windows: release link first, GitHub API as fallback, or the API first when a GitHub token is set
+  - Checks `Yuu518/singboard` releases on startup (can be disabled), including same-version SHA-256 mismatch detection
+  - Downloads the APK for the device ABI, verifies its SHA-256 digest and package signature, then opens the system installer
+  - Same download order as Windows: optional mirror first, then release link and GitHub API (or API first when a GitHub token is set)
 
 ### Root layout
 
@@ -174,9 +177,9 @@ Each time the app starts the core, it rewrites the service script with the detec
 - For Android:
   - Flutter SDK 3.47+ (Dart 3.13+)
   - JDK 21
-  - Android SDK with platform 36 and build-tools 36
-  - Android NDK (r28+)
-  - `ANDROID_HOME` (and optionally `ANDROID_NDK_HOME`) set
+  - Android SDK with `platforms;android-36` and `build-tools;36.0.0`
+  - Android NDK r28+ (default path `$ANDROID_HOME/ndk/28.2.13676358`, or set `ANDROID_NDK_HOME`)
+  - `ANDROID_HOME` set
   - Rust targets `aarch64-linux-android` and `armv7-linux-androideabi`
 
 ## Build
@@ -193,9 +196,13 @@ Build the Android APKs:
 pwsh clients/native/build.ps1 -Platform Android
 ```
 
-Release assets are written to `dist/native/` (`singboard-native-windows-x64.exe`, `singboard-native-arm64-v8a.apk`, `singboard-native-armeabi-v7a.apk`). Android release signing uses `SINGBOARD_ANDROID_KEYSTORE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`.
+Outputs are written to `dist/native/`:
 
-The Windows build produces one distributable file, `singboard-native-windows-x64.exe`. It is the panel (GUI) with the service host embedded.
+- Windows writes `singboard.exe` by default, or `singboard-native-windows-x64.exe` when `-ReleaseAssets` is passed.
+- Android writes `singboard-native-arm64-v8a.apk` and `singboard-native-armeabi-v7a.apk`. Release signing uses `SINGBOARD_ANDROID_KEYSTORE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` (required with `-ReleaseAssets`).
+- All build caches (Cargo, Pub, Gradle and Android staging) are kept under `.build-deps/`.
+
+The Windows build produces one self-contained executable with the service host embedded.
 
 - **Service host**
   - It is a standalone crate (`clients/native/service-host/`), embedded into `singboard.exe` at build time.
@@ -238,25 +245,29 @@ Android APKs are built only when all four `ANDROID_*` secrets are set. Without t
 
 ```text
 .
+├─ .github/workflows/
+│  └─ build.yml           # Windows and Android CI build & release workflow
 └─ clients/native/
    ├─ Cargo.toml          # Rust workspace (stream, windows, service-host)
-   ├─ build.ps1           # Windows and Android release build script
+   ├─ build.ps1           # Local Windows and Android build script
    ├─ stream/             # Shared Rust Clash API, commands, root shell, Android scripts
-   ├─ windows/            # Windows GPUI-Fast client and service integration
+   ├─ windows/            # Windows GPUI-Fast client, icons, manifest and service integration
    ├─ service-host/       # Windows service host, embedded into singboard.exe
-   └─ android/            # Android Flutter app, shaders, icons and Kotlin host
+   ├─ android/            # Android Flutter app, shaders, icons and Kotlin host
+   └─ compat/gpui-pre/    # GPUI compatibility patch crate
 ```
 
 ## Configuration and Data
 
 - **Windows data directory**: `%APPDATA%\singboard\` holds:
-  - `native-settings.json`, app preferences and Clash API endpoints
-  - `window.json`, saved window bounds
+  - `native-settings.json`, app preferences, Clash API endpoints and profile metadata
+  - `window.json`, saved window size, position and maximized state
   - `wallpaper.png`, custom wallpaper
-  - `running-config.json`, the configuration the core actually reads
-  - `Native Subscriptions\`, downloaded remote profiles
+  - `remote-configs\`, downloaded remote config profiles
+  - `updates\`, staged panel updates (cleaned up after apply)
 - **Windows protected service runtime**: `%ProgramFiles%\singboard-service\`
-- **Android package name**: `io.github.yuu518.singboard_native` (Android 8.0+)
+- **Android package name**: `io.github.yuu518.singboard_native` (Android 8.0+ / API 26+)
+  - App-private storage (`filesDir`) stores `native-settings.json`, `wallpaper.png`, remote subscriptions, and staged `updates/` APKs
 
 ## Notes
 
