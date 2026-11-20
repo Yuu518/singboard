@@ -53,9 +53,8 @@ pub async fn run(
         Ok(())
     })?;
     let summary = format!(
-        "{} · {} · {:.1} MiB",
+        "{} · {:.1} MiB",
         info.version,
-        info.asset_name,
         info.asset_size as f64 / 1048576.
     );
     if action == "core_check" {

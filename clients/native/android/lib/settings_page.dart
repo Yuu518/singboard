@@ -447,7 +447,13 @@ class _SettingsPageState extends State<SettingsPage> {
         'servers': servers ?? <String>[],
       });
       if (reply['refresh'] == true) await widget.onReload();
-      if (mounted) setState(() => _messages[group] = reply['text'] as String);
+      final text = reply['text'] as String;
+      if (mounted) {
+        setState(
+          () => _messages[group] =
+              action == 'core_check' ? '可用版本 $text' : text,
+        );
+      }
       return true;
     } catch (e) {
       if (mounted) setState(() => _messages[group] = e.toString());

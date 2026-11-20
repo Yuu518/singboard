@@ -49,7 +49,7 @@ pub fn apply(
     {
         return Err("更新目录或校验信息无效".into());
     }
-    let staged = worker.with_file_name(update::asset_name());
+    let staged = worker.with_file_name(update::staged_filename());
     let handle = unsafe { OpenProcess(0x00100000, 0, pid) };
     if !handle.is_null() {
         let status = unsafe {
