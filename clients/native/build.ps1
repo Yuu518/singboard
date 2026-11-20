@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory)][ValidateSet('Windows','Android')][string]$Platform,
     [string]$ReleaseVersion,
     [switch]$ReleaseAssets
@@ -43,7 +43,7 @@ $env:SINGBOARD_RELEASE_VERSION = $ReleaseVersion
 if ($Platform -eq 'Windows') {
     $target = 'x86_64-pc-windows-msvc'
     $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-Ctarget-feature=+crt-static'
-    Invoke-Tool cargo @('build','--locked','--release','--target',$target,'--manifest-path',"$project/src-tauri/service-host/Cargo.toml",'--target-dir',"$cache/host")
+    Invoke-Tool cargo @('build','--locked','--release','--target',$target,'--manifest-path',$manifest,'-p','singboard-service','--target-dir',"$cache/host")
     $env:SINGBOARD_SERVICE_HOST = "$cache/host/$target/release/singboard-service.exe"
     Invoke-Tool cargo @('build','--locked','--profile','windows-release','--target',$target,'--manifest-path',$manifest,'-p','singboard-gpui')
     $binary = "$env:CARGO_TARGET_DIR/$target/windows-release/singboard.exe"
@@ -85,7 +85,7 @@ Copy-Item -LiteralPath "$PSScriptRoot/android/AndroidManifest.xml" -Destination 
 $null = New-Item -ItemType Directory -Force "$stage/android/app/src/main/res/xml"
 Copy-Item -LiteralPath "$PSScriptRoot/android/update_paths.xml" -Destination "$stage/android/app/src/main/res/xml"
 Copy-Item -LiteralPath "$PSScriptRoot/android/MainActivity.kt" -Destination "$stage/android/app/src/main/kotlin/io/github/yuu518/singboard_native/MainActivity.kt"
-$resources = "$project/src-tauri/gen/android/app/src/main/res"
+$resources = "$PSScriptRoot/android/res"
 foreach ($density in @('mdpi','hdpi','xhdpi','xxhdpi','xxxhdpi')) {
     $icon = "mipmap-$density/ic_launcher.png"
     Copy-Item -LiteralPath "$resources/$icon" -Destination "$stage/android/app/src/main/res/$icon"

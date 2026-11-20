@@ -1,9 +1,5 @@
-use crate::{
-    clash::Clash,
-    profiles::{Profile, Store, write_atomic},
-};
+use crate::profiles::write_atomic;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use std::{collections::HashMap, fs, path::Path};
 
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -71,105 +67,6 @@ impl Settings {
     pub fn revision() -> u64 {
         REVISION.load(std::sync::atomic::Ordering::Acquire)
     }
-    pub fn parse(text: &str) -> Result<Self, String> {
-        if text.len() > 16 * 1024 * 1024 {
-            return Err("设置备份超过 16 MiB".into());
-        }
-        let raw: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
-            .map_err(|_| "设置文件不是有效的 JSON")?;
-        let raw = if raw.get("format").is_some() {
-            if raw["format"] != "singboard-settings" || raw["version"] != 1 {
-                return Err("设置备份格式或版本不受支持".into());
-            }
-            &raw["config"]
-        } else {
-            &raw
-        };
-        let supported = [
-            "clashApis",
-            "clashApiUrl",
-            "theme",
-            "startPage",
-            "glassTint",
-            "glassMode",
-            "startupDelaySeconds",
-            "configProfiles",
-            "configPath",
-            "panelAutoCheckUpdate",
-            "latencyTestUrl",
-            "closeToTray",
-            "workingDir",
-            "singboxPath",
-            "groupTestUrls",
-        ];
-        if !supported.iter().any(|k| raw.get(k).is_some()) {
-            return Err("文件中没有 Singboard 旧版设置".into());
-        }
-        let mut data: Self = serde_json::from_value(raw.clone())
-            .map_err(|e| format!("旧版设置字段格式错误：{e}"))?;
-        if data.clash_apis.is_empty()
-            && let Some(url) = raw["clashApiUrl"].as_str()
-        {
-            data.clash_apis.push(Endpoint {
-                id: "default".into(),
-                name: "默认 API".into(),
-                url: url.into(),
-                secret: raw["clashApiSecret"].as_str().unwrap_or("").into(),
-            });
-        }
-        data.native_root_enabled = false;
-        data.github_token.clear();
-        let mut ids = std::collections::HashSet::new();
-        for api in &mut data.clash_apis {
-            if api.id.is_empty() || !ids.insert(api.id.clone()) {
-                api.id = uuid::Uuid::new_v4().to_string();
-                ids.insert(api.id.clone());
-            }
-            if api.name.trim().is_empty() {
-                api.name = "API".into();
-            }
-            if api.url.trim().is_empty() {
-                api.url = "http://127.0.0.1:9090".into();
-            }
-            Clash::new(&api.url, &api.secret).map_err(|_| "旧版设置包含无效的 Clash API 地址")?;
-        }
-        if let Some(api) = data.active() {
-            data.active_clash_api_id = api.id.clone();
-        }
-        let active = match raw["activeConfigProfileId"].as_str() {
-            Some("") => None,
-            Some(id) => data
-                .config_profiles
-                .iter()
-                .find(|p| p.id == id)
-                .or(data.config_profiles.first()),
-            None => data.config_profiles.first(),
-        };
-        if let Some(p) = active {
-            data.active_config_profile_id = p.id.clone();
-            if p.kind == "local" && data.config_path.is_empty() {
-                data.config_path = p.source.clone();
-            }
-        }
-        if data
-            .theme
-            .as_deref()
-            .is_some_and(|s| !matches!(s, "auto" | "light" | "dark"))
-        {
-            return Err("主题设置无效".into());
-        }
-        if data.glass_tint.is_none() {
-            data.glass_tint = raw["glassMode"]
-                .as_str()
-                .map(|m| if m == "clear" { 0. } else { 1. });
-        }
-        data.glass_tint = data.glass_tint.map(|n| n.clamp(0., 1.));
-        data.startup_delay_seconds = data.startup_delay_seconds.map(|n| n.min(3600));
-        for p in data.config_profiles.iter().filter(|p| p.kind == "remote") {
-            Profile::new(&p.name, &p.source, p.auto_update_interval)?;
-        }
-        Ok(data)
-    }
 
     pub fn profile_name(&self) -> &str {
         self.config_profiles
@@ -185,37 +82,12 @@ impl Settings {
             .find(|p| p.id == self.active_clash_api_id)
             .or(self.clash_apis.first())
     }
-    pub fn preview(&self) -> String {
-        let remote = self
-            .config_profiles
-            .iter()
-            .filter(|p| p.kind == "remote")
-            .count();
-        format!(
-            "{} 个 API 后端，{} 个远程订阅。导入会保存后端密钥并替换原生偏好，已有订阅按地址保留。",
-            self.clash_apis.len(),
-            remote
-        )
-    }
     pub fn load(dir: &Path) -> Result<Self, String> {
         match fs::read(dir.join("native-settings.json")) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e.to_string()),
         }
-    }
-    pub fn import(&self, dir: &Path, store: &Store) -> Result<Value, String> {
-        let _lock = Self::lock(dir)?;
-        let mut added = 0;
-        for p in self.config_profiles.iter().filter(|p| p.kind == "remote") {
-            if store.register(&p.name, &p.source, p.auto_update_interval)? {
-                added += 1
-            }
-        }
-        let mut imported = self.clone();
-        imported.github_token = Self::load(dir)?.github_token;
-        imported.save(dir)?;
-        Ok(json!({"added":added}))
     }
     fn lock(dir: &Path) -> Result<fs::File, String> {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -394,39 +266,36 @@ pub fn repair_auto_launch() {}
 mod tests {
     use super::*;
     #[test]
-    fn recognizes_both_generations_and_rejects_core_configs() {
-        let s=Settings::parse(r#"{"clashApiUrl":"http://localhost:8080","clashApiSecret":"test","glassMode":"clear"}"#).unwrap();
-        assert_eq!(s.active().unwrap().secret, "test");
-        assert_eq!(s.glass_tint, Some(0.));
-        assert!(Settings::parse(r#"{"outbounds":[]}"#).is_err());
-        assert!(
-            Settings::parse(r#"{"format":"singboard-settings","version":2,"config":{}}"#).is_err()
-        );
-    }
-    #[test]
-    fn importing_twice_preserves_subscriptions_and_selected_endpoint() {
+    fn selects_existing_endpoint_and_rejects_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::new(dir.path().join("subscriptions"));
-        let data=Settings::parse(r#"{"format":"singboard-settings","version":1,"config":{"activeClashApiId":"b","clashApis":[{"id":"a","url":"http://localhost:1"},{"id":"b","url":"https://example.test"}],"configProfiles":[{"type":"remote","name":"test","source":"https://example.test/profile"}]}}"#).unwrap();
-        assert_eq!(data.import(dir.path(), &store).unwrap()["added"], 1);
-        assert_eq!(data.import(dir.path(), &store).unwrap()["added"], 0);
+        Settings::edit(dir.path(), |s| {
+            s.clash_apis = vec![
+                Endpoint {
+                    id: "a".into(),
+                    name: "A".into(),
+                    url: "http://localhost:1".into(),
+                    secret: String::new(),
+                },
+                Endpoint {
+                    id: "b".into(),
+                    name: "B".into(),
+                    url: "https://example.test".into(),
+                    secret: String::new(),
+                },
+            ];
+            s.active_clash_api_id = "b".into();
+            Ok(())
+        })
+        .unwrap();
         assert_eq!(
             Settings::load(dir.path()).unwrap().active().unwrap().id,
             "b"
         );
-        assert!(!store.path(&store.list().unwrap()[0].id).unwrap().exists());
         Settings::select_endpoint(dir.path(), "a").unwrap();
         assert!(Settings::select_endpoint(dir.path(), "missing").is_err());
         assert_eq!(
             Settings::load(dir.path()).unwrap().active().unwrap().id,
             "a"
         );
-    }
-    #[test]
-    fn honors_the_selected_local_configuration() {
-        let data=Settings::parse(r#"{"configProfiles":[{"id":"a","type":"local","source":"a.json"},{"id":"b","type":"local","source":"b.json"}],"activeConfigProfileId":"b"}"#).unwrap();
-        assert_eq!(data.config_path, "b.json");
-        let empty=Settings::parse(r#"{"configProfiles":[{"id":"a","type":"local","source":"a.json"}],"activeConfigProfileId":""}"#).unwrap();
-        assert!(empty.config_path.is_empty());
     }
 }

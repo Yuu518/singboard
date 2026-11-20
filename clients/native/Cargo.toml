@@ -1,5 +1,5 @@
 [workspace]
-members = ["stream", "windows"]
+members = ["stream", "windows", "service-host"]
 resolver = "2"
 
 [workspace.dependencies]

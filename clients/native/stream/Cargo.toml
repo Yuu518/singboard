@@ -34,6 +34,3 @@ winreg = "0.55"
 hickory-resolver = { version = "0.26", features = ["tokio","system-config"] }
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
 tokio = { version = "1", features = ["process"] }
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(singboard_tauri)"] }

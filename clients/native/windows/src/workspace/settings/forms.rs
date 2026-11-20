@@ -1743,22 +1743,7 @@ impl Workspace {
                 p,
             ))
             .child(divider(p))
-            .child(token_row)
-            .child(divider(p))
-            .child(setting_row(
-                "旧版设置",
-                "从本机 WebView 数据或设置备份导入。",
-                action_btn("open-import", "导入设置", false, p)
-                    .on_click(cx.listener(|v, _, _, cx| {
-                        if let Err(error) = crate::maintenance::open(cx) {
-                            v.settings_layout.results.insert("panel-update", error);
-                            cx.notify();
-                        }
-                    }))
-                    .into_any_element(),
-                narrow,
-                p,
-            ));
+            .child(token_row);
 
         (core, panel)
     }

@@ -41,12 +41,6 @@ enum Command {
     SelectEndpoint {
         id: String,
     },
-    PreviewSettings {
-        text: String,
-    },
-    ImportSettings {
-        text: String,
-    },
     CheckUpdate { installed_apk: Option<std::path::PathBuf> },
     SetProxySort { enabled: bool },
     SetProxyGroupOpen { group: String, open: bool },
@@ -427,12 +421,6 @@ pub async fn request(dir: PathBuf, input: &str) -> Result<Value, String> {
         Command::SelectEndpoint { id } => {
             crate::settings::Settings::select_endpoint(&dir, &id)?;
             Value::Null
-        }
-        Command::PreviewSettings { text } => {
-            json!(crate::settings::Settings::parse(&text)?.preview())
-        }
-        Command::ImportSettings { text } => {
-            crate::settings::Settings::parse(&text)?.import(&dir, &store)?
         }
         Command::SetProxySort { enabled } => {
             crate::settings::Settings::edit(&dir, |s| { s.proxy_sort_latency = enabled; Ok(()) })?;

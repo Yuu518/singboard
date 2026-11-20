@@ -12,7 +12,6 @@ use url::Url;
 pub mod clash;
 pub mod commands;
 #[cfg(windows)]
-#[path = "../../../../src-tauri/src/commands/config_files.rs"]
 pub mod config_files;
 #[cfg(target_os = "android")]
 mod core_actions;
@@ -31,7 +30,6 @@ pub fn runtime() -> &'static Runtime {
 }
 
 #[allow(dead_code)]
-#[path = "../../../../src-tauri/src/root/mod.rs"]
 mod root;
 
 pub const LOG_LIMIT: usize = 5000;

@@ -50,37 +50,16 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.13.0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: pnpm
-
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Build the desktop library as an rlib only
-        shell: pwsh
-        working-directory: src-tauri
-        run: |
-          $manifest = Get-Content Cargo.toml -Raw
-          if ($manifest -notmatch '(?m)^crate-type = \[[^\]]*\]') { throw "crate-type not found in Cargo.toml" }
-          $manifest -replace '(?m)^crate-type = \[[^\]]*\]', 'crate-type = ["rlib"]' | Set-Content Cargo.toml -NoNewline
-          Select-String -Path Cargo.toml -Pattern '^crate-type'
+        with:
+          targets: x86_64-pc-windows-msvc
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2.9.2
         with:
-          workspaces: src-tauri -> target
+          workspaces: clients/native -> target
           cache-on-failure: true
-
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
 
       - name: Read release tag
         shell: pwsh
@@ -103,8 +82,6 @@ jobs:
           $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
           Remove-Item $pfxPath
 
-          # Trust the self-signed cert on this ephemeral runner so that
-          # "signtool verify /pa" can validate the certificate chain.
           $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new("Root", "LocalMachine")
           $rootStore.Open("ReadWrite")
           $rootStore.Add($cert)
@@ -119,46 +96,51 @@ jobs:
           "SIGNTOOL=$($signtool.FullName)" >> $env:GITHUB_ENV
           "CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
 
-      - name: Build and sign service host
-        if: env.CERT_THUMBPRINT != ''
+      - name: Build service host
         shell: pwsh
-        working-directory: src-tauri
         run: |
-          cargo build --release -p singboard-service
-          & $env:SIGNTOOL sign /sha1 $env:CERT_THUMBPRINT /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com target/release/singboard-service.exe
-          if ($LASTEXITCODE -ne 0) { throw "signing singboard-service.exe failed" }
+          $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-Ctarget-feature=+crt-static'
+          cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path clients/native/Cargo.toml -p singboard-service
+          if ($LASTEXITCODE -ne 0) { throw "building singboard-service.exe failed" }
+          if ($env:CERT_THUMBPRINT) {
+            & $env:SIGNTOOL sign /sha1 $env:CERT_THUMBPRINT /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com clients/native/target/x86_64-pc-windows-msvc/release/singboard-service.exe
+            if ($LASTEXITCODE -ne 0) { throw "signing singboard-service.exe failed" }
+          }
 
-      - name: Build Tauri app
-        run: pnpm tauri build
+      - name: Build Windows app
+        shell: pwsh
+        run: |
+          $env:SINGBOARD_RELEASE_VERSION = $env:APP_VERSION
+          $env:SINGBOARD_SERVICE_HOST = (Resolve-Path clients/native/target/x86_64-pc-windows-msvc/release/singboard-service.exe).Path
+          $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-Ctarget-feature=+crt-static'
+          cargo build --locked --profile windows-release --target x86_64-pc-windows-msvc --manifest-path clients/native/Cargo.toml -p singboard-gpui
+          if ($LASTEXITCODE -ne 0) { throw "building singboard.exe failed" }
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item -LiteralPath clients/native/target/x86_64-pc-windows-msvc/windows-release/singboard.exe -Destination release/singboard-native-windows-x64.exe
 
       - name: Sign application
         if: env.CERT_THUMBPRINT != ''
         shell: pwsh
         run: |
-          # The service host was signed before being embedded; fail loudly if
-          # the Tauri build relinked it and wiped the signature.
-          $serviceHost = Get-Item src-tauri/target/release/singboard-service.exe
+          $serviceHost = Get-Item clients/native/target/x86_64-pc-windows-msvc/release/singboard-service.exe
           & $env:SIGNTOOL verify /pa $serviceHost.FullName
-          if ($LASTEXITCODE -ne 0) { throw "singboard-service.exe lost its signature during the Tauri build" }
+          if ($LASTEXITCODE -ne 0) { throw "singboard-service.exe lost its signature during the build" }
           $hostHash = (Get-FileHash $serviceHost.FullName -Algorithm SHA256).Hash
-          $embedded = Get-ChildItem src-tauri/target/release/build -Recurse -File -Filter singboard.service |
+          $embedded = Get-ChildItem clients/native/target/x86_64-pc-windows-msvc/windows-release/build -Recurse -File -Filter singboard.service |
             Where-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash -eq $hostHash }
           if (-not $embedded) { throw "no embedded singboard.service matches the signed singboard-service.exe" }
 
-          $files = @(Get-Item src-tauri/target/release/singboard.exe)
-          $files += Get-ChildItem src-tauri/target/release/bundle -Recurse -File -Include *.exe, *.msi -ErrorAction SilentlyContinue
-          foreach ($f in $files) {
-            & $env:SIGNTOOL sign /sha1 $env:CERT_THUMBPRINT /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com $f.FullName
-            if ($LASTEXITCODE -ne 0) { throw "signing $($f.Name) failed" }
-            & $env:SIGNTOOL verify /pa $f.FullName
-            if ($LASTEXITCODE -ne 0) { throw "signature verification failed for $($f.Name)" }
-          }
+          $exe = Get-Item release/singboard-native-windows-x64.exe
+          & $env:SIGNTOOL sign /sha1 $env:CERT_THUMBPRINT /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com $exe.FullName
+          if ($LASTEXITCODE -ne 0) { throw "signing $($exe.Name) failed" }
+          & $env:SIGNTOOL verify /pa $exe.FullName
+          if ($LASTEXITCODE -ne 0) { throw "signature verification failed for $($exe.Name)" }
 
       - name: Upload Windows app
         uses: actions/upload-artifact@v7.0.1
         with:
           name: windows
-          path: src-tauri/target/release/singboard.exe
+          path: release/singboard-native-windows-x64.exe
           if-no-files-found: error
           retention-days: 1
 
@@ -172,13 +154,13 @@ jobs:
       matrix:
         include:
           - abi: arm64-v8a
-            target: aarch64
             rust-target: aarch64-linux-android
-            flavor: arm64
+            clang: aarch64-linux-android
+            flutter-platform: android-arm64
           - abi: armeabi-v7a
-            target: armv7
             rust-target: armv7-linux-androideabi
-            flavor: arm
+            clang: armv7a-linux-androideabi
+            flutter-platform: android-arm
     env:
       ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -195,18 +177,10 @@ jobs:
       - name: Read release tag
         run: |
           tag=$(git describe --tags --abbrev=0) || { echo "No tag found in the repository; push a tag before building"; exit 1; }
-          echo "APP_VERSION=${tag#v}" >> "$GITHUB_ENV"
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.13.0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: pnpm
+          version="${tag#v}"
+          IFS='.' read -r major minor patch <<< "$version"
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$((10000 * major + 100 * minor + patch))" >> "$GITHUB_ENV"
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -220,19 +194,25 @@ jobs:
           cache-provider: basic
           add-job-summary: never
 
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
       - name: Install Android SDK packages
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Use preinstalled NDK r30
+      - name: Setup Android NDK
         run: |
-          ndk=$(ls -d "$ANDROID_HOME"/ndk/30.* 2>/dev/null | sort -V | tail -n 1)
+          ndk=$(ls -d "$ANDROID_HOME"/ndk/28.* "$ANDROID_HOME"/ndk/30.* 2>/dev/null | sort -V | tail -n 1)
           if [ -z "$ndk" ]; then
-            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;30.0.16248370"
-            ndk="$ANDROID_HOME/ndk/30.0.16248370"
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358"
+            ndk="$ANDROID_HOME/ndk/28.2.13676358"
           fi
-          test -f "$ndk/source.properties" || { echo "NDK r30 not found at $ndk"; exit 1; }
+          test -f "$ndk/source.properties" || { echo "NDK not found at $ndk"; exit 1; }
           grep Pkg.Revision "$ndk/source.properties"
           echo "NDK_HOME=$ndk" >> "$GITHUB_ENV"
 
@@ -244,45 +224,69 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2.9.2
         with:
-          workspaces: src-tauri -> target
+          workspaces: clients/native -> target
           key: ${{ matrix.rust-target }}
           env-vars: NDK_HOME
           cache-on-failure: true
 
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Write signing config
-        working-directory: src-tauri/gen/android
+      - name: Build Rust stream library
         run: |
-          echo "$ANDROID_KEYSTORE_B64" | base64 --decode > release.jks
-          {
-            echo "storeFile=release.jks"
-            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
-            echo "keyAlias=$ANDROID_KEY_ALIAS"
-            echo "keyPassword=$ANDROID_KEY_PASSWORD"
-          } > keystore.properties
+          bin="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          compiler="$bin/${{ matrix.clang }}26-clang"
+          key=$(echo "${{ matrix.rust-target }}" | tr '-' '_')
+          key_upper=$(echo "$key" | tr '[:lower:]' '[:upper:]')
+          export "CARGO_TARGET_${key_upper}_LINKER=$compiler"
+          export "CC_${key}=$compiler"
+          export "AR_${key}=$bin/llvm-ar"
+          export SINGBOARD_RELEASE_VERSION="$APP_VERSION"
+          cargo build --locked --release --manifest-path clients/native/Cargo.toml -p singboard-stream --target "${{ matrix.rust-target }}"
 
-      - name: Build APK
+      - name: Build and sign APK
         run: |
-          chmod +x src-tauri/gen/android/gradlew
-          pnpm tauri android build --apk --split-per-abi --target ${{ matrix.target }} --config "{\"version\":\"$APP_VERSION\"}"
+          stage="$RUNNER_TEMP/android-app"
+          flutter create --no-pub --empty --platforms=android --org io.github.yuu518 --project-name singboard_native "$stage"
+          cp clients/native/android/pubspec.yaml clients/native/android/pubspec.lock "$stage/"
+          cp clients/native/android/lib/*.dart "$stage/lib/"
+          cp -r clients/native/android/assets "$stage/"
+          cp clients/native/android/AndroidManifest.xml "$stage/android/app/src/main/"
+          mkdir -p "$stage/android/app/src/main/res/xml"
+          cp clients/native/android/update_paths.xml "$stage/android/app/src/main/res/xml/"
+          cp clients/native/android/MainActivity.kt "$stage/android/app/src/main/kotlin/io/github/yuu518/singboard_native/MainActivity.kt"
+          for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            cp "clients/native/android/res/mipmap-$density/ic_launcher.png" "$stage/android/app/src/main/res/mipmap-$density/ic_launcher.png"
+          done
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 26/' "$stage/android/app/build.gradle.kts"
+          mkdir -p "$stage/android/app/src/main/jniLibs/${{ matrix.abi }}"
+          cp "clients/native/target/${{ matrix.rust-target }}/release/libsingboard_stream.so" "$stage/android/app/src/main/jniLibs/${{ matrix.abi }}/"
 
-      - name: Collect APK
-        run: |
+          (
+            cd "$stage"
+            flutter pub get
+            flutter analyze --no-pub lib
+            flutter build apk --release --no-pub --split-per-abi --target-platform "${{ matrix.flutter-platform }}" --build-name "$APP_VERSION" --build-number "$BUILD_NUMBER"
+          )
+
           mkdir -p release
-          cp "src-tauri/gen/android/app/build/outputs/apk/${{ matrix.flavor }}/release/app-${{ matrix.flavor }}-release.apk" "release/singboard-${{ matrix.abi }}.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "release/singboard-${{ matrix.abi }}.apk"
+          echo "$ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
+            --ks "$RUNNER_TEMP/release.jks" \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --key-pass env:ANDROID_KEY_PASSWORD \
+            --v4-signing-enabled false \
+            --out "release/singboard-native-${{ matrix.abi }}.apk" \
+            "$stage/build/app/outputs/flutter-apk/app-${{ matrix.abi }}-release.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "release/singboard-native-${{ matrix.abi }}.apk"
 
       - name: Remove signing material
         if: always()
-        run: rm -f src-tauri/gen/android/release.jks src-tauri/gen/android/keystore.properties
+        run: rm -f "$RUNNER_TEMP/release.jks"
 
       - name: Upload APK
         uses: actions/upload-artifact@v7.0.1
         with:
           name: apk-${{ matrix.abi }}
-          path: release/singboard-${{ matrix.abi }}.apk
+          path: release/singboard-native-${{ matrix.abi }}.apk
           if-no-files-found: error
           retention-days: 1
 
@@ -328,5 +332,5 @@ jobs:
           name: ${{ env.APP_VERSION }}
           body_path: release-notes.md
           files: |
-            release/singboard.exe
-            release/*.apk
+            release/singboard-native-windows-x64.exe
+            release/singboard-native-*.apk

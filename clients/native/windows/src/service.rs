@@ -1,27 +1,17 @@
 #![allow(dead_code)]
-#[path = "../../../../src-tauri/src/service/quoting.rs"]
 mod quoting;
 mod elevation {
     pub use super::quoting::quote_arg;
 }
-#[path = "../../../../src-tauri/src/service/admin.rs"]
 pub mod admin;
-#[path = "../../../../src-tauri/src/service/managed.rs"]
 mod managed;
 use singboard_service::SERVICE_NAME;
-#[path = "../../../../src-tauri/src/service/helper.rs"]
 pub(crate) mod helper;
-#[path = "../../../../src-tauri/src/service/install.rs"]
 mod install;
-#[path = "../../../../src-tauri/src/service/protected.rs"]
 mod protected;
-#[path = "../../../../src-tauri/src/service/runtime.rs"]
 mod runtime;
-#[path = "../../../../src-tauri/src/service/scm.rs"]
 pub(crate) mod scm;
-#[path = "../../../../src-tauri/src/service/snapshot.rs"]
 mod snapshot;
-#[path = "../../../../src-tauri/src/service/source_files.rs"]
 mod source_files;
 
 use std::path::Path;

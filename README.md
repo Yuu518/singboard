@@ -1,13 +1,9 @@
 # Singboard
 
-`Singboard` is a sing-box dashboard built with `Tauri 2 + Vue 3`. One codebase ships two apps:
+`Singboard` is a native sing-box dashboard with a shared Rust Clash API core (`singboard-stream`). One repository ships two native apps:
 
-- **Windows panel**: Clash API visualization, config profile management, Windows service control, and core/panel updates.
-- **Android app**: a remote panel for any reachable Clash API, which can also run a local core on rooted devices.
-
-The Overview, Proxies, Connections, Logs and Rules pages are shared between both platforms, so improvements reach both. Android keeps its own glass cards, touch sizes and bottom-nav layout.
-
-The native migration is underway in [clients/native](clients/native/README.md). The Windows GPUI Fast client and the Android Flutter client share a Rust Clash API implementation. Native preview builds are available alongside the current release.
+- **Windows panel** (`GPUI-Fast` + `Rust`): Clash API visualization, config profile management, Windows service control, and core/panel updates.
+- **Android app** (`Flutter` + `Rust` FFI): a remote panel for any reachable Clash API, which can also run a local core on rooted devices.
 
 ## Windows features
 
@@ -74,7 +70,7 @@ The native migration is underway in [clients/native](clients/native/README.md). 
   - Every remote update and every switch of the active profile is validated with `sing-box check` first. A failed update keeps the existing config
   - Every write keeps a `.bak`, so the previous version is one click away
   - Editor:
-    - CodeMirror, editing the whole file or one top-level module at a time
+    - Tree-sitter JSON/JSONC editor, editing the whole file or one top-level module at a time
     - Keeps JSONC comments, with batch comment and uncomment
     - Undo and redo, format, validate, save (`Ctrl+S`)
     - Warns about unsaved changes
@@ -167,96 +163,42 @@ Each time the app starts the core, it rewrites the service script with the detec
 
 ## Tech Stack
 
-- Frontend: `Vue 3`, `TypeScript`, `Vite`, `TailwindCSS`, `DaisyUI`, `ECharts`, `CodeMirror 6`
-- Backend: `Rust`, `Tauri 2`
-- Platforms: `Windows` (with Windows Service integration) and `Android` (remote panel, plus root mode)
+- Shared core: `Rust` (`singboard-stream`)
+- Windows UI: `Rust`, `GPUI-Fast`, `gpui-component` (with Windows Service integration)
+- Android UI: `Flutter` (`Dart` + Rust FFI), remote panel plus root mode
 
 ## Requirements
 
-- Node.js 18+ (CI uses Node.js 24)
-- `pnpm`
 - Rust stable (recommended via `rustup`)
 - Windows C++ Build Tools (MSVC)
-- WebView2 Runtime
 - For Android:
-  - JDK 17+
+  - Flutter SDK 3.47+ (Dart 3.13+)
+  - JDK 21
   - Android SDK with platform 36 and build-tools 36
-  - NDK r30
-  - `ANDROID_HOME` and `NDK_HOME` set
+  - Android NDK (r28+)
+  - `ANDROID_HOME` (and optionally `ANDROID_NDK_HOME`) set
   - Rust targets `aarch64-linux-android` and `armv7-linux-androideabi`
-
-## Development
-
-Install dependencies:
-
-```bash
-pnpm install
-```
-
-Run frontend only:
-
-```bash
-pnpm dev
-```
-
-Run desktop app in development mode:
-
-```bash
-pnpm tauri dev
-```
-
-Run the Android app on a connected device or emulator:
-
-```bash
-pnpm tauri android dev
-```
-
-The platform is fixed at build time. The Tauri CLI sets `TAURI_ENV_PLATFORM`, and the frontend only bundles the code for that platform.
-
-- Shared logic (API, stores, bridges, utilities) and the shared pages live in `src/`.
-- The Android shell, the Settings page, and Android-only components live in `src/android/`.
-
-To preview the Android interface in a desktop browser, run `TAURI_ENV_PLATFORM=android pnpm dev`.
-
-Run tests for both platforms:
-
-```bash
-pnpm test
-```
 
 ## Build
 
-Build frontend:
+Build the Windows app:
 
-```bash
-pnpm build
+```powershell
+pwsh clients/native/build.ps1 -Platform Windows
 ```
 
-Build desktop app:
+Build the Android APKs:
 
-```bash
-pnpm tauri build
+```powershell
+pwsh clients/native/build.ps1 -Platform Android
 ```
 
-Build Android APKs:
+Release assets are written to `dist/native/` (`singboard-native-windows-x64.exe`, `singboard-native-arm64-v8a.apk`, `singboard-native-armeabi-v7a.apk`). Android release signing uses `SINGBOARD_ANDROID_KEYSTORE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`.
 
-```bash
-pnpm tauri android build --apk --split-per-abi --target aarch64 armv7
-```
-
-APKs are written to `src-tauri/gen/android/app/build/outputs/apk/<abi>/release/`. Release builds are signed when `src-tauri/gen/android/keystore.properties` exists:
-
-```properties
-storeFile=release.jks
-storePassword=...
-keyAlias=...
-keyPassword=...
-```
-
-The Windows build produces one distributable file, `src-tauri/target/release/singboard.exe`. It is the panel (GUI) with the service host embedded.
+The Windows build produces one distributable file, `singboard-native-windows-x64.exe`. It is the panel (GUI) with the service host embedded.
 
 - **Service host**
-  - It is a standalone crate (`src-tauri/service-host/`), but its executable bytes are embedded into `singboard.exe` at build time.
+  - It is a standalone crate (`clients/native/service-host/`), embedded into `singboard.exe` at build time.
   - An elevated install creates `%ProgramFiles%\singboard-service\` and places there:
     - `singboard.service`
     - Approved copies of the core, its adjacent DLLs and the configuration
@@ -269,16 +211,15 @@ The Windows build produces one distributable file, `src-tauri/target/release/sin
   - Existing services are migrated through the startup elevation request.
   - A change in the service-host version also requests a component refresh.
 - **Building the helper**
-  - Both development and release panels embed the release helper. The Tauri hooks build the helper before compiling the panel.
-  - If you build Rust directly, first run `cargo build --release -p singboard-service` from `src-tauri/`.
-  - Avoid `--workspace`: it can build the panel before the helper payload exists, and it can unify dependency features differently.
+  - `clients/native/build.ps1 -Platform Windows` builds `singboard-service` first and passes `SINGBOARD_SERVICE_HOST` when compiling `singboard-gpui`.
+  - If you build Rust directly, first build `singboard-service` in release mode from `clients/native/` and set `SINGBOARD_SERVICE_HOST` to the resulting executable.
 
 ## Releases
 
 The `Build` workflow runs on pushes to `master`; pushes that only touch Markdown files or `LICENSE` are skipped. It can also be started manually.
 
 - It reads the latest tag as the version.
-- It publishes `singboard.exe`, `singboard-arm64-v8a.apk` and `singboard-armeabi-v7a.apk` to that tag's release.
+- It publishes `singboard-native-windows-x64.exe`, `singboard-native-arm64-v8a.apk` and `singboard-native-armeabi-v7a.apk` to that tag's release.
 
 Repository secrets:
 
@@ -297,29 +238,25 @@ Android APKs are built only when all four `ANDROID_*` secrets are set. Without t
 
 ```text
 .
-├─ src/                 # Vue frontend: shared logic and pages, Windows shell
-│  └─ android/          # Android shell, Settings page, components
-├─ src-tauri/           # Rust + Tauri commands
-│  ├─ src/service/      # Windows service integration
-│  ├─ src/root/         # Android root shell
-│  ├─ service-host/     # Windows service host, embedded into singboard.exe
-│  ├─ scripts/          # Android service and boot scripts
-│  └─ gen/android/      # Android Gradle project
-├─ public/
-├─ package.json
-└─ src-tauri/tauri.conf.json
+└─ clients/native/
+   ├─ Cargo.toml          # Rust workspace (stream, windows, service-host)
+   ├─ build.ps1           # Windows and Android release build script
+   ├─ stream/             # Shared Rust Clash API, commands, root shell, Android scripts
+   ├─ windows/            # Windows GPUI-Fast client and service integration
+   ├─ service-host/       # Windows service host, embedded into singboard.exe
+   └─ android/            # Android Flutter app, shaders, icons and Kotlin host
 ```
 
 ## Configuration and Data
 
-- **Default landing page**: `/proxies` on Windows, `/home` on Android
-- **App settings**: saved in localStorage. Custom wallpapers are saved in IndexedDB
-- **Windows WebView data**: `%LOCALAPPDATA%\singboard\EBWebView\`
-- **Windows config files**: `%APPDATA%\singboard\` holds:
+- **Windows data directory**: `%APPDATA%\singboard\` holds:
+  - `native-settings.json`, app preferences and Clash API endpoints
+  - `window.json`, saved window bounds
+  - `wallpaper.png`, custom wallpaper
   - `running-config.json`, the configuration the core actually reads
-  - `Remote Config\`, the downloaded remote profiles
+  - `Native Subscriptions\`, downloaded remote profiles
 - **Windows protected service runtime**: `%ProgramFiles%\singboard-service\`
-- **Android package name**: `io.github.Yuu518.singboard` (Android 8.0+)
+- **Android package name**: `io.github.yuu518.singboard_native` (Android 8.0+)
 
 ## Notes
 

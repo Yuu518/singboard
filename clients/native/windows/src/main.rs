@@ -251,7 +251,7 @@ fn run() -> Result<(), String> {
             });
             tray_menu::init(cx);
             let icon =
-                image::load_from_memory(include_bytes!("../../../../src-tauri/icons/32x32.png"))
+                image::load_from_memory(include_bytes!("../icons/32x32.png"))
                     .unwrap()
                     .into_rgba8();
             let (w, h) = icon.dimensions();
@@ -308,7 +308,7 @@ fn run() -> Result<(), String> {
                                 wizard,
                                 brand: Arc::new(gpui::Image::from_bytes(
                                     ImageFormat::Png,
-                                    include_bytes!("../../../../public/favicon.png").to_vec(),
+                                    include_bytes!("../../android/assets/favicon.png").to_vec(),
                                 )),
                                 background: wallpaper.background(),
                                 material_busy: false,

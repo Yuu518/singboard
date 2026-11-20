@@ -1511,21 +1511,6 @@ class _SettingsPageState extends State<SettingsPage> {
     ]);
   }
 
-  Future<void> _maintenance() async {
-    final result = await Navigator.push<String>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => MaintenancePage(preferences: widget.preferences),
-      ),
-    );
-    if (mounted && result != null) {
-      await widget.onReload();
-      if (mounted) {
-        showGlassToast(context, result, error: false);
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final c = SingboardColors.of(context);
@@ -1926,9 +1911,9 @@ class _SettingsPageState extends State<SettingsPage> {
                 const SettingsSectionHeader('更新'),
                 if (root) ...[_coreUpdate(version), const SizedBox(height: 10)],
                 _panelUpdate(prefs),
-                const SizedBox(height: 10),
-                _card([
-                  if (root)
+                if (root) ...[
+                  const SizedBox(height: 10),
+                  _card([
                     SettingsRow(
                       title: '配置文件与订阅',
                       subtitle: '管理本地与远程 sing-box 配置档案。',
@@ -1941,13 +1926,8 @@ class _SettingsPageState extends State<SettingsPage> {
                         ),
                       ),
                     ),
-                  SettingsRow(
-                    title: '配置迁移与维护',
-                    subtitle: '导入旧版设置或管理本地安装包。',
-                    inline: true,
-                    trailing: _settingsBtn('打开', _maintenance),
-                  ),
-                ]),
+                  ]),
+                ],
               ],
             ),
           ),
