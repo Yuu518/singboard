@@ -16,13 +16,52 @@ use crate::params::{read_service_params, resolve_service_error_log_path};
 static SERVICE_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
 const STARTUP_VERIFY_SECONDS: u64 = 2;
-const STARTUP_RETRY_DELAY_SECONDS: u64 = 5;
-const STARTUP_MAX_ATTEMPTS: u32 = 3;
+const STARTUP_RETRY_DELAYS: [u64; 3] = [3, 5, 8];
+const STARTUP_MAX_ATTEMPTS: u32 = 4;
 const STDERR_TAIL_BYTES: usize = 64 * 1024;
+
+struct JobHandle(windows_sys::Win32::Foundation::HANDLE);
+
+impl Drop for JobHandle {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+fn attach_kill_on_close_job(child: &Child) -> Option<JobHandle> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::*;
+
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return None;
+        }
+        let handle = JobHandle(job);
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if SetInformationJobObject(
+            handle.0,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        ) == 0
+        {
+            return None;
+        }
+        if AssignProcessToJobObject(handle.0, child.as_raw_handle()) == 0 {
+            return None;
+        }
+        Some(handle)
+    }
+}
 
 struct CoreProcess {
     child: Child,
     stderr: mpsc::Receiver<String>,
+    _job: Option<JobHandle>,
 }
 
 impl CoreProcess {
@@ -31,6 +70,7 @@ impl CoreProcess {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("Failed to spawn sing-box: {e}"))?;
+        let _job = attach_kill_on_close_job(&child);
         let stderr = child
             .stderr
             .take()
@@ -49,6 +89,7 @@ impl CoreProcess {
         Ok(Self {
             child,
             stderr: receiver,
+            _job,
         })
     }
 }
@@ -88,6 +129,35 @@ windows_service::define_windows_service!(ffi_service_main, service_main);
 fn service_main(arguments: Vec<OsString>) {
     if let Err(e) = run_service_inner(arguments) {
         eprintln!("Service error: {}", e);
+    }
+}
+
+fn is_fatal_config_error(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    [
+        "decode config",
+        "parse config",
+        "invalid json",
+        "unknown field",
+        "syntax error",
+        "duplicate ",
+        "no such file",
+        "cannot find the file",
+        "cannot find the path",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn make_pending_status(checkpoint: u32, wait_hint_secs: u64) -> ServiceStatus {
+    ServiceStatus {
+        service_type: SERVICE_TYPE,
+        current_state: ServiceState::StartPending,
+        controls_accepted: ServiceControlAccept::empty(),
+        exit_code: ServiceExitCode::Win32(0),
+        checkpoint,
+        wait_hint: Duration::from_secs(wait_hint_secs),
+        process_id: None,
     }
 }
 
@@ -133,16 +203,9 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
     let status_handle = service_control_handler::register(svc_name, event_handler)
         .map_err(|e| format!("Failed to register service control handler: {:?}", e))?;
 
+    let mut checkpoint = 1u32;
     status_handle
-        .set_service_status(ServiceStatus {
-            service_type: SERVICE_TYPE,
-            current_state: ServiceState::StartPending,
-            controls_accepted: ServiceControlAccept::empty(),
-            exit_code: ServiceExitCode::Win32(0),
-            checkpoint: 0,
-            wait_hint: Duration::from_secs(10),
-            process_id: None,
-        })
+        .set_service_status(make_pending_status(checkpoint, 15))
         .map_err(|e| format!("Failed to set status: {:?}", e))?;
 
     // Keep telemetry alive for this host instance, including its startup retries.
@@ -164,8 +227,11 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
 
     let mut child: Option<CoreProcess> = None;
     let mut startup_succeeded = false;
+    let mut last_stderr: Option<String> = None;
 
     for attempt in 1..=STARTUP_MAX_ATTEMPTS {
+        checkpoint = checkpoint.saturating_add(1);
+        let _ = status_handle.set_service_status(make_pending_status(checkpoint, 15));
         let mut current_child = match spawn_singbox(&singbox_path, &config_path, &working_dir) {
             Ok(c) => c,
             Err(e) => {
@@ -180,15 +246,23 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
         match current_child.child.try_wait() {
             Ok(Some(_)) => {
                 if let Some(stderr_output) = read_stderr_output(&current_child) {
-                    // 核心有明确报错，直接失败，不做重试
-                    save_error_log(&log_path, &stderr_output);
-                    status_handle.set_service_status(make_stopped_status()).ok();
-                    return Err("sing-box 启动失败，核心已输出错误日志".into());
+                    if is_fatal_config_error(&stderr_output) {
+                        save_error_log(&log_path, &stderr_output);
+                        status_handle.set_service_status(make_stopped_status()).ok();
+                        return Err("sing-box 启动失败，核心已输出错误日志".into());
+                    }
+                    last_stderr = Some(stderr_output);
                 }
 
-                // 未捕获到核心错误输出，仅在这种情况下进行重试
                 if attempt < STARTUP_MAX_ATTEMPTS {
-                    for _ in 0..STARTUP_RETRY_DELAY_SECONDS {
+                    let delay = STARTUP_RETRY_DELAYS
+                        .get((attempt - 1) as usize)
+                        .copied()
+                        .unwrap_or(5);
+                    checkpoint = checkpoint.saturating_add(1);
+                    let _ = status_handle
+                        .set_service_status(make_pending_status(checkpoint, delay + 10));
+                    for _ in 0..delay {
                         match rx.recv_timeout(Duration::from_secs(1)) {
                             Ok(()) => {
                                 status_handle.set_service_status(make_stopped_status()).ok();
@@ -201,9 +275,14 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
                     continue;
                 }
 
+                if let Some(stderr_output) = last_stderr.as_deref() {
+                    save_error_log(&log_path, stderr_output);
+                    status_handle.set_service_status(make_stopped_status()).ok();
+                    return Err("sing-box 启动失败，核心已输出错误日志".into());
+                }
                 save_error_log(&log_path, "sing-box 启动后立即退出，未捕获到错误输出");
                 status_handle.set_service_status(make_stopped_status()).ok();
-                return Err("sing-box 启动失败，已重试 2 次".into());
+                return Err("sing-box 启动失败，已多次重试".into());
             }
             Ok(None) => {
                 child = Some(current_child);
@@ -283,6 +362,7 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
 
     let _ = child.child.kill();
     let _ = child.child.wait();
+    drop(child);
 
     status_handle
         .set_service_status(ServiceStatus {
@@ -396,5 +476,13 @@ mod tests {
     fn stderr_tail_preserves_diagnostics_after_invalid_utf8() {
         let output = read_stderr_tail(std::io::Cursor::new(b"before\xffafter"));
         assert_eq!(output, "before\u{fffd}after");
+    }
+
+    #[test]
+    fn classifies_config_errors_as_fatal_and_boot_network_errors_as_retryable() {
+        assert!(is_fatal_config_error("FATAL decode config: unknown field"));
+        assert!(is_fatal_config_error("open config.json: cannot find the file"));
+        assert!(!is_fatal_config_error("FATAL start inbound/tun: wintun adapter not ready"));
+        assert!(!is_fatal_config_error("FATAL listen tcp 127.0.0.1:9090: bind failed"));
     }
 }

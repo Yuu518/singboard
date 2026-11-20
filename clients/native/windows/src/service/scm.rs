@@ -183,19 +183,19 @@ pub fn start_service(service_name: &str) -> Result<(), String> {
             }
         }
 
+        let mut start_retried = false;
         let ok = StartServiceW(svc, 0, ptr::null());
 
         if ok == 0 {
             let err = GetLastError();
-            CloseServiceHandle(svc);
-            CloseServiceHandle(scm);
-            if err == 1056 {
-                return Ok(());
+            if err != 1056 {
+                CloseServiceHandle(svc);
+                CloseServiceHandle(scm);
+                return Err(format!("StartService failed: error {}", err));
             }
-            return Err(format!("StartService failed: error {}", err));
         }
 
-        for _ in 0..120 {
+        for _ in 0..180 {
             thread::sleep(Duration::from_millis(250));
             let mut status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
             let mut bytes_needed: u32 = 0;
@@ -216,6 +216,12 @@ pub fn start_service(service_name: &str) -> Result<(), String> {
                     return Ok(());
                 }
                 SERVICE_STOPPED => {
+                    if ok == 0 && !start_retried {
+                        start_retried = true;
+                        if StartServiceW(svc, 0, ptr::null()) != 0 {
+                            continue;
+                        }
+                    }
                     CloseServiceHandle(svc);
                     CloseServiceHandle(scm);
                     let detail = read_service_error_log(service_name).unwrap_or_default();
@@ -241,6 +247,22 @@ pub fn stop_service(service_name: &str) -> Result<(), String> {
         let scm = open_scm(SC_MANAGER_CONNECT)?;
         let svc = open_service_handle(scm, service_name, SERVICE_STOP | SERVICE_QUERY_STATUS)?;
 
+        let mut old_pid = 0u32;
+        {
+            let mut bytes_needed: u32 = 0;
+            let mut proc_status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
+            if QueryServiceStatusEx(
+                svc,
+                SC_STATUS_PROCESS_INFO,
+                &mut proc_status as *mut _ as *mut u8,
+                std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
+                &mut bytes_needed,
+            ) != 0
+            {
+                old_pid = proc_status.dwProcessId;
+            }
+        }
+
         let mut status: SERVICE_STATUS = std::mem::zeroed();
         let ok = ControlService(svc, SERVICE_CONTROL_STOP, &mut status);
 
@@ -249,6 +271,17 @@ pub fn stop_service(service_name: &str) -> Result<(), String> {
             CloseServiceHandle(svc);
             CloseServiceHandle(scm);
             if err == 1062 {
+                if old_pid != 0 {
+                    let handle = windows_sys::Win32::System::Threading::OpenProcess(
+                        windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE,
+                        0,
+                        old_pid,
+                    );
+                    if !handle.is_null() {
+                        windows_sys::Win32::System::Threading::WaitForSingleObject(handle, 5000);
+                        windows_sys::Win32::Foundation::CloseHandle(handle);
+                    }
+                }
                 return Ok(());
             }
             return Err(format!("ControlService(STOP) failed: error {}", err));
@@ -266,6 +299,9 @@ pub fn stop_service(service_name: &str) -> Result<(), String> {
                 std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
                 &mut bytes_needed,
             );
+            if proc_status.dwProcessId != 0 {
+                old_pid = proc_status.dwProcessId;
+            }
             if proc_status.dwCurrentState == SERVICE_STOPPED {
                 stopped = true;
                 break;
@@ -275,6 +311,17 @@ pub fn stop_service(service_name: &str) -> Result<(), String> {
         CloseServiceHandle(svc);
         CloseServiceHandle(scm);
         if stopped {
+            if old_pid != 0 {
+                let handle = windows_sys::Win32::System::Threading::OpenProcess(
+                    windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE,
+                    0,
+                    old_pid,
+                );
+                if !handle.is_null() {
+                    windows_sys::Win32::System::Threading::WaitForSingleObject(handle, 5000);
+                    windows_sys::Win32::Foundation::CloseHandle(handle);
+                }
+            }
             Ok(())
         } else {
             Err("等待服务停止超时，已取消后续操作".into())
@@ -494,7 +541,7 @@ pub fn create_startup_task(
          $a=New-ScheduledTaskAction -Execute 'sc.exe' -Argument {args};\
          $t=New-ScheduledTaskTrigger -AtLogOn -User $u;\
          $t.Delay={delay};\
-         $s=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit 0 -Compatibility Vista;\
+         $s=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit 0 -Compatibility Vista -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1);\
          $s.Hidden=$true;\
          $s.DisallowStartIfOnBatteries=$false;\
          $s.StopIfGoingOnBatteries=$false;\

@@ -172,7 +172,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   final cpuTrend = <int>[];
   Timer? rootTimer;
   int _rootGeneration = 0, _trafficFailures = 0, _connectionFailures = 0;
-  bool _samplingRoot = false;
+  bool _samplingRoot = false, _rootComponentSynced = false;
   bool get rootRunning => rootService['state'] == 'running';
   bool get _coreAvailable => preferences['nativeRootEnabled'] != true || rootRunning;
   bool get overviewLive =>
@@ -366,6 +366,20 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     }
   }
 
+  void _syncRootComponentOnce(String dir) {
+    if (_rootComponentSynced || preferences['nativeRootEnabled'] != true) return;
+    _rootComponentSynced = true;
+    unawaited(
+      configRequest(dir, 'root_service_sync')
+          .then((result) {
+            if (mounted && result == 'updated') {
+              showGlassToast(context, '服务脚本已自动更新', error: false);
+            }
+          })
+          .catchError((Object _) {}),
+    );
+  }
+
   Future<void> _sampleRoot() async {
     if (_samplingRoot || preferences['nativeRootEnabled'] != true) return;
     _samplingRoot = true;
@@ -453,6 +467,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
         cpuTrend.clear();
       }
       preferences = prefs;
+      _syncRootComponentOnce(dir);
       final apis = (prefs['clashApis'] as List).cast<Map<String, dynamic>>();
       if (apis.isNotEmpty) {
         final api = apis.firstWhere(
@@ -817,6 +832,10 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       if (mounted) {
         setState(() => rootStatus = reply['text']);
         await _sampleRoot();
+        if (mounted && action != 'root_stop') {
+          disconnect();
+          connect();
+        }
       }
     } catch (e) {
       if (mounted) setState(() => rootStatus = e.toString());
@@ -2795,6 +2814,9 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   (String, String, bool)? _gate(int page) {
     if (page < 1 || page > 4) return null;
     final root = preferences['nativeRootEnabled'] == true;
+    if (root && _rootAction == 'root_restart') {
+      return ('正在重启 sing-box…', '核心重启后会自动重新连接…', true);
+    }
     if (root && rootService.isNotEmpty && !rootRunning) {
       return ('服务未运行', '请先启动 sing-box 服务以查看${_titles[page]}', false);
     }

@@ -269,15 +269,25 @@ async fn sync_component() -> Result<String, String> {
         return Ok("not_installed".into());
     }
     let expected = lf(SERVICE_SCRIPT);
-    if installed.trim() == expected.trim() {
+    let expected_boot = lf(BOOT_SCRIPT);
+    let installed_boot = root::run_async(format!(
+        "[ -f {hook} ] || {{ echo __absent__; exit 0; }}\ncat {hook}",
+        hook = quote(BOOT_HOOK)
+    ))
+    .await?;
+    let service_current = installed.trim() == expected.trim();
+    let boot_present = installed_boot.trim() != "__absent__";
+    let boot_current = !boot_present || installed_boot.trim() == expected_boot.trim();
+    if service_current && boot_current {
         return Ok("ok".into());
     }
-    let mut update = write_file_script(&script, &expected, "755");
-    update.push_str(&format!(
-        "if [ -f {hook} ]; then\n{write}fi\n",
-        hook = quote(BOOT_HOOK),
-        write = write_file_script(BOOT_HOOK, &lf(BOOT_SCRIPT), "755")
-    ));
+    let mut update = String::new();
+    if !service_current {
+        update.push_str(&write_file_script(&script, &expected, "755"));
+    }
+    if !boot_current {
+        update.push_str(&write_file_script(BOOT_HOOK, &expected_boot, "755"));
+    }
     root::run_async(update).await?;
     Ok("updated".into())
 }

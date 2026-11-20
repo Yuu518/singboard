@@ -13,9 +13,12 @@ pub fn configure(
         .flatten();
     let previous_image = helper::service_image_path(service);
     let was_running = matches!(status.state.as_str(), "running" | "starting");
-    if was_running {
+    let stopped_at = if was_running {
         scm::stop_service(service)?;
-    }
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     let mut created = false;
     let result = (|| {
         let deployed = helper::deploy_helper()?;
@@ -29,6 +32,11 @@ pub fn configure(
         snapshot.publish(service)?;
         singboard_service::params::write_panel_sid(service, user_sid)?;
         if start || was_running {
+            if let Some(at) = stopped_at
+                && let Some(rem) = std::time::Duration::from_millis(800).checked_sub(at.elapsed())
+            {
+                std::thread::sleep(rem);
+            }
             scm::start_service(service)?;
         }
         Ok::<_, String>(())

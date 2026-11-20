@@ -469,11 +469,42 @@ impl Workspace {
         let live = self.overview_live();
         let local_stopped = self.local_state.contains("已停止");
         let local_not_installed = self.local_state.contains("未安装");
-        let connecting = self.overview_connecting() && !local_stopped && !local_not_installed;
+        let local_starting = self.local_state.contains("启动中");
+        let local_stopping = self.local_state.contains("停止中");
+        let restarting = self.settings_layout.service_action == Some("restart");
+        let service_transition = !local_running
+            && (self.service_syncing || restarting || local_starting || local_stopping);
+        let connecting = self.overview_connecting()
+            && !local_stopped
+            && !local_not_installed
+            && !service_transition;
 
         let notice: Option<(&'static str, &'static str, &'static str, bool)> = if live || connecting
         {
             None
+        } else if service_transition {
+            if self.service_syncing {
+                Some((
+                    "正在更新服务组件…",
+                    "核心重启后自动显示实时数据。",
+                    "",
+                    false,
+                ))
+            } else if restarting || local_starting {
+                Some((
+                    if restarting { "正在重启 sing-box…" } else { "正在启动 sing-box…" },
+                    "核心启动后自动显示实时数据。",
+                    "",
+                    false,
+                ))
+            } else {
+                Some((
+                    "正在停止 sing-box…",
+                    "停止后可以在这里重新启动。",
+                    "",
+                    false,
+                ))
+            }
         } else if [self.traffic_status, self.conn_status].iter().any(|s| s.contains("认证失败")) {
             Some(("Clash API 密钥不匹配", "请在设置里修改 Clash API 密钥。", "api", true))
         } else if local_not_installed {
@@ -609,14 +640,22 @@ impl Workspace {
                 .child(div().size(px(8.)).rounded_full().bg(dot_color))
         };
 
-        let hero_top_left = if let Some((title, _, _, _)) = notice {
+        let hero_top_left = if let Some((title, _, action, _)) = notice {
             div()
                 .flex_1()
                 .min_w_0()
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(status_dot)
+                .child(if action.is_empty() {
+                    super::settings::loading_spinner(
+                        "overview-notice-spinner",
+                        px(14.),
+                        palette.muted(),
+                    )
+                } else {
+                    status_dot.into_any_element()
+                })
                 .child(
                     div()
                         .text_size(px(13.))
@@ -748,54 +787,56 @@ impl Workspace {
                         .text_color(palette.muted())
                         .child(detail_text),
                 )
-                .child(match action {
-                    "start" => div()
-                        .id("hero-start-service")
-                        .cursor_pointer()
-                        .px(px(20.))
-                        .py(px(7.))
-                        .rounded_lg()
-                        .bg(palette.primary_fill())
-                        .text_size(px(13.))
-                        .line_height(px(19.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(0xffffff))
-                        .child("启动服务")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.tray_service("start", cx);
-                        })),
-                    "settings" => div()
-                        .id("hero-open-settings")
-                        .cursor_pointer()
-                        .px(px(20.))
-                        .py(px(7.))
-                        .rounded_lg()
-                        .bg(palette.fill())
-                        .hover(|s| s.bg(palette.fill_strong()))
-                        .text_size(px(13.))
-                        .line_height(px(19.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(palette.ink())
-                        .child("前往设置")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.open(Page::Settings, cx);
-                        })),
-                    _ => div()
-                        .id("hero-check-api")
-                        .cursor_pointer()
-                        .px(px(20.))
-                        .py(px(7.))
-                        .rounded_lg()
-                        .bg(palette.fill())
-                        .hover(|s| s.bg(palette.fill_strong()))
-                        .text_size(px(13.))
-                        .line_height(px(19.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(palette.ink())
-                        .child("检查 API 配置")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.open(Page::Settings, cx);
-                        })),
+                .when(!action.is_empty(), |el| {
+                    el.child(match action {
+                        "start" => div()
+                            .id("hero-start-service")
+                            .cursor_pointer()
+                            .px(px(20.))
+                            .py(px(7.))
+                            .rounded_lg()
+                            .bg(palette.primary_fill())
+                            .text_size(px(13.))
+                            .line_height(px(19.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(0xffffff))
+                            .child("启动服务")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.tray_service("start", cx);
+                            })),
+                        "settings" => div()
+                            .id("hero-open-settings")
+                            .cursor_pointer()
+                            .px(px(20.))
+                            .py(px(7.))
+                            .rounded_lg()
+                            .bg(palette.fill())
+                            .hover(|s| s.bg(palette.fill_strong()))
+                            .text_size(px(13.))
+                            .line_height(px(19.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.ink())
+                            .child("前往设置")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open(Page::Settings, cx);
+                            })),
+                        _ => div()
+                            .id("hero-check-api")
+                            .cursor_pointer()
+                            .px(px(20.))
+                            .py(px(7.))
+                            .rounded_lg()
+                            .bg(palette.fill())
+                            .hover(|s| s.bg(palette.fill_strong()))
+                            .text_size(px(13.))
+                            .line_height(px(19.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.ink())
+                            .child("检查 API 配置")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open(Page::Settings, cx);
+                            })),
+                    })
                 })
         } else {
             div()

@@ -175,6 +175,22 @@ fn endpoint(prefs: &settings::Settings) -> (String, String) {
     }
 }
 
+fn build_tray(rgba: &[u8], w: u32, h: u32) -> Result<tray_icon::TrayIcon, String> {
+    let icon = tray_icon::Icon::from_rgba(rgba.to_vec(), w, h).map_err(|e| e.to_string())?;
+    TrayIconBuilder::new()
+        .with_tooltip("Singboard · GPUI Fast")
+        .with_icon(icon)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn log_startup_error(detail: &str) {
+    if let Ok(dir) = service::data_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("startup.log"), detail);
+    }
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.first().is_some_and(|v| v == maintenance::APPLY) {
@@ -277,6 +293,7 @@ fn run() -> Result<(), String> {
                 let mut workspace = workspace;
                 if !hidden {
                     workspace.open(start, cx);
+                    workspace.sync_service(cx);
                     if prefs.panel_auto_check_update.unwrap_or(true) {
                         workspace.check_update(cx);
                     }
@@ -289,17 +306,20 @@ fn run() -> Result<(), String> {
                     .unwrap()
                     .into_rgba8();
             let (w, h) = icon.dimensions();
-            let tray = TrayIconBuilder::new()
-                .with_tooltip("Singboard · GPUI Fast")
-                .with_icon(tray_icon::Icon::from_rgba(icon.into_raw(), w, h).unwrap())
-                .build()
-                .expect("创建托盘");
+            let icon_rgba = icon.into_raw();
+            let mut tray = build_tray(&icon_rgba, w, h).ok();
             let show_wizard = !hidden && !initial_connect;
             let wizard_prefs = prefs.clone();
             let bounds = window_state::restore(cx);
             let mut overview_entity = None;
-            let handle = cx
-                .open_window(
+            let mut pending = Some((wallpaper, stream));
+            let max_window_attempts = if hidden { 10 } else { 1 };
+            let mut opened = None;
+            for attempt in 0..max_window_attempts {
+                if attempt > 0 {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+                let result = cx.open_window(
                     WindowOptions {
                         show: !hidden,
                         focus: !hidden,
@@ -313,6 +333,7 @@ fn run() -> Result<(), String> {
                         ..Default::default()
                     },
                     |window, cx| {
+                        let (wallpaper, stream) = pending.take().expect("主窗口初始化状态");
                         window.on_window_should_close(cx, |window, cx| {
                             close_window(window, cx);
                             false
@@ -338,7 +359,7 @@ fn run() -> Result<(), String> {
                             Overview {
                                 title_opacity: 0.,
                                 title_tick: std::time::Instant::now(),
-                                workspace,
+                                workspace: workspace.clone(),
                                 wizard,
                                 brand: Arc::new(gpui::Image::from_bytes(
                                     ImageFormat::Png,
@@ -354,11 +375,29 @@ fn run() -> Result<(), String> {
                         overview_entity = Some(view.clone());
                         cx.new(|cx| gpui_component::Root::new(view, window, cx))
                     },
-                )
-                .expect("创建 GPUI 窗口");
+                );
+                match result {
+                    Ok(handle) => {
+                        opened = Some(handle);
+                        break;
+                    }
+                    Err(error) => {
+                        if pending.is_none() || attempt + 1 == max_window_attempts {
+                            log_startup_error(&format!("创建 GPUI 窗口失败：{error}"));
+                            cx.quit();
+                            return;
+                        }
+                    }
+                }
+            }
+            let Some(handle) = opened else {
+                cx.quit();
+                return;
+            };
             let overview = overview_entity.expect("主视图已创建");
             cx.spawn(async move |cx| {
-                let _tray = tray;
+                let mut tray_retry = std::time::Instant::now();
+                let mut tray_attempts = 0u32;
                 let mut revision = settings::Settings::revision();
                 let mut wp_rev = wallpaper_editor::revision();
                 let mut current = (base, secret);
@@ -370,6 +409,18 @@ fn run() -> Result<(), String> {
                     cx.background_executor()
                         .timer(Duration::from_millis(120))
                         .await;
+                    if tray.is_none() {
+                        let wait = if tray_attempts < 30 {
+                            Duration::from_secs(1)
+                        } else {
+                            Duration::from_secs(5)
+                        };
+                        if tray_retry.elapsed() >= wait {
+                            tray_retry = std::time::Instant::now();
+                            tray_attempts = tray_attempts.saturating_add(1);
+                            tray = build_tray(&icon_rgba, w, h).ok();
+                        }
+                    }
                     let mut show = instance.requested();
                     while let Ok(event) = TrayIconEvent::receiver().try_recv() {
                         if let TrayIconEvent::Click { button, button_state: tray_icon::MouseButtonState::Up, position, .. } = event {
@@ -385,6 +436,7 @@ fn run() -> Result<(), String> {
                             }
                         }
                     }
+                    let _ = &tray;
                     if handle
                         .update(cx, |_, window, cx| {
                             overview.update(cx, |panel, cx| {
@@ -471,6 +523,14 @@ fn run() -> Result<(), String> {
                                         theme::Appearance::apply(window, custom, cx);
                                         cx.notify();
                                     }
+                                }
+                                let want_reconnect = panel
+                                    .workspace
+                                    .update(cx, |state, _| state.take_traffic_reconnect());
+                                if want_reconnect && connected {
+                                    panel.stream =
+                                        Subscription::start(&current.0, &current.1, Feed::Traffic)
+                                            .ok();
                                 }
                                 if let Some(stream) = &panel.stream {
                                     let batch = stream.drain();

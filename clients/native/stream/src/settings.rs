@@ -175,17 +175,34 @@ mod auto_launch {
             .ok()
     }
 
+    pub(super) fn is_disabled_approval(bytes: &[u8]) -> bool {
+        bytes
+            .first()
+            .is_some_and(|&flag| flag != 0x02 && flag != 0x00)
+    }
+
     fn disabled_by_system() -> bool {
         RegKey::predef(HKEY_CURRENT_USER)
             .open_subkey(AUTO_LAUNCH_APPROVED_KEY)
             .and_then(|key| key.get_raw_value(AUTO_LAUNCH_NAME))
-            .is_ok_and(|value| value.bytes.first().is_some_and(|flag| flag & 1 == 1))
+            .is_ok_and(|value| is_disabled_approval(&value.bytes))
     }
 
-    fn clear_approval() {
-        if let Ok((key, _)) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(AUTO_LAUNCH_APPROVED_KEY)
+    fn write_approval(enabled: bool) {
+        if let Ok((key, _)) =
+            RegKey::predef(HKEY_CURRENT_USER).create_subkey(AUTO_LAUNCH_APPROVED_KEY)
         {
-            let _ = key.delete_value(AUTO_LAUNCH_NAME);
+            if enabled {
+                let value = winreg::RegValue {
+                    bytes: vec![0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    vtype: winreg::enums::RegType::REG_BINARY,
+                };
+                if key.set_raw_value(AUTO_LAUNCH_NAME, &value).is_err() {
+                    let _ = key.delete_value(AUTO_LAUNCH_NAME);
+                }
+            } else {
+                let _ = key.delete_value(AUTO_LAUNCH_NAME);
+            }
         }
     }
 
@@ -217,7 +234,7 @@ mod auto_launch {
                 return Err(format!("删除注册表值失败: {e}"));
             }
         }
-        clear_approval();
+        write_approval(enabled);
         Ok(())
     }
 
@@ -297,5 +314,16 @@ mod tests {
             Settings::load(dir.path()).unwrap().active().unwrap().id,
             "a"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recognizes_odd_and_even_startup_approved_disable_flags() {
+        assert!(!auto_launch::is_disabled_approval(&[]));
+        assert!(!auto_launch::is_disabled_approval(&[0x00, 0, 0, 0]));
+        assert!(!auto_launch::is_disabled_approval(&[0x02, 0, 0, 0]));
+        assert!(auto_launch::is_disabled_approval(&[0x03, 0, 0, 0]));
+        assert!(auto_launch::is_disabled_approval(&[0x06, 0, 0, 0]));
+        assert!(auto_launch::is_disabled_approval(&[0x07, 0, 0, 0]));
     }
 }

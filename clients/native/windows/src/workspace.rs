@@ -137,6 +137,8 @@ pub struct Workspace {
     pub traffic_samples: VecDeque<Traffic>,
     pub local_state: String,
     service_settled: bool,
+    service_syncing: bool,
+    traffic_reconnect: bool,
     service_checked: Option<std::time::Instant>,
     service_uptime: Option<(u64, std::time::Instant)>,
     uptime_tick: u64,
@@ -299,6 +301,28 @@ impl Workspace {
         cx.notify();
     }
 
+    pub fn take_traffic_reconnect(&mut self) -> bool {
+        std::mem::take(&mut self.traffic_reconnect)
+    }
+
+    fn reconnect_feeds(&mut self, cx: &mut Context<Self>) {
+        self.traffic_failures = 0;
+        self.conn_failures = 0;
+        self.log_failures = 0;
+        self.load_error.clear();
+        if !self.api_enabled || self.suspended {
+            return;
+        }
+        self.traffic_status = "连接中";
+        self.conn_status = "连接中";
+        self.log_status = "连接中";
+        self.traffic_reconnect = true;
+        self.log_feed = None;
+        self.resubscribe_logs();
+        self.conn_feed = Subscription::start(&self.endpoint, &self.secret, Feed::Connections).ok();
+        cx.notify();
+    }
+
     pub fn tray_service(&mut self, action: &'static str, cx: &mut Context<Self>) {
         if self.settings_layout.service_action.is_some()
             || !self.settings_layout.pending.insert("service-op")
@@ -315,6 +339,9 @@ impl Workspace {
                     let _ = weak.update(cx, |this, cx| {
                         this.settings_layout.service_action = None;
                         this.settings_layout.pending.remove("service-op");
+                        if action != "stop" {
+                            this.reconnect_feeds(cx);
+                        }
                         this.refresh_local_state(cx);
                         this.refresh(cx);
                         cx.notify();
@@ -342,6 +369,36 @@ impl Workspace {
                     }
                 }
             }
+        })
+        .detach();
+    }
+
+    pub fn sync_service(&mut self, cx: &mut Context<Self>) {
+        self.service_syncing = true;
+        let task = singboard_stream::runtime().spawn(crate::service::sync());
+        cx.spawn(async move |weak, cx| {
+            let result = task.await.map_err(|e| e.to_string()).and_then(|r| r);
+            let _ = weak.update(cx, |this, cx| {
+                this.service_syncing = false;
+                match result.as_deref() {
+                    Ok("updated") => {
+                        this.message("服务组件已自动更新".into(), false, cx);
+                        this.reconnect_feeds(cx);
+                        this.refresh_local_state(cx);
+                        this.refresh(cx);
+                    }
+                    Ok("migrated") => {
+                        this.message("旧版服务已自动迁移".into(), false, cx);
+                        this.reconnect_feeds(cx);
+                        this.refresh_local_state(cx);
+                        this.refresh(cx);
+                    }
+                    Ok(_) => {}
+                    Err(error) if error == crate::service::admin::CANCELLED => {}
+                    Err(error) => this.message(format!("服务组件同步失败：{error}"), true, cx),
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -499,6 +556,8 @@ impl Workspace {
             history_memory: Default::default(),
             local_state: String::new(),
             service_settled: false,
+            service_syncing: false,
+            traffic_reconnect: false,
             service_checked: None,
             service_uptime: None,
             uptime_tick: 0,
@@ -604,11 +663,17 @@ impl Workspace {
                 if this.service_checked != Some(started) {
                     return;
                 }
+                let was_running = this.local_state.contains("运行中");
                 let (description, uptime) = status.unwrap_or_default();
+                let now_running = description.contains("运行中");
                 this.local_state = description;
                 this.service_uptime = uptime.map(|seconds| (seconds, std::time::Instant::now()));
                 this.uptime_tick = 0;
                 this.service_settled = true;
+                if !was_running && now_running {
+                    this.reconnect_feeds(cx);
+                    this.refresh(cx);
+                }
                 cx.notify();
             });
         })
@@ -659,6 +724,7 @@ impl Workspace {
             self.initialized = true;
             let page = self.page;
             self.open(page, cx);
+            self.sync_service(cx);
             if self.pending_update_check {
                 self.pending_update_check = false;
                 self.check_update(cx);
@@ -674,7 +740,17 @@ impl Workspace {
         if self.suspended {
             return;
         }
-        if self.service_checked.is_none_or(|t| t.elapsed().as_secs() >= 30) {
+        let svc_busy = self.service_syncing
+            || self.settings_layout.service_action.is_some()
+            || self.settings_layout.pending.contains("service-op")
+            || !self.local_state.contains("运行中")
+            || (self.api_enabled
+                && (self.traffic_status != "已连接" || self.conn_status != "已连接"));
+        let poll_secs = if svc_busy { 1 } else { 2 };
+        if self
+            .service_checked
+            .is_none_or(|t| t.elapsed().as_secs() >= poll_secs)
+        {
             self.refresh_local_state(cx);
         }
         if let Some((_, sample)) = self.service_uptime {
@@ -871,47 +947,63 @@ impl Workspace {
         let local_not_installed = self.local_state.contains("未安装");
         let local_starting = self.local_state.contains("启动中");
         let local_stopping = self.local_state.contains("停止中");
-            let (title, detail, action) = if local_starting {
-                (
-                    "正在启动 sing-box…",
-                    starting_detail,
-                    None,
+        let restarting = self.settings_layout.service_action == Some("restart");
+        let (title, detail, action) = if self.service_syncing {
+            (
+                "正在更新服务组件…",
+                starting_detail,
+                None,
+            )
+        } else if restarting || local_starting {
+            (
+                if restarting { "正在重启 sing-box…" } else { "正在启动 sing-box…" },
+                starting_detail,
+                None,
+            )
+        } else if local_stopping {
+            (
+                "正在停止 sing-box…",
+                "服务停止后可以在这里重新启动。",
+                None,
+            )
+        } else if local_not_installed {
+            (
+                "尚未安装 singboard 服务",
+                "在设置中安装服务后，即可启动 sing-box。",
+                Some("settings"),
+            )
+        } else if local_stopped {
+            (
+                "sing-box 服务已停止",
+                stopped_detail,
+                Some("start"),
+            )
+        } else {
+            ("无法获取服务状态", "可以在设置中查看服务状态和错误日志。", Some("settings"))
+        };
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_4()
+            .px_6()
+            .when(action.is_none(), |el| {
+                el.child(settings::loading_spinner(
+                    "service-notice-spinner",
+                    px(32.),
+                    crate::glass::backdrop_muted(palette, cx),
+                ))
+            })
+            .when(action.is_some(), |el| {
+                el.child(
+                    svg()
+                        .path("power")
+                        .size(px(64.))
+                        .text_color(crate::glass::backdrop_muted(palette, cx)),
                 )
-            } else if local_stopping {
-                (
-                    "正在停止 sing-box…",
-                    "服务停止后可以在这里重新启动。",
-                    None,
-                )
-            } else if local_not_installed {
-                (
-                    "尚未安装 singboard 服务",
-                    "在设置中安装服务后，即可启动 sing-box。",
-                    Some("settings"),
-                )
-            } else if local_stopped {
-                (
-                    "sing-box 服务已停止",
-                    stopped_detail,
-                    Some("start"),
-                )
-            } else { ("无法获取服务状态", "可以在设置中查看服务状态和错误日志。", Some("settings")) };
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_4()
-                .px_6()
-                .when(action.is_some(), |el| {
-                    el.child(
-                        svg()
-                            .path("power")
-                            .size(px(64.))
-                            .text_color(crate::glass::backdrop_muted(palette, cx)),
-                    )
-                })
+            })
                 .child(
                     div()
                         .flex()

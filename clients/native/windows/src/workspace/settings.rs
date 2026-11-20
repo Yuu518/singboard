@@ -104,7 +104,7 @@ impl SettingsLayout {
     }
 }
 
-fn loading_spinner(id: &'static str, size: Pixels, color: Rgba) -> AnyElement {
+pub(super) fn loading_spinner(id: &'static str, size: Pixels, color: Rgba) -> AnyElement {
     svg()
         .path("spinner")
         .size(size)

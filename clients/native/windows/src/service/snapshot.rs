@@ -89,17 +89,36 @@ impl Snapshot {
     }
 
     pub fn discard_replaced_by(&self, replacement: &Self) {
-        if !self.is_protected() {
-            return;
-        }
-        if self.core.parent() == replacement.core.parent() {
-            if self.config != replacement.config {
-                let _ = std::fs::remove_file(&self.config);
+        if self.is_protected() {
+            if self.core.parent() == replacement.core.parent() {
+                if self.config != replacement.config {
+                    let _ = std::fs::remove_file(&self.config);
+                }
+            } else if let Some(parent) = self.core.parent() {
+                remove_dir_retry(parent);
             }
-            return;
         }
-        if let Some(parent) = self.core.parent() {
-            let _ = std::fs::remove_dir_all(parent);
+        if let Ok(root) = protected::Directory::open(false)
+            && let Ok(entries) = std::fs::read_dir(root.path())
+        {
+            let keep = replacement.core.parent();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if keep != Some(path.as_path()) && is_runtime_path(&path, root.path()) {
+                    let _ = std::fs::remove_dir_all(&path);
+                }
+            }
+        }
+    }
+}
+
+fn remove_dir_retry(path: &Path) {
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        if std::fs::remove_dir_all(path).is_ok() || !path.exists() {
+            break;
         }
     }
 }

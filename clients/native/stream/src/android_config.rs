@@ -18,6 +18,7 @@ enum Command {
     CoreProgress,
     NetworkOverview,
     RootServiceStatus,
+    RootServiceSync,
     ConnectionGeo { ip: String },
     RuleEntries { tag: String },
     RuleMatches { tags: Vec<String>, query: String },
@@ -350,6 +351,7 @@ pub async fn request(dir: PathBuf, input: &str) -> Result<Value, String> {
         op,
         Command::RootOpen
             | Command::RootServiceStatus
+            | Command::RootServiceSync
             | Command::RuleEntries { .. }
             | Command::RuleMatches { .. }
             | Command::RootCheck { .. }
@@ -382,6 +384,10 @@ pub async fn request(dir: PathBuf, input: &str) -> Result<Value, String> {
         Command::RootServiceStatus=>{
             root::set_enabled(true);
             json!(crate::commands::service::service_status().await?)
+        }
+        Command::RootServiceSync=>{
+            root::set_enabled(true);
+            json!(crate::commands::service::service_component_sync().await?)
         }
         Command::ConnectionGeo { ip } => {
             if crate::tools::public_ip(&ip) { crate::tools::geo_details(&ip).await? } else { Value::Null }

@@ -68,6 +68,46 @@ pub fn status() -> Result<Status, String> {
     })
 }
 
+static STARTUP_SYNC: tokio::sync::OnceCell<Result<String, String>> =
+    tokio::sync::OnceCell::const_new();
+
+pub async fn sync() -> Result<String, String> {
+    STARTUP_SYNC
+        .get_or_init(|| async {
+            let dir = data_dir()?;
+            let operation = tokio::task::spawn_blocking(move || {
+                if scm::query_service_status(SERVICE_NAME)?.state == "not_installed" {
+                    return Ok::<_, String>(
+                        managed::legacy_service_name(&dir)?
+                            .map(|service| admin::Operation::Migrate { service }),
+                    );
+                }
+                Ok(match helper::sync_needed(SERVICE_NAME)? {
+                    helper::SyncNeed::UpToDate => None,
+                    _ => Some(admin::Operation::Sync {
+                        service: SERVICE_NAME.into(),
+                    }),
+                })
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            if let Some(operation) = operation {
+                let result = admin::request(
+                    operation,
+                    data_dir()?,
+                    singboard_service::ipc::current_user_sid().map_err(|e| e.to_string())?,
+                    |_| {},
+                )
+                .await?;
+                Ok(result.as_str().unwrap_or("updated").to_string())
+            } else {
+                Ok("ok".into())
+            }
+        })
+        .await
+        .clone()
+}
+
 pub fn error_log() -> Result<String, String> {
     scm::read_service_error_log(&service_name()?)
 }
