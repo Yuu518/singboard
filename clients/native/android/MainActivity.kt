@@ -1,4 +1,4 @@
-package io.github.yuu518.singboard_native
+package io.github.Yuu518.singboard
 
 import android.app.Activity
 import android.content.Intent

@@ -48,10 +48,10 @@ if ($Platform -eq 'Windows') {
     Invoke-Tool cargo @('build','--locked','--profile','windows-release','--target',$target,'--manifest-path',$manifest,'-p','singboard-gpui')
     $binary = "$env:CARGO_TARGET_DIR/$target/windows-release/singboard.exe"
     if ($ReleaseAssets) {
-        Copy-Item -LiteralPath $binary -Destination "$outDir/singboard-native-windows-x64.exe"
+        Copy-Item -LiteralPath $binary -Destination "$outDir/singboard-windows-x64.exe"
         return
     }
-    foreach ($name in @('singboard.exe','singboard-preview.exe','singboard-native-windows-x64.exe')) {
+    foreach ($name in @('singboard.exe','singboard-preview.exe','singboard-windows-x64.exe')) {
         try {
             Copy-Item -LiteralPath $binary -Destination "$outDir/$name"
             Write-Output "已生成 $outDir/$name"
@@ -84,14 +84,21 @@ Copy-Item -LiteralPath "$PSScriptRoot/android/assets" -Destination $stage -Recur
 Copy-Item -LiteralPath "$PSScriptRoot/android/AndroidManifest.xml" -Destination "$stage/android/app/src/main"
 $null = New-Item -ItemType Directory -Force "$stage/android/app/src/main/res/xml"
 Copy-Item -LiteralPath "$PSScriptRoot/android/update_paths.xml" -Destination "$stage/android/app/src/main/res/xml"
-Copy-Item -LiteralPath "$PSScriptRoot/android/MainActivity.kt" -Destination "$stage/android/app/src/main/kotlin/io/github/yuu518/singboard_native/MainActivity.kt"
-$resources = "$PSScriptRoot/android/res"
-foreach ($density in @('mdpi','hdpi','xhdpi','xxhdpi','xxxhdpi')) {
-    $icon = "mipmap-$density/ic_launcher.png"
-    Copy-Item -LiteralPath "$resources/$icon" -Destination "$stage/android/app/src/main/res/$icon"
+if (Test-Path "$stage/android/app/src/main/kotlin") {
+    Remove-Item -LiteralPath "$stage/android/app/src/main/kotlin" -Recurse -Force
 }
+$kotlinDir = "$stage/android/app/src/main/kotlin/io/github/Yuu518/singboard"
+$null = New-Item -ItemType Directory -Force $kotlinDir
+Copy-Item -LiteralPath "$PSScriptRoot/android/MainActivity.kt" -Destination "$kotlinDir/MainActivity.kt"
+if (Test-Path "$stage/android/app/src/main/res/mipmap-anydpi-v26") {
+    Remove-Item -LiteralPath "$stage/android/app/src/main/res/mipmap-anydpi-v26" -Recurse -Force
+}
+Copy-Item -Path "$PSScriptRoot/android/res/*" -Destination "$stage/android/app/src/main/res" -Recurse -Force
 $gradleApp = "$stage/android/app/build.gradle.kts"
-$gradleText = (Get-Content -LiteralPath $gradleApp -Raw).Replace('minSdk = flutter.minSdkVersion','minSdk = 26')
+$gradleText = (Get-Content -LiteralPath $gradleApp -Raw)
+$gradleText = $gradleText -replace 'namespace = "[^"]+"','namespace = "io.github.Yuu518.singboard"'
+$gradleText = $gradleText -replace 'applicationId = "[^"]+"','applicationId = "io.github.Yuu518.singboard"'
+$gradleText = $gradleText.Replace('minSdk = flutter.minSdkVersion','minSdk = 26')
 [IO.File]::WriteAllText($gradleApp,$gradleText)
 $ndk = $env:ANDROID_NDK_HOME
 if (!$ndk) { $ndk = "$env:ANDROID_HOME/ndk/28.2.13676358" }
@@ -125,7 +132,7 @@ try {
             Invoke-Tool $signer @('verify',$signed)
             $apk = $signed
         }
-        Copy-Item -LiteralPath $apk -Destination "$outDir/singboard-native-$abi.apk"
+        Copy-Item -LiteralPath $apk -Destination "$outDir/singboard-$abi.apk"
     }
 } finally {
     Pop-Location

@@ -198,8 +198,8 @@ pwsh clients/native/build.ps1 -Platform Android
 
 Outputs are written to `dist/native/`:
 
-- Windows writes `singboard.exe` by default, or `singboard-native-windows-x64.exe` when `-ReleaseAssets` is passed.
-- Android writes `singboard-native-arm64-v8a.apk` and `singboard-native-armeabi-v7a.apk`. Release signing uses `SINGBOARD_ANDROID_KEYSTORE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` (required with `-ReleaseAssets`).
+- Windows writes `singboard.exe` by default, or `singboard-windows-x64.exe` when `-ReleaseAssets` is passed.
+- Android writes `singboard-arm64-v8a.apk` and `singboard-armeabi-v7a.apk`. Release signing uses `SINGBOARD_ANDROID_KEYSTORE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` (required with `-ReleaseAssets`).
 - All build caches (Cargo, Pub, Gradle and Android staging) are kept under `.build-deps/`.
 
 The Windows build produces one self-contained executable with the service host embedded.
@@ -226,7 +226,7 @@ The Windows build produces one self-contained executable with the service host e
 The `Build` workflow runs on pushes to `master`; pushes that only touch Markdown files or `LICENSE` are skipped. It can also be started manually.
 
 - It reads the latest tag as the version.
-- It publishes `singboard-native-windows-x64.exe`, `singboard-native-arm64-v8a.apk` and `singboard-native-armeabi-v7a.apk` to that tag's release.
+- It publishes `singboard-windows-x64.exe`, `singboard-arm64-v8a.apk` and `singboard-armeabi-v7a.apk` to that tag's release.
 
 Repository secrets:
 
