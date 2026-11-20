@@ -23,7 +23,9 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use singboard_stream::{Feed, Subscription};
 use std::{path::Path, sync::Arc, time::Duration};
 use tray_icon::{TrayIconBuilder, TrayIconEvent};
-use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, SW_HIDE, SW_RESTORE, ShowWindow};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    IsWindowVisible, MessageBoxW, SW_HIDE, SW_RESTORE, ShowWindow,
+};
 use workspace::{Page, Workspace};
 
 struct Overview {
@@ -35,7 +37,31 @@ struct Overview {
     wallpaper: Wallpaper,
     background: Arc<RenderImage>,
     material_busy: bool,
+    visible: bool,
     stream: Option<Subscription>,
+}
+
+impl Overview {
+    fn suspend(&mut self, cx: &mut Context<Self>) {
+        if !self.visible {
+            return;
+        }
+        self.visible = false;
+        self.stream = None;
+        self.workspace.update(cx, |state, _| state.suspend());
+    }
+
+    fn resume(&mut self, endpoint: &(String, String), connected: bool, cx: &mut Context<Self>) {
+        if self.visible {
+            return;
+        }
+        self.visible = true;
+        if connected && self.stream.is_none() {
+            self.stream = Subscription::start(&endpoint.0, &endpoint.1, Feed::Traffic).ok();
+        }
+        self.workspace.update(cx, |state, cx| state.resume(cx));
+        cx.notify();
+    }
 }
 
 fn should_connect(prefs: &settings::Settings) -> bool {
@@ -106,6 +132,15 @@ fn close_window(window: &Window, cx: &mut App) {
     } else {
         editor::quit(cx)
     }
+}
+
+fn is_window_visible(window: &Window) -> bool {
+    if let Ok(handle) = HasWindowHandle::window_handle(window) {
+        if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+            return unsafe { IsWindowVisible(handle.hwnd.get() as _) != 0 };
+        }
+    }
+    true
 }
 
 fn visibility(window: &Window, show: bool) {
@@ -201,7 +236,7 @@ fn run() -> Result<(), String> {
     let prefs = maintenance::preferences()?;
     let (base, secret) = endpoint(&prefs);
     let initial_connect = should_connect(&prefs);
-    let stream = if initial_connect {
+    let stream = if initial_connect && !hidden {
         Some(Subscription::start(&base, &secret, Feed::Traffic)?)
     } else {
         None
@@ -219,7 +254,8 @@ fn run() -> Result<(), String> {
     if initial_appearance.mode == theme::Mode::Dark {
         wallpaper.set_dark(true);
     }
-    let mut workspace = Workspace::new(&base, &secret, &prefs, initial_connect)?;
+    let mut workspace = Workspace::new(&base, &secret, &prefs, initial_connect, !hidden)?;
+    workspace.page = start;
     workspace.custom_wallpaper = wallpaper.custom;
     workspace.glass_tint = prefs.glass_tint.unwrap_or(1.);
     if !hidden {
@@ -239,9 +275,11 @@ fn run() -> Result<(), String> {
             cx.set_global(initial_appearance);
             let workspace = cx.new(|cx| {
                 let mut workspace = workspace;
-                workspace.open(start, cx);
-                if prefs.panel_auto_check_update.unwrap_or(true) {
-                    workspace.check_update(cx);
+                if !hidden {
+                    workspace.open(start, cx);
+                    if prefs.panel_auto_check_update.unwrap_or(true) {
+                        workspace.check_update(cx);
+                    }
                 }
                 workspace
             });
@@ -308,6 +346,7 @@ fn run() -> Result<(), String> {
                                 )),
                                 background: wallpaper.background(),
                                 material_busy: false,
+                                visible: !hidden,
                                 wallpaper,
                                 stream,
                             }
@@ -349,6 +388,17 @@ fn run() -> Result<(), String> {
                     if handle
                         .update(cx, |_, window, cx| {
                             overview.update(cx, |panel, cx| {
+                                if show {
+                                    visibility(window, true);
+                                }
+                                let shown = is_window_visible(window);
+                                if !shown {
+                                    panel.suspend(cx);
+                                    return;
+                                }
+                                if !panel.visible {
+                                    panel.resume(&current, connected, cx);
+                                }
                                 let now = window.window_bounds();
                                 if now != observed {
                                     observed = now;
@@ -369,7 +419,7 @@ fn run() -> Result<(), String> {
                                     panel.workspace.update(cx, |state, cx| {
                                         if want_connect && (!connected || current != next) {
                                             if let (Ok(mut new), Ok(stream)) = (
-                                                Workspace::new(&next.0, &next.1, &prefs, true),
+                                                Workspace::new(&next.0, &next.1, &prefs, true, true),
                                                 Subscription::start(&next.0, &next.1, Feed::Traffic),
                                             ) {
                                                 let page = state.page;
@@ -432,9 +482,6 @@ fn run() -> Result<(), String> {
                                     panel.workspace.update(cx, |state, cx| {
                                         state.tick(cx);
                                     });
-                                }
-                                if show {
-                                    visibility(window, true);
                                 }
                             });
                         })

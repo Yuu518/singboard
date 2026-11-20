@@ -142,6 +142,9 @@ pub struct Workspace {
     uptime_tick: u64,
     api: Clash,
     api_enabled: bool,
+    suspended: bool,
+    initialized: bool,
+    pending_update_check: bool,
     log_feed: Option<Subscription>,
     conn_feed: Option<Subscription>,
     groups: Vec<Group>,
@@ -246,6 +249,9 @@ impl Workspace {
         samples: VecDeque<Traffic>,
         cx: &mut Context<Self>,
     ) {
+        if self.suspended {
+            return;
+        }
         let changed = status != self.traffic_status || failures != self.traffic_failures
             || has_frame != self.has_traffic || !samples.is_empty();
         self.traffic_status = status;
@@ -386,9 +392,10 @@ impl Workspace {
         secret: &str,
         prefs: &singboard_stream::settings::Settings,
         connect: bool,
+        active: bool,
     ) -> Result<Self, String> {
         let initial_status = if connect { "连接中" } else { "未连接" };
-        let (log_feed, conn_feed) = if connect {
+        let (log_feed, conn_feed) = if connect && active {
             (
                 Some(Subscription::start_logs(base, secret, "info")?),
                 Some(Subscription::start(base, secret, Feed::Connections)?),
@@ -410,6 +417,9 @@ impl Workspace {
             last_read: std::time::Instant::now(),
             api: Clash::new(base, secret)?,
             api_enabled: connect,
+            suspended: !active,
+            initialized: active,
+            pending_update_check: !active && prefs.panel_auto_check_update.unwrap_or(true),
             page: Page::Overview,
             log_feed,
             conn_feed,
@@ -605,7 +615,65 @@ impl Workspace {
         .detach();
     }
 
+    pub fn suspend(&mut self) {
+        if self.suspended {
+            return;
+        }
+        self.suspended = true;
+        self.log_feed = None;
+        self.conn_feed = None;
+        self.has_traffic = false;
+        self.snapshot = None;
+        self.memory = None;
+        self.frozen_topology = None;
+        self.hovered_topology = None;
+        self.topology_pointer = None;
+        self.topology_previous = None;
+        self.network_due = None;
+        self.scroll_motion = None;
+        self.log_gap_since = None;
+        if self.api_enabled {
+            self.traffic_status = "连接中";
+            self.log_status = "连接中";
+            self.conn_status = "连接中";
+        }
+    }
+
+    pub fn resume(&mut self, cx: &mut Context<Self>) {
+        if !self.suspended {
+            return;
+        }
+        self.suspended = false;
+        if self.api_enabled {
+            self.traffic_status = "连接中";
+            self.log_status = "连接中";
+            self.conn_status = "连接中";
+            self.log_gap_since = None;
+            self.resubscribe_logs();
+            if self.conn_feed.is_none() {
+                self.conn_feed =
+                    Subscription::start(&self.endpoint, &self.secret, Feed::Connections).ok();
+            }
+        }
+        if !self.initialized {
+            self.initialized = true;
+            let page = self.page;
+            self.open(page, cx);
+            if self.pending_update_check {
+                self.pending_update_check = false;
+                self.check_update(cx);
+            }
+            return;
+        }
+        self.refresh_local_state(cx);
+        self.refresh(cx);
+        cx.notify();
+    }
+
     pub fn tick(&mut self, cx: &mut Context<Self>) {
+        if self.suspended {
+            return;
+        }
         if self.service_checked.is_none_or(|t| t.elapsed().as_secs() >= 30) {
             self.refresh_local_state(cx);
         }
@@ -1471,7 +1539,7 @@ impl Workspace {
     }
 
     fn resubscribe_logs(&mut self) {
-        if !self.api_enabled {
+        if !self.api_enabled || self.suspended {
             return;
         }
         let level = self.effective_log_level();
