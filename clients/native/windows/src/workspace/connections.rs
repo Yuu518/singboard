@@ -294,7 +294,7 @@ impl Workspace {
             .rounded_full()
             .bg(palette.fill())
             .border_1()
-            .border_color(palette.rim())
+            .border_color(palette.control_rim())
             .child(crate::glass::control_layer(palette, px(999.), true))
             .child(
                 div()
@@ -356,17 +356,46 @@ impl Workspace {
             .items_center()
             .gap_2()
             .child(
-                crate::glass::backdrop_text(
-                    format!(
-                        "↓ {} · ↑ {}",
-                        total("downloadTotal"),
-                        total("uploadTotal")
+                div()
+                    .relative()
+                    .overflow_hidden()
+                    .h(px(28.))
+                    .px_3()
+                    .rounded_full()
+                    .bg(palette.fill())
+                    .border_1()
+                    .border_color(palette.control_rim())
+                    .shadow_sm()
+                    .flex()
+                    .items_center()
+                    .child(crate::glass::control_layer(palette, px(999.), true))
+                    .child(
+                        div()
+                            .relative()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.ink())
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(2.))
+                                    .child(div().text_color(palette.muted()).child("↓"))
+                                    .child(total("downloadTotal")),
+                            )
+                            .child(div().text_color(palette.muted()).child("·"))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(2.))
+                                    .child(div().text_color(palette.muted()).child("↑"))
+                                    .child(total("uploadTotal")),
+                            ),
                     ),
-                    true,
-                    palette,
-                    cx,
-                )
-                .text_xs(),
             )
             .child(
                 playback_button("conn-pause", paused, false, palette, cx)
@@ -393,7 +422,7 @@ impl Workspace {
                     .rounded_full()
                     .bg(palette.danger_soft())
                     .border_1()
-                    .border_color(palette.rim())
+                    .border_color(palette.control_rim())
                     .shadow_sm()
                     .child(crate::glass::control_layer(palette, px(999.), false))
                     .child(
@@ -451,7 +480,7 @@ impl Workspace {
             .rounded(px(10.))
             .bg(palette.fill())
             .border_1()
-            .border_color(palette.rim())
+            .border_color(palette.control_rim())
             .child(crate::glass::control_layer(palette, px(9.), false))
             .child(
                 Button::new("conn-sort")

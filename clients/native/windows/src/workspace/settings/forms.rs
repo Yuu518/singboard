@@ -166,6 +166,7 @@ impl Workspace {
         if !self.settings_layout.pending.insert("service-op") {
             return;
         }
+        self.settings_layout.service_action = Some("install");
         self.settings_layout
             .results
             .insert("service-op", "正在安装 Windows 服务…".into());
@@ -207,6 +208,7 @@ impl Workspace {
         cx.spawn(async move |weak, cx| {
             let r = job.await.map_err(|e| e.to_string()).and_then(|r| r);
             let _ = weak.update(cx, |v, cx| {
+                v.settings_layout.service_action = None;
                 v.settings_layout.pending.remove("service-op");
                 if r.is_ok() {
                     v.refresh_local_state(cx);
@@ -231,6 +233,9 @@ impl Workspace {
         if !self.settings_layout.pending.insert(section) {
             return;
         }
+        if action == "uninstall_service" {
+            self.settings_layout.service_action = Some("uninstall");
+        }
         self.settings_layout
             .results
             .insert(section, "正在处理…".into());
@@ -253,6 +258,9 @@ impl Workspace {
         cx.spawn(async move |weak, cx| {
             let r = job.await.map_err(|e| e.to_string()).and_then(|r| r);
             let _ = weak.update(cx, |v, cx| {
+                if action == "uninstall_service" {
+                    v.settings_layout.service_action = None;
+                }
                 v.settings_layout.pending.remove(section);
                 if r.is_ok() && action == "uninstall_service" {
                     v.refresh_local_state(cx);

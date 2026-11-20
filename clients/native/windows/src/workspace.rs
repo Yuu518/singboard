@@ -293,17 +293,32 @@ impl Workspace {
     }
 
     pub fn tray_service(&mut self, action: &'static str, cx: &mut Context<Self>) {
+        if self.settings_layout.service_action.is_some()
+            || !self.settings_layout.pending.insert("service-op")
+        {
+            return;
+        }
+        self.settings_layout.service_action = Some(action);
+        cx.notify();
         let task = singboard_stream::runtime().spawn(crate::service::control(action));
         cx.spawn(async move |weak, cx| {
             let result = task.await.map_err(|e| e.to_string()).and_then(|v| v);
             match result {
                 Ok(_) => {
                     let _ = weak.update(cx, |this, cx| {
+                        this.settings_layout.service_action = None;
+                        this.settings_layout.pending.remove("service-op");
                         this.refresh_local_state(cx);
+                        this.refresh(cx);
                         cx.notify();
                     });
                 }
                 Err(error) => {
+                    let _ = weak.update(cx, |this, cx| {
+                        this.settings_layout.service_action = None;
+                        this.settings_layout.pending.remove("service-op");
+                        cx.notify();
+                    });
                     if cx.update(|app| app.active_window().is_some()) {
                         let _ = weak.update(cx, |this,cx| this.message(error,true,cx));
                         return;
@@ -874,7 +889,7 @@ impl Workspace {
                                 .rounded(px(10.))
                                 .bg(palette.fill())
                                 .border_1()
-                                .border_color(palette.rim())
+                                .border_color(palette.control_rim())
                                 .shadow_sm()
                                 .child(crate::glass::control_layer(palette, px(9.), true))
                                 .child(
@@ -1657,7 +1672,7 @@ fn playback_button(
         .when(topology && !paused, |d| {
             d.bg(palette.fill())
                 .border_1()
-                .border_color(palette.rim())
+                .border_color(palette.control_rim())
                 .child(crate::glass::control_layer(palette, px(14.), true))
         })
         .child(
@@ -1732,7 +1747,6 @@ fn pill_switch(
         } else {
             palette.toggle_off()
         })
-        .when(!on, |el| el.border_1().border_color(palette.rim()))
         .flex()
         .items_center()
         .when(on, |el| el.justify_end())

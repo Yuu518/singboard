@@ -140,6 +140,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   String? _logGapSince;
   String _logSubscribedLevel = 'info';
   bool hasTraffic = false, probing = false, showSetupWizard = false, setupSaved = false;
+  String? _rootAction;
   bool _logAutoScroll = true;
   late final ScrollController _logScroll = ScrollController(onAttach: (position) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -695,7 +696,10 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       );
       if (allowed != true || !mounted) return;
     }
-    setState(() => probing = true);
+    setState(() {
+      probing = true;
+      _rootAction = action;
+    });
     try {
       final reply = await configRequest(await configDirectory(), 'tool', {
         'action': action,
@@ -708,7 +712,12 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     } catch (e) {
       if (mounted) setState(() => rootStatus = e.toString());
     } finally {
-      if (mounted) setState(() => probing = false);
+      if (mounted) {
+        setState(() {
+          probing = false;
+          _rootAction = null;
+        });
+      }
     }
   }
 
@@ -1551,11 +1560,20 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                                 color: c.fill,
                               ),
                               child: Center(
-                                child: PanelIcon(
-                                  'hero-restart',
-                                  size: 18,
-                                  color: c.ink.withValues(alpha: 0.72),
-                                ),
+                                child: _rootAction == 'root_restart'
+                                    ? SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: c.ink.withValues(alpha: 0.72),
+                                        ),
+                                      )
+                                    : PanelIcon(
+                                        'hero-restart',
+                                        size: 18,
+                                        color: c.ink.withValues(alpha: 0.72),
+                                      ),
                               ),
                             ),
                           ),
@@ -1576,11 +1594,20 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                                 ),
                               ),
                               child: Center(
-                                child: PanelIcon(
-                                  'hero-power',
-                                  size: 18,
-                                  color: c.success,
-                                ),
+                                child: _rootAction == 'root_stop'
+                                    ? SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: c.success,
+                                        ),
+                                      )
+                                    : PanelIcon(
+                                        'hero-power',
+                                        size: 18,
+                                        color: c.success,
+                                      ),
                               ),
                             ),
                           ),
@@ -2715,6 +2742,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       },
       rootRunning: rootRunning,
       probing: probing,
+      rootAction: _rootAction,
       themeMode: _theme.value,
       glassTint: _glassTint.value,
       wallpaperPath: _wallpaper.value,

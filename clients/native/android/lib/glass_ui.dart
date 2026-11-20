@@ -125,7 +125,7 @@ class GlassScope extends InheritedWidget {
     filterQuality: FilterQuality.low,
   );
   double alpha(double raw, double floor) => contrastingBackdrop ? math.max(raw, floor) : raw;
-  double get controlAlpha => alpha(.64 + .16 * tint.clamp(0.0, 1.0), .76);
+  double get controlAlpha => alpha(.36 + .32 * tint.clamp(0.0, 1.0), .68);
 
   Color backdropInk(SingboardColors c) {
     final light = backdropToneLight;
@@ -136,7 +136,7 @@ class GlassScope extends InheritedWidget {
   Color backdropMuted(SingboardColors c) {
     final light = backdropToneLight;
     if (!hasWallpaper || light == null) return c.muted;
-    return light ? const Color(0xBF1F2026) : const Color(0xC4FAFAFC);
+    return light ? const Color(0xDE1F2026) : const Color(0xE0FAFAFC);
   }
 
   List<Shadow>? backdropShadows() {
@@ -144,12 +144,12 @@ class GlassScope extends InheritedWidget {
     if (!hasWallpaper || light == null) return null;
     return light
         ? const [
-            Shadow(color: Color(0x8CFFFFFF), offset: Offset(0, 1), blurRadius: 2),
-            Shadow(color: Color(0x4DFFFFFF), blurRadius: 12),
+            Shadow(color: Color(0xB3FFFFFF), offset: Offset(0, 1), blurRadius: 2),
+            Shadow(color: Color(0x66FFFFFF), blurRadius: 12),
           ]
         : const [
-            Shadow(color: Color(0x73000000), offset: Offset(0, 1), blurRadius: 2),
-            Shadow(color: Color(0x40000000), blurRadius: 12),
+            Shadow(color: Color(0x99000000), offset: Offset(0, 1), blurRadius: 2),
+            Shadow(color: Color(0x59000000), blurRadius: 12),
           ];
   }
 
@@ -526,60 +526,70 @@ class GlassAppHeader extends StatelessWidget {
             if (showStatusPill)
               GestureDetector(
                 onTap: onStatusTap,
-                child: DecoratedBox(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 5,
+                  ),
                   decoration: BoxDecoration(
+                    color: Color.lerp(
+                      c.fill,
+                      Colors.white.withValues(alpha: c.dark ? .12 : .28),
+                      1.0 - t,
+                    ),
                     borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: Color.lerp(
+                        c.hairline,
+                        Colors.white.withValues(alpha: c.dark ? .19 : .55),
+                        1.0 - t,
+                      )!,
+                      width: 0.75,
+                    ),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withValues(alpha: c.dark ? .28 : .08),
-                        blurRadius: 6,
-                        offset: const Offset(0, 1),
+                        color: Colors.black.withValues(
+                          alpha: c.dark ? (.16 + .14 * (1.0 - t)) : (.04 + .06 * (1.0 - t)),
+                        ),
+                        blurRadius: 8,
+                        spreadRadius: -2,
+                        offset: const Offset(0, 2),
                       ),
                     ],
                   ),
-                  child: GlassControl(
-                    radius: 999,
-                    tint: Colors.transparent,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 5,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (busy) SizedBox.square(dimension: 12, child: CircularProgressIndicator(strokeWidth: 2, color: c.warning))
-                          else Container(
-                            width: 14,
-                            height: 14,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: connected ? c.successSoft : c.dangerSoft,
-                            ),
-                            alignment: Alignment.center,
-                            child: Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: connected ? c.success : c.error,
-                              ),
-                            ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (busy) SizedBox.square(dimension: 12, child: CircularProgressIndicator(strokeWidth: 2, color: c.warning))
+                      else Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: connected ? c.successSoft : c.dangerSoft,
+                        ),
+                        alignment: Alignment.center,
+                        child: Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: connected ? c.success : c.error,
                           ),
-                          const SizedBox(width: 5),
-                          Text(
-                            statusText,
-                            style: TextStyle(
-                              fontSize: 12,
-                              height: 16 / 12,
-                              fontFeatures: const [FontFeature.tabularFigures()],
-                              fontWeight: FontWeight.w500,
-                              color: c.ink,
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
-                    ),
+                      const SizedBox(width: 5),
+                      Text(
+                        statusText,
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 16 / 12,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                          fontWeight: FontWeight.w500,
+                          color: c.ink,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),

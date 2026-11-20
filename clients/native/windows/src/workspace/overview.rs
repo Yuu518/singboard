@@ -1403,7 +1403,7 @@ impl Workspace {
                                         .border_color(if self.show_ip {
                                             palette.selection_border()
                                         } else {
-                                            palette.rim()
+                                            palette.control_rim()
                                         })
                                         .shadow_sm()
                                         .cursor_pointer()
@@ -1439,7 +1439,7 @@ impl Workspace {
                                         .rounded_full()
                                         .bg(palette.fill())
                                         .border_1()
-                                        .border_color(palette.rim())
+                                        .border_color(palette.control_rim())
                                         .shadow_sm()
                                         .cursor_pointer()
                                         .child(crate::glass::control_layer(palette, px(999.), true))
@@ -1518,7 +1518,7 @@ impl Workspace {
             .rounded_full()
             .bg(palette.fill())
             .border_1()
-            .border_color(palette.rim())
+            .border_color(palette.control_rim())
             .child(crate::glass::control_layer(palette, px(999.), true))
             .child(
                 div()

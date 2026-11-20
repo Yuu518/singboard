@@ -16,6 +16,7 @@ class SettingsPage extends StatefulWidget {
   final String rootStatus;
   final bool rootRunning;
   final bool probing;
+  final String? rootAction;
   final ThemeMode themeMode;
   final double glassTint;
   final String? wallpaperPath;
@@ -36,6 +37,7 @@ class SettingsPage extends StatefulWidget {
     required this.rootStatus,
     required this.rootRunning,
     required this.probing,
+    this.rootAction,
     required this.themeMode,
     required this.glassTint,
     required this.wallpaperPath,
@@ -192,9 +194,10 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _routeBtn(String label, VoidCallback? onTap) {
+  Widget _routeBtn(String label, VoidCallback? onTap, {bool loading = false}) {
     final c = SingboardColors.of(context);
     final disabled = onTap == null;
+    final fg = disabled ? c.muted.withValues(alpha: 0.55) : Colors.white;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -203,13 +206,27 @@ class _SettingsPageState extends State<SettingsPage> {
           color: disabled ? c.fill : c.primary,
           borderRadius: BorderRadius.circular(10),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w500,
-            color: disabled ? c.muted.withValues(alpha: 0.55) : Colors.white,
-          ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Opacity(
+              opacity: loading ? 0 : 1,
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w500,
+                  color: fg,
+                ),
+              ),
+            ),
+            if (loading)
+              SizedBox(
+                width: 15,
+                height: 15,
+                child: CircularProgressIndicator(strokeWidth: 2, color: fg),
+              ),
+          ],
         ),
       ),
     );
@@ -220,29 +237,43 @@ class _SettingsPageState extends State<SettingsPage> {
     VoidCallback? onTap, {
     bool danger = false,
     bool ghost = false,
+    bool loading = false,
   }) {
     final c = SingboardColors.of(context);
     final disabled = onTap == null;
+    final fg = disabled
+        ? c.muted.withValues(alpha: 0.55)
+        : (danger ? c.error : c.primary);
     return GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
-          color: ghost
-              ? Colors.transparent
-              : (c.dark ? const Color(0x4D767680) : const Color(0x80FFFFFF)),
+          color: ghost ? Colors.transparent : c.fill,
           borderRadius: BorderRadius.circular(10),
-          border: ghost ? null : Border.all(color: c.hairline, width: 0.75),
+          border: ghost ? null : Border.all(color: c.hairline, width: 0.5),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w500,
-            color: disabled
-                ? c.muted.withValues(alpha: 0.55)
-                : (danger ? c.error : c.primary),
-          ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Opacity(
+              opacity: loading ? 0 : 1,
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w500,
+                  color: fg,
+                ),
+              ),
+            ),
+            if (loading)
+              SizedBox(
+                width: 15,
+                height: 15,
+                child: CircularProgressIndicator(strokeWidth: 2, color: fg),
+              ),
+          ],
         ),
       ),
     );
@@ -1662,6 +1693,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                         'root_start',
                                         '启动',
                                       ),
+                                loading: widget.rootAction == 'root_start',
                               ),
                               _settingsBtn(
                                 '重启',
@@ -1671,6 +1703,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                         'root_restart',
                                         '重启',
                                       ),
+                                loading: widget.rootAction == 'root_restart',
                               ),
                               _settingsBtn(
                                 '停止',
@@ -1681,6 +1714,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                         '停止',
                                       ),
                                 danger: true,
+                                loading: widget.rootAction == 'root_stop',
                               ),
                             ],
                           ),

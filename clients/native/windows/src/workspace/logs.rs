@@ -145,7 +145,7 @@ impl Workspace {
             .rounded(px(10.))
             .bg(palette.fill())
             .border_1()
-            .border_color(palette.rim())
+            .border_color(palette.control_rim())
             .child(crate::glass::control_layer(palette, px(9.), false))
             .child(
                 Button::new("logs-level")
@@ -230,7 +230,7 @@ impl Workspace {
                     .rounded_full()
                     .bg(palette.fill())
                     .border_1()
-                    .border_color(palette.rim())
+                    .border_color(palette.control_rim())
                     .when(!clear_disabled, |d| d.cursor_pointer().shadow_sm())
                     .when(clear_disabled, |d| d.opacity(0.55))
                     .child(crate::glass::control_layer(palette, px(999.), true))
@@ -744,7 +744,7 @@ impl Workspace {
                         .rounded_full()
                         .bg(palette.fill())
                         .border_1()
-                        .border_color(palette.rim())
+                        .border_color(palette.control_rim())
                         .shadow_md()
                         .child(crate::glass::control_layer(palette, px(999.), true))
                         .child(

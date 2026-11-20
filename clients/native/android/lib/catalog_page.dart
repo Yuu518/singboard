@@ -877,14 +877,14 @@ class _CatalogPageState extends State<CatalogPage> {
                                   color: selected
                                       ? c.primarySoft
                                       : (c.dark
-                                          ? const Color(0x523A3A40)
-                                          : const Color(0x78FFFFFF)),
+                                          ? const Color(0x14FFFFFF)
+                                          : const Color(0x38FFFFFF)),
                                   borderRadius: BorderRadius.circular(12),
                                   border: Border.all(
                                     color: selected
                                         ? c.selectionBorder
                                         : c.hairline,
-                                    width: selected ? 1 : 0.75,
+                                    width: selected ? 1 : 0.5,
                                   ),
                                 ),
                                 child: Column(
@@ -1104,10 +1104,10 @@ class _CatalogPageState extends State<CatalogPage> {
                               padding: const EdgeInsets.all(10),
                               decoration: BoxDecoration(
                                 color: c.dark
-                                    ? const Color(0x523A3A40)
-                                    : const Color(0x78FFFFFF),
+                                    ? const Color(0x14FFFFFF)
+                                    : const Color(0x38FFFFFF),
                                 borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: c.hairline, width: 0.75),
+                                border: Border.all(color: c.hairline, width: 0.5),
                               ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,

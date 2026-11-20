@@ -658,12 +658,49 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                     spacing: 8,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Text(
-                        '↓ ${formatBytes(frozen?.$3 ?? widget.download)} · ↑ ${formatBytes(frozen?.$4 ?? widget.upload)}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: scope.backdropMuted(c),
-                          shadows: scope.backdropShadows(),
+                      GlassControl(
+                        radius: 999,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          child: Text.rich(
+                            TextSpan(
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: c.ink,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                              children: [
+                                TextSpan(
+                                  text: '↓ ',
+                                  style: TextStyle(color: c.muted),
+                                ),
+                                TextSpan(
+                                  text: formatBytes(
+                                    frozen?.$3 ?? widget.download,
+                                  ),
+                                ),
+                                TextSpan(
+                                  text: ' · ',
+                                  style: TextStyle(color: c.muted),
+                                ),
+                                TextSpan(
+                                  text: '↑ ',
+                                  style: TextStyle(color: c.muted),
+                                ),
+                                TextSpan(
+                                  text: formatBytes(
+                                    frozen?.$4 ?? widget.upload,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                       IconButton(

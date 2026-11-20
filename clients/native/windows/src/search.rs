@@ -239,7 +239,7 @@ impl Render for Search {
             .border_color(if active {
                 palette.selection_border()
             } else {
-                palette.rim()
+                palette.control_rim()
             })
             .text_size(px(13.))
             .text_color(palette.ink())

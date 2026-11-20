@@ -1,4 +1,4 @@
-use gpui::{App, Global, Rgba, Window, WindowAppearance, rgb, rgba};
+use gpui::{App, Global, Hsla, Rgba, Window, WindowAppearance, rgb, rgba, transparent_black};
 use gpui_component::{Theme, ThemeMode};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use serde::{Deserialize, Serialize};
@@ -140,7 +140,19 @@ impl Appearance {
             ThemeMode::Light
         };
         Theme::change(mode, None, cx);
-        Theme::global_mut(cx).font_family = system_ui_font().into();
+        let theme = Theme::global_mut(cx);
+        theme.font_family = system_ui_font().into();
+        let palette = Palette(dark);
+        let highlight = std::sync::Arc::make_mut(&mut theme.highlight_theme);
+        highlight.style.editor_background = Some(transparent_black());
+        highlight.style.editor_gutter_background = Some(transparent_black());
+        highlight.style.editor_active_line = Some(Hsla::from(if dark {
+            rgba(0xffffff14)
+        } else {
+            rgba(0x76768018)
+        }));
+        highlight.style.editor_line_number = Some(Hsla::from(palette.muted()));
+        highlight.style.editor_active_line_number = Some(Hsla::from(palette.ink()));
         cx.refresh_windows();
     }
 }
@@ -249,14 +261,17 @@ impl Palette {
     pub fn rim(self) -> Rgba {
         rgba(self.choose(0x00000018, 0xffffff24))
     }
+    pub fn control_rim(self) -> Rgba {
+        rgba(self.choose(0x00000010, 0xffffff1c))
+    }
     pub fn thumb(self) -> Rgba {
         rgb(self.choose(0xffffff, 0x636366))
     }
     pub fn tile(self) -> Rgba {
-        rgba(self.choose(0xffffff7a, 0x3a3a406b))
+        rgba(self.choose(0xffffff38, 0xffffff14))
     }
     pub fn toggle_off(self) -> Rgba {
-        rgb(self.choose(0xd8d8df, 0x39393d))
+        rgba(self.choose(0x7878803d, 0x7878805c))
     }
     pub fn card(self, translucent: bool) -> Rgba {
         if translucent {

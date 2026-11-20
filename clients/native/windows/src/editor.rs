@@ -634,8 +634,6 @@ impl Render for Editor {
         }
 
         let mode_tabs = div()
-            .relative()
-            .overflow_hidden()
             .flex()
             .items_center()
             .gap(px(2.))
@@ -643,12 +641,10 @@ impl Render for Editor {
             .rounded_full()
             .bg(palette.fill())
             .border_1()
-            .border_color(palette.rim())
-            .child(crate::glass::control_layer(palette, px(999.), true))
+            .border_color(palette.control_rim())
             .child(
                 div()
                     .id("editor-mode-whole")
-                    .relative()
                     .cursor_pointer()
                     .px(px(10.))
                     .py(px(2.))
@@ -671,7 +667,6 @@ impl Render for Editor {
             .child(
                 div()
                     .id("editor-mode-module")
-                    .relative()
                     .cursor_pointer()
                     .px(px(10.))
                     .py(px(2.))
@@ -810,9 +805,13 @@ impl Render for Editor {
                             .w_full()
                             .rounded(px(12.))
                             .overflow_hidden()
-                            .bg(palette.card_tinted(true, (tint + 0.45).min(1.)))
+                            .bg(if palette.0 {
+                                rgba(0x1c1c2048)
+                            } else {
+                                rgba(0xffffff42)
+                            })
                             .border_1()
-                            .border_color(palette.line())
+                            .border_color(palette.control_rim())
                             .child(
                                 CodeEditor::new(&self.input)
                                     .h_full()

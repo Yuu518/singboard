@@ -92,6 +92,7 @@ pub(super) struct SettingsLayout {
     pub(super) tint: Option<Entity<SliderState>>,
     pub(super) results: HashMap<&'static str, String>,
     pub(super) pending: HashSet<&'static str>,
+    pub(super) service_action: Option<&'static str>,
     pub(super) api_edit: Option<bool>,
     pub(super) protocol: Option<String>,
     pub(super) dialog: Option<SettingsDialog>,
@@ -101,6 +102,48 @@ impl SettingsLayout {
     pub(super) fn close_dialog(&mut self) {
         self.dialog = None;
     }
+}
+
+fn loading_spinner(id: &'static str, size: Pixels, color: Rgba) -> AnyElement {
+    svg()
+        .path("spinner")
+        .size(size)
+        .text_color(color)
+        .with_animation(
+            id,
+            Animation::new(std::time::Duration::from_millis(750)).repeat(),
+            |el, delta| el.with_transformation(Transformation::rotate(percentage(delta))),
+        )
+        .into_any_element()
+}
+
+fn btn_body(
+    spinner_id: &'static str,
+    label: impl Into<SharedString>,
+    loading: bool,
+    spinner_color: Rgba,
+) -> Div {
+    div()
+        .relative()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .when(loading, |d| d.opacity(0.))
+                .child(label.into()),
+        )
+        .when(loading, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(loading_spinner(spinner_id, px(15.), spinner_color)),
+            )
+        })
 }
 
 pub(super) fn route_btn(
@@ -135,33 +178,24 @@ pub(super) fn action_btn(
 ) -> Stateful<Div> {
     div()
         .id(id)
-        .relative()
-        .overflow_hidden()
+        .px_3()
         .h(px(32.))
+        .flex()
+        .items_center()
+        .justify_center()
         .rounded_full()
         .bg(p.fill())
         .border_1()
-        .border_color(p.rim())
-        .when(disabled, |d| d.opacity(0.6))
-        .when(!disabled, |d| d.cursor_pointer())
-        .child(crate::glass::control_layer(p, px(999.), true))
-        .child(
-            div()
-                .relative()
-                .h_full()
-                .px_3()
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(14.))
-                .font_weight(FontWeight::MEDIUM)
-                .when(disabled, |d| d.text_color(p.muted()))
-                .when(!disabled, |d| {
-                    d.hover(|s| s.bg(p.fill_strong())).text_color(p.accent())
-                })
-                .child(label.into()),
-        )
+        .border_color(p.control_rim())
+        .text_size(px(14.))
+        .font_weight(FontWeight::MEDIUM)
+        .when(disabled, |d| d.text_color(p.muted()).opacity(0.6))
+        .when(!disabled, |d| {
+            d.cursor_pointer()
+                .hover(|s| s.bg(p.fill_strong()))
+                .text_color(p.accent())
+        })
+        .child(label.into())
 }
 
 pub(super) fn danger_btn(
@@ -173,37 +207,34 @@ pub(super) fn danger_btn(
 ) -> Stateful<Div> {
     div()
         .id(id)
-        .relative()
-        .overflow_hidden()
+        .px_3()
         .h(px(32.))
+        .flex()
+        .items_center()
+        .justify_center()
         .rounded_full()
         .when(!ghost, |d| {
             d.bg(p.danger_soft())
                 .border_1()
-                .border_color(p.rim())
-                .child(crate::glass::control_layer(p, px(999.), false))
+                .border_color(p.control_rim())
         })
-        .when(disabled, |d| d.opacity(0.55))
-        .when(!disabled, |d| d.cursor_pointer())
-        .child(
-            div()
-                .relative()
-                .h_full()
-                .px_3()
-                .rounded_full()
-                .when(!ghost, |d| d.bg(p.danger_soft()))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(14.))
-                .font_weight(FontWeight::MEDIUM)
-                .when(disabled, |d| d.text_color(p.muted()))
-                .when(!disabled, |d| {
-                    d.hover(|s| s.bg(if ghost { p.hover() } else { p.danger_soft() }))
-                        .text_color(p.danger())
+        .text_size(px(14.))
+        .font_weight(FontWeight::MEDIUM)
+        .when(disabled, |d| d.text_color(p.muted()).opacity(0.55))
+        .when(!disabled, |d| {
+            d.cursor_pointer()
+                .hover(|s| {
+                    s.bg(if ghost {
+                        p.hover()
+                    } else if p.0 {
+                        rgba(0xff453a47)
+                    } else {
+                        rgba(0xff3b3033)
+                    })
                 })
-                .child(label.into()),
-        )
+                .text_color(p.danger())
+        })
+        .child(label.into())
 }
 
 pub(super) fn icon_btn(
@@ -262,7 +293,7 @@ pub(super) fn picker(
         .rounded(px(10.))
         .bg(palette.fill())
         .border_1()
-        .border_color(palette.rim())
+        .border_color(palette.control_rim())
         .child(crate::glass::control_layer(palette, px(9.), false))
         .child(
             Button::new(id)
@@ -784,7 +815,8 @@ impl Workspace {
         let local_stopped = self.local_state.contains("已停止");
         let local_not_installed = self.local_state.contains("未安装");
         let connected = self.traffic_status == "已连接";
-        let svc_busy = self.settings_layout.pending.contains("service-op");
+        let svc_action = self.settings_layout.service_action;
+        let svc_busy = svc_action.is_some() || self.settings_layout.pending.contains("service-op");
         let (dot_color, halo_color, svc_text) = if local_not_installed && !connected {
             (palette.muted(), rgba(0x00000000).into(), "未安装服务")
         } else if local_running {
@@ -801,6 +833,9 @@ impl Workspace {
             )
         };
 
+        let start_loading = svc_action == Some("start");
+        let restart_loading = svc_action == Some("restart");
+        let stop_loading = svc_action == Some("stop");
         let start_disabled = svc_busy || local_running || local_not_installed;
         let restart_disabled = svc_busy || local_not_installed;
         let stop_disabled = svc_busy || local_stopped || local_not_installed;
@@ -810,27 +845,102 @@ impl Workspace {
             .items_center()
             .gap(px(6.))
             .child(
-                route_btn("set-svc-start", "启动", start_disabled, palette)
+                div()
+                    .id("set-svc-start")
+                    .px_3()
+                    .h(px(32.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .when(start_disabled, |d| {
+                        d.bg(palette.fill()).text_color(palette.muted()).opacity(0.6)
+                    })
+                    .when(!start_disabled, |d| {
+                        d.cursor_pointer()
+                            .bg(palette.primary_fill())
+                            .text_color(rgb(0xffffff))
+                    })
+                    .child(btn_body(
+                        "spin-svc-start",
+                        "启动",
+                        start_loading,
+                        palette.muted(),
+                    ))
                     .when(!start_disabled, |b| {
                         b.on_click(cx.listener(|this, _, _, cx| this.tray_service("start", cx)))
                     }),
             )
             .child(
-                action_btn("set-svc-restart", "重启", restart_disabled, palette)
+                div()
+                    .id("set-svc-restart")
+                    .px_3()
+                    .h(px(32.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(palette.fill())
+                    .border_1()
+                    .border_color(palette.control_rim())
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .when(restart_disabled, |d| d.text_color(palette.muted()).opacity(0.6))
+                    .when(!restart_disabled, |d| {
+                        d.cursor_pointer()
+                            .hover(|s| s.bg(palette.fill_strong()))
+                            .text_color(palette.accent())
+                    })
+                    .child(btn_body(
+                        "spin-svc-restart",
+                        "重启",
+                        restart_loading,
+                        palette.muted(),
+                    ))
                     .when(!restart_disabled, |b| {
                         b.on_click(cx.listener(|this, _, _, cx| this.tray_service("restart", cx)))
                     }),
             )
             .child(
-                danger_btn("set-svc-stop", "停止", false, stop_disabled, palette).when(
-                    !stop_disabled,
-                    |b| {
+                div()
+                    .id("set-svc-stop")
+                    .px_3()
+                    .h(px(32.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(palette.danger_soft())
+                    .border_1()
+                    .border_color(palette.control_rim())
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .when(stop_disabled, |d| d.text_color(palette.muted()).opacity(0.55))
+                    .when(!stop_disabled, |d| {
+                        d.cursor_pointer()
+                            .hover(|s| {
+                                s.bg(if palette.0 {
+                                    rgba(0xff453a47)
+                                } else {
+                                    rgba(0xff3b3033)
+                                })
+                            })
+                            .text_color(palette.danger())
+                    })
+                    .child(btn_body(
+                        "spin-svc-stop",
+                        "停止",
+                        stop_loading,
+                        palette.muted(),
+                    ))
+                    .when(!stop_disabled, |b| {
                         b.on_click(cx.listener(|this, _, _, cx| {
                             this.settings_layout.dialog = Some(SettingsDialog::ConfirmStop);
                             cx.notify();
                         }))
-                    },
-                ),
+                    }),
             );
 
         let mode_desc = if !connected && !local_running {
@@ -875,6 +985,8 @@ impl Workspace {
                 .into_any_element()
         };
 
+        let install_loading = svc_action == Some("install");
+        let uninstall_loading = svc_action == Some("uninstall");
         let install_disabled = svc_busy || !local_not_installed;
         let uninstall_disabled = svc_busy || local_not_installed;
         let core_card = card()
@@ -957,17 +1069,60 @@ impl Workspace {
                     .items_center()
                     .gap(px(6.))
                     .child(
-                        action_btn("install-service", "安装服务", install_disabled, palette).when(
-                            !install_disabled,
-                            |b| {
+                        div()
+                            .id("install-service")
+                            .px_3()
+                            .h(px(32.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(palette.fill())
+                            .border_1()
+                            .border_color(palette.control_rim())
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .when(install_disabled, |d| d.text_color(palette.muted()).opacity(0.6))
+                            .when(!install_disabled, |d| {
+                                d.cursor_pointer()
+                                    .hover(|s| s.bg(palette.fill_strong()))
+                                    .text_color(palette.accent())
+                            })
+                            .child(btn_body(
+                                "spin-svc-install",
+                                "安装服务",
+                                install_loading,
+                                palette.muted(),
+                            ))
+                            .when(!install_disabled, |b| {
                                 b.on_click(cx.listener(|this, _, _, cx| {
                                     this.install_windows_service(cx);
                                 }))
-                            },
-                        ),
+                            }),
                     )
                     .child(
-                        danger_btn("uninstall-service", "卸载服务", true, uninstall_disabled, palette)
+                        div()
+                            .id("uninstall-service")
+                            .px_3()
+                            .h(px(32.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .when(uninstall_disabled, |d| d.text_color(palette.muted()).opacity(0.55))
+                            .when(!uninstall_disabled, |d| {
+                                d.cursor_pointer()
+                                    .hover(|s| s.bg(palette.hover()))
+                                    .text_color(palette.danger())
+                            })
+                            .child(btn_body(
+                                "spin-svc-uninstall",
+                                "卸载服务",
+                                uninstall_loading,
+                                palette.muted(),
+                            ))
                             .when(!uninstall_disabled, |b| {
                                 b.on_click(cx.listener(move |v, _, _, cx| {
                                     v.settings_layout.dialog =
@@ -987,16 +1142,13 @@ impl Workspace {
         let dns_card = card().child(self.dns_settings(&prefs, width, window, cx));
 
         let mut theme_seg = div()
-            .relative()
-            .overflow_hidden()
             .flex()
             .gap(px(2.))
             .p(px(2.))
             .rounded_full()
             .bg(palette.fill())
             .border_1()
-            .border_color(palette.rim())
-            .child(crate::glass::control_layer(palette, px(999.), true));
+            .border_color(palette.control_rim());
         for (i, (mode, name)) in [
             crate::theme::MODES[2],
             crate::theme::MODES[0],
@@ -1008,7 +1160,6 @@ impl Workspace {
             theme_seg = theme_seg.child(
                 div()
                     .id(("set-theme", i))
-                    .relative()
                     .px(px(14.))
                     .py(px(3.))
                     .text_xs()

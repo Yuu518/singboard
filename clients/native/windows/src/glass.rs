@@ -466,6 +466,173 @@ pub fn card_shadows(dark: bool) -> Vec<BoxShadow> {
     }
 }
 
+pub fn card_hover_rim(dark: bool, hover: f32) -> gpui::Rgba {
+    let h = hover.clamp(0., 1.);
+    if dark {
+        rgba(0xffffff00 | (0x24 + (20. * h).round() as u32))
+    } else {
+        rgba(0x00000000 | (0x18 + (12. * h).round() as u32))
+    }
+}
+
+pub fn card_hover_shadows(dark: bool, hover: f32) -> Vec<BoxShadow> {
+    let h = hover.clamp(0., 1.);
+    if h <= 0.001 {
+        return card_shadows(dark);
+    }
+    if dark {
+        vec![
+            BoxShadow {
+                color: hsla(0., 0., 0., 0.35 * h),
+                offset: point(px(0.), px(2.)),
+                blur_radius: px(6.),
+                spread_radius: px(0.),
+                inset: false,
+            },
+            BoxShadow {
+                color: hsla(0., 0., 0., 0.50 + 0.30 * h),
+                offset: point(px(0.), px(8. + 10. * h)),
+                blur_radius: px(24. + 16. * h),
+                spread_radius: px(-10. - 2. * h),
+                inset: false,
+            },
+            BoxShadow {
+                color: hsla(0., 0., 1., 0.22 + 0.12 * h),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(2.),
+                spread_radius: px(-0.4),
+                inset: true,
+            },
+        ]
+    } else {
+        vec![
+            BoxShadow {
+                color: hsla(0., 0., 0., 0.05 * h),
+                offset: point(px(0.), px(2.)),
+                blur_radius: px(4.),
+                spread_radius: px(0.),
+                inset: false,
+            },
+            BoxShadow {
+                color: hsla(0., 0., 0., 0.14 + 0.12 * h),
+                offset: point(px(0.), px(8. + 8. * h)),
+                blur_radius: px(22. + 10. * h),
+                spread_radius: px(-10. - 2. * h),
+                inset: false,
+            },
+            BoxShadow {
+                color: hsla(0., 0., 1., 0.78 + 0.12 * h),
+                offset: point(px(0.), px(1.2)),
+                blur_radius: px(2.6),
+                spread_radius: px(-0.6),
+                inset: true,
+            },
+        ]
+    }
+}
+
+fn hover_glow_sprite() -> &'static Arc<RenderImage> {
+    static SPRITE: OnceLock<Arc<RenderImage>> = OnceLock::new();
+    SPRITE.get_or_init(|| {
+        const SIZE: u32 = 256;
+        let half = (SIZE - 1) as f32 * 0.5;
+        let image = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+            let dx = (x as f32 - half) / half;
+            let dy = (y as f32 - half) / half;
+            let r = (dx * dx + dy * dy).sqrt().min(1.);
+            let alpha = if r < 0.45 {
+                let t = r / 0.45;
+                let s = t * t * (3. - 2. * t);
+                1.0 - 0.65 * s
+            } else {
+                let t = (r - 0.45) / 0.55;
+                let s = t * t * (3. - 2. * t);
+                0.35 * (1.0 - s)
+            };
+            Rgba([255, 255, 255, (alpha * 255.).round().clamp(0., 255.) as u8])
+        });
+        render_image(image)
+    })
+}
+
+pub fn hover_glow_layer(
+    pointer: Option<Point<Pixels>>,
+    glow: f32,
+    dark: bool,
+    radius: Pixels,
+) -> AnyElement {
+    let g = glow.clamp(0., 1.);
+    if g <= 0.005 {
+        return div().into_any_element();
+    }
+    let glow_alpha = g * if dark { 0.11 } else { 0.38 };
+    let rim_alpha = g * if dark { 0.16 } else { 0.45 };
+    let rim = rgba(0xffffff00 | ((rim_alpha * 255.).round() as u32));
+    div()
+        .absolute()
+        .inset_0()
+        .size_full()
+        .overflow_hidden()
+        .rounded(radius)
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .size_full()
+                .opacity(glow_alpha)
+                .child(
+                    canvas(
+                        |_, _, _| (),
+                        move |bounds, _, window, _| {
+                            let center = pointer.unwrap_or_else(|| {
+                                point(
+                                    bounds.origin.x + bounds.size.width * 0.5,
+                                    bounds.origin.y + bounds.size.height * 0.5,
+                                )
+                            });
+                            let r = px(200.);
+                            let sprite_bounds = Bounds::new(
+                                point(center.x - r, center.y - r),
+                                size(r * 2., r * 2.),
+                            );
+                            let _ = window.paint_image(
+                                sprite_bounds,
+                                sprite_bounds,
+                                Corners::all(px(0.)),
+                                hover_glow_sprite().clone(),
+                                0,
+                                false,
+                            );
+                        },
+                    )
+                    .size_full(),
+                ),
+        )
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    let r = radius
+                        .min(bounds.size.width * 0.5)
+                        .min(bounds.size.height * 0.5)
+                        .max(px(0.));
+                    window.paint_quad(quad(
+                        bounds,
+                        r,
+                        transparent_black(),
+                        px(1.),
+                        rim,
+                        BorderStyle::Solid,
+                    ));
+                },
+            )
+            .absolute()
+            .inset_0()
+            .size_full(),
+        )
+        .into_any_element()
+}
+
 pub fn float_shadows(dark: bool) -> Vec<BoxShadow> {
     if dark {
         vec![
@@ -530,9 +697,9 @@ pub fn backdrop_muted(palette: crate::theme::Palette, cx: &App) -> gpui::Rgba {
         && backdrop.custom
     {
         return if backdrop.tone_light {
-            rgba(0x1f2026bf)
+            rgba(0x1f2026de)
         } else {
-            rgba(0xfafafcc4)
+            rgba(0xfafafce0)
         };
     }
     palette.muted()
@@ -555,9 +722,9 @@ pub fn backdrop_text(
         .filter(|b| b.custom)
         .map(|b| {
             if b.tone_light {
-                rgba(0xffffffa6)
+                rgba(0xffffffcc)
             } else {
-                rgba(0x00000080)
+                rgba(0x00000099)
             }
         });
     div()
@@ -708,9 +875,9 @@ pub fn control_layer(
             }
             let viewport = Bounds::new(point(px(0.), px(0.)), window.viewport_size());
             let cover = ObjectFit::Cover.get_bounds(viewport, image.size(0));
-            let mut alpha = 0.64 + 0.16 * backdrop.tint;
+            let mut alpha = 0.34 + 0.34 * backdrop.tint;
             if backdrop.contrast {
-                alpha = alpha.max(0.76);
+                alpha = alpha.max(0.66);
             }
             let wash = if palette.0 {
                 rgba(0x2c2c3000 | ((alpha * 255.).round() as u32))
@@ -722,9 +889,9 @@ pub fn control_layer(
                 .min(bounds.size.height * 0.5)
                 .max(px(0.));
             let bevel = if palette.0 {
-                rgba(0xffffff22)
+                rgba(0xffffff1a)
             } else {
-                rgba(0xffffff99)
+                rgba(0xffffff66)
             };
             if window
                 .paint_image(bounds, cover, r.into(), image.clone(), 0, false)
@@ -769,11 +936,10 @@ pub fn glass_input(
         .w_full()
         .min_w_0()
         .h(px(32.))
-        .px_3()
         .rounded(px(10.))
         .bg(p.fill())
         .border_1()
-        .border_color(p.rim())
+        .border_color(p.control_rim())
         .flex()
         .items_center()
         .when(mono, |el| el.font_family("Consolas"))

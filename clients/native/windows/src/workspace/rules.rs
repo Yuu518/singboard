@@ -661,7 +661,7 @@ impl Workspace {
             .p(px(2.))
             .rounded_full()
             .border_1()
-            .border_color(palette.rim())
+            .border_color(palette.control_rim())
             .child(crate::glass::control_layer(palette, px(999.), true))
             .child(
                 div()

@@ -12,12 +12,44 @@ pub(super) struct ProxyUi {
     collapsed: HashSet<String>,
     orders: HashMap<String, HashMap<String, usize>>,
     hovered: Option<String>,
+    hover_motion: HashMap<(bool, String), (Instant, f32, bool)>,
+    pointer: Option<Point<Pixels>>,
     pub(super) testing: Option<String>,
     motion: HashMap<(bool, String), (Instant, f32, bool)>,
     reveal: Option<(String, Rc<Cell<Option<Bounds<Pixels>>>>)>,
 }
 
 impl ProxyUi {
+    fn set_hover(&mut self, provider: bool, name: &str, hovered: bool) {
+        let key = (provider, name.to_owned());
+        let current = self.hover_value(&key, None);
+        if self.hover_motion.get(&key).is_some_and(|(_, _, t)| *t == hovered) {
+            return;
+        }
+        self.hover_motion.insert(key, (Instant::now(), current, hovered));
+    }
+
+    fn hover_value(&self, key: &(bool, String), window: Option<&Window>) -> f32 {
+        let Some((started, from, target)) = self.hover_motion.get(key) else {
+            return 0.;
+        };
+        let end = if *target { 1. } else { 0. };
+        let elapsed = started.elapsed().as_secs_f32();
+        if elapsed >= 0.20 {
+            return end;
+        }
+        if let Some(window) = window {
+            window.request_animation_frame();
+        }
+        let u = (elapsed / 0.20).clamp(0., 1.);
+        let ease = 1. - (1. - u) * (1. - u);
+        (from + (end - from) * ease).clamp(0., 1.)
+    }
+
+    fn hover_level(&self, provider: bool, name: &str, window: &Window) -> f32 {
+        self.hover_value(&(provider, name.to_owned()), Some(window))
+    }
+
     pub(super) fn cancel_reveal(&mut self) {
         self.reveal = None;
     }
@@ -358,7 +390,7 @@ impl Workspace {
             .p(px(2.))
             .rounded_full()
             .border_1()
-            .border_color(palette.rim())
+            .border_color(palette.control_rim())
             .child(crate::glass::control_layer(palette, px(999.), true))
             .child(
                 div()
@@ -501,7 +533,7 @@ impl Workspace {
                                 .border_color(if self.sort {
                                     palette.selection_border().opacity(0.6)
                                 } else {
-                                    palette.rim()
+                                    palette.control_rim()
                                 })
                                 .cursor_pointer()
                                 .child(crate::glass::control_layer(palette, px(999.), !self.sort))
@@ -536,6 +568,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap(px(12.))
+                .pt(px(2.))
                 .pb_4();
             if self.providers.is_empty() {
                 list = list.child(
@@ -581,8 +614,41 @@ impl Workspace {
                         None
                     };
                     let toggle_name = name.clone();
+                    let provider_hover_name = name.clone();
+                    let provider_move_name = name.clone();
+                    let hover_t = self.proxy_ui.hover_level(true, &name, window);
                     let vehicle = item["vehicleType"].as_str().unwrap_or("");
                     let mut card = glass_card(palette, translucent, self.glass_tint)
+                        .id(("provider-card", pi))
+                        .top(px(-1.5 * hover_t))
+                        .shadow(crate::glass::card_hover_shadows(palette.0, hover_t))
+                        .border_color(crate::glass::card_hover_rim(palette.0, hover_t))
+                        .on_hover(cx.listener(move |this, hovered, _, cx| {
+                            this.proxy_ui.set_hover(true, &provider_hover_name, *hovered);
+                            cx.notify();
+                        }))
+                        .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                            let prev = this.proxy_ui.pointer;
+                            this.proxy_ui.pointer = Some(event.position);
+                            if this
+                                .proxy_ui
+                                .hover_motion
+                                .get(&(true, provider_move_name.clone()))
+                                .is_some_and(|(_, _, active)| *active)
+                                && prev.is_none_or(|p| {
+                                    (f32::from(p.x - event.position.x)).abs() >= 1.5
+                                        || (f32::from(p.y - event.position.y)).abs() >= 1.5
+                                })
+                            {
+                                cx.notify();
+                            }
+                        }))
+                        .child(crate::glass::hover_glow_layer(
+                            self.proxy_ui.pointer,
+                            hover_t,
+                            palette.0,
+                            px(17.),
+                        ))
                         .w_full()
                         .overflow_hidden()
                         .flex()
@@ -789,7 +855,7 @@ impl Workspace {
                                         .rounded(px(12.))
                                         .bg(palette.tile())
                                         .border_1()
-                                        .border_color(palette.line())
+                                        .border_color(palette.control_rim())
                                         .flex()
                                         .flex_col()
                                         .justify_between()
@@ -876,6 +942,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap(px(12.))
+            .pt(px(2.))
             .pb_4();
         let mut matched = false;
         for (gi, g) in self.groups.iter().enumerate() {
@@ -915,10 +982,15 @@ impl Workspace {
             let has_speed = dl_spd > 0 || ul_spd > 0;
 
             let hover_name = g.name.clone();
+            let move_name = g.name.clone();
+            let hover_t = self.proxy_ui.hover_level(false, &g.name, window);
             let mut card = glass_card(palette, translucent, self.glass_tint)
                 .id(("proxy-card", gi))
+                .top(px(-1.5 * hover_t))
+                .shadow(crate::glass::card_hover_shadows(palette.0, hover_t))
+                .border_color(crate::glass::card_hover_rim(palette.0, hover_t))
                 .on_hover(cx.listener(move |this, hovered, _, cx| {
-                    let had = this.proxy_ui.orders.len();
+                    this.proxy_ui.set_hover(false, &hover_name, *hovered);
                     if *hovered {
                         this.proxy_ui.hovered = Some(hover_name.clone());
                         this.freeze_proxy_order(&hover_name);
@@ -926,10 +998,26 @@ impl Workspace {
                         this.proxy_ui.hovered = None;
                     }
                     this.release_proxy_order();
-                    if this.proxy_ui.orders.len() != had {
+                    cx.notify();
+                }))
+                .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                    let prev = this.proxy_ui.pointer;
+                    this.proxy_ui.pointer = Some(event.position);
+                    if this.proxy_ui.hovered.as_ref() == Some(&move_name)
+                        && prev.is_none_or(|p| {
+                            (f32::from(p.x - event.position.x)).abs() >= 1.5
+                                || (f32::from(p.y - event.position.y)).abs() >= 1.5
+                        })
+                    {
                         cx.notify();
                     }
                 }))
+                .child(crate::glass::hover_glow_layer(
+                    self.proxy_ui.pointer,
+                    hover_t,
+                    palette.0,
+                    px(17.),
+                ))
                 .flex_none()
                 .w_full()
                 .overflow_hidden()
@@ -1173,7 +1261,6 @@ impl Workspace {
                     .items_start()
                     .justify_between()
                     .gap_3()
-                    .hover(|s| s.bg(palette.hover()))
                     .on_click(cx.listener(move |this, _, w, cx| {
                         this.toggle_proxy(false, id.clone(), w, cx)
                     }))
@@ -1254,7 +1341,7 @@ impl Workspace {
                             .border_color(if selected {
                                 palette.selection_border()
                             } else {
-                                palette.line()
+                                palette.control_rim()
                             })
                             .when(!selected && selectable, |el| {
                                 el.hover(|s| s.bg(palette.fill_strong()))

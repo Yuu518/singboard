@@ -65,6 +65,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("back", include_bytes!("../../android/assets/icons/back.svg")),
     ("tray-power", include_bytes!("../../android/assets/icons/tray-power.svg")),
     ("tray-restart", include_bytes!("../../android/assets/icons/tray-restart.svg")),
+    ("spinner", include_bytes!("../assets/spinner.svg")),
 ];
 
 impl AssetSource for Assets {
@@ -199,43 +200,119 @@ impl Overview {
                     })),
             );
         }
+        let pill_mix = (1. - tint.clamp(0., 1.)).clamp(0., 1.);
+        let pill_bg = if palette.0 {
+            Rgba {
+                r: 1.,
+                g: 1.,
+                b: 1.,
+                a: 0.08 + 0.04 * pill_mix,
+            }
+        } else {
+            let v = 0.46 + 0.54 * pill_mix;
+            Rgba {
+                r: v,
+                g: v,
+                b: (0.50 + 0.50 * pill_mix).min(1.),
+                a: 0.11 + 0.17 * pill_mix,
+            }
+        };
+        let pill_hover = if palette.0 {
+            Rgba {
+                r: 1.,
+                g: 1.,
+                b: 1.,
+                a: 0.14 + 0.06 * pill_mix,
+            }
+        } else {
+            let v = 0.46 + 0.54 * pill_mix;
+            Rgba {
+                r: v,
+                g: v,
+                b: (0.50 + 0.50 * pill_mix).min(1.),
+                a: 0.18 + 0.24 * pill_mix,
+            }
+        };
+        let pill_border = if palette.0 {
+            Rgba {
+                r: 1.,
+                g: 1.,
+                b: 1.,
+                a: 0.11 + 0.08 * pill_mix,
+            }
+        } else {
+            let v = pill_mix;
+            Rgba {
+                r: v,
+                g: v,
+                b: v,
+                a: 0.07 + 0.48 * pill_mix,
+            }
+        };
+        let pill_shadows = if palette.0 {
+            vec![
+                BoxShadow {
+                    color: hsla(0., 0., 0., 0.16 + 0.14 * pill_mix),
+                    offset: point(px(0.), px(2.)),
+                    blur_radius: px(8.),
+                    spread_radius: px(-2.),
+                    inset: false,
+                },
+                BoxShadow {
+                    color: hsla(0., 0., 1., 0.10 + 0.08 * pill_mix),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(1.5),
+                    spread_radius: px(0.),
+                    inset: true,
+                },
+            ]
+        } else {
+            vec![
+                BoxShadow {
+                    color: hsla(0., 0., 0., 0.04 + 0.06 * pill_mix),
+                    offset: point(px(0.), px(2.)),
+                    blur_radius: px(8.),
+                    spread_radius: px(-2.),
+                    inset: false,
+                },
+                BoxShadow {
+                    color: hsla(0., 0., 1., 0.25 + 0.45 * pill_mix),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(1.5),
+                    spread_radius: px(0.),
+                    inset: true,
+                },
+            ]
+        };
         sidebar = sidebar.child(nav).child(
             div().p_3().flex().child(
                 div()
                     .id("sidebar-status-pill")
-                    .relative()
-                    .overflow_hidden()
+                    .flex()
+                    .gap_2()
+                    .items_center()
+                    .px_3()
+                    .py(px(5.))
                     .rounded_full()
-                    .bg(palette.fill())
+                    .bg(pill_bg)
                     .border_1()
-                    .border_color(palette.rim())
-                    .shadow_sm()
+                    .border_color(pill_border)
+                    .shadow(pill_shadows)
+                    .hover(move |s| s.bg(pill_hover))
                     .cursor_pointer()
-                    .child(crate::glass::control_layer(palette, px(999.), false))
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
                     .child(
                         div()
-                            .relative()
-                            .flex()
-                            .gap_2()
-                            .items_center()
-                            .px_3()
-                            .py(px(5.))
+                            .size(px(14.))
                             .rounded_full()
-                            .hover(|s| s.bg(palette.fill()))
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(
-                                div()
-                                    .size(px(14.))
-                                    .rounded_full()
-                                    .bg(halo_color)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(div().size(px(8.)).rounded_full().bg(dot_color)),
-                            )
-                            .child(div().text_color(palette.ink()).child(status_label.to_owned())),
+                            .bg(halo_color)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(div().size(px(8.)).rounded_full().bg(dot_color)),
                     )
+                    .child(div().text_color(palette.ink()).child(status_label.to_owned()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let action = if local_running { "stop" } else { "start" };
                         this.workspace.update(cx, |state, cx| {
@@ -277,6 +354,22 @@ impl Overview {
                     ),
             );
         for (i, glyph) in ["minimize", "maximize", "close"].into_iter().enumerate() {
+            let caption_shadows = vec![
+                BoxShadow {
+                    color: hsla(0., 0., 0., if palette.0 { 0.24 } else { 0.08 }),
+                    offset: point(px(0.), px(1.5)),
+                    blur_radius: px(6.),
+                    spread_radius: px(-1.5),
+                    inset: false,
+                },
+                BoxShadow {
+                    color: hsla(0., 0., 1., if palette.0 { 0.16 } else { 0.62 }),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(1.5),
+                    spread_radius: px(0.),
+                    inset: true,
+                },
+            ];
             bar = bar.child(
                 div()
                     .id(("caption", i))
@@ -285,10 +378,9 @@ impl Overview {
                     .rounded_full()
                     .overflow_hidden()
                     .bg(palette.fill())
-                    .border_1()
-                    .border_color(palette.rim())
+                    .shadow(caption_shadows)
                     .cursor_pointer()
-                    .child(crate::glass::control_layer(palette, px(13.), false))
+                    .child(crate::glass::control_layer(palette, px(14.), false))
                     .child(
                         div()
                             .relative()
@@ -301,7 +393,7 @@ impl Overview {
                                 if i == 2 {
                                     style.bg(rgba(0xf45d56ff))
                                 } else {
-                                    style.bg(palette.fill_strong())
+                                    style.bg(palette.fill())
                                 }
                             })
                             .child(
