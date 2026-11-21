@@ -95,17 +95,6 @@ pub fn build_client(timeout: Option<Duration>) -> Result<reqwest::Client, reqwes
     builder.build()
 }
 
-pub fn build_direct_client(timeout: Option<Duration>) -> Result<reqwest::Client, reqwest::Error> {
-    let mut builder = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .read_timeout(Duration::from_secs(60))
-        .no_proxy();
-    if let Some(t) = timeout {
-        builder = builder.timeout(t);
-    }
-    builder.build()
-}
-
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn describe_fetch_error(error: reqwest::Error) -> String {
@@ -123,11 +112,8 @@ fn describe_fetch_error(error: reqwest::Error) -> String {
     }
 }
 
-async fn fetch_with_client(
-    client: reqwest::Client,
-    url: String,
-    user_agent: Option<String>,
-) -> Result<String, String> {
+pub async fn fetch_url(url: String, user_agent: Option<String>) -> Result<String, String> {
+    let client = build_client(Some(FETCH_TIMEOUT)).map_err(|e| e.to_string())?;
     let mut request = client.get(&url);
     if let Some(agent) = user_agent.filter(|agent| !agent.trim().is_empty()) {
         request = request.header(reqwest::header::USER_AGENT, agent);
@@ -138,16 +124,6 @@ async fn fetch_with_client(
         return Err(format!("服务器返回 HTTP {}", status.as_u16()));
     }
     resp.text().await.map_err(describe_fetch_error)
-}
-
-pub async fn fetch_url(url: String, user_agent: Option<String>) -> Result<String, String> {
-    let client = build_client(Some(FETCH_TIMEOUT)).map_err(|e| e.to_string())?;
-    fetch_with_client(client, url, user_agent).await
-}
-
-pub async fn fetch_url_direct(url: String, user_agent: Option<String>) -> Result<String, String> {
-    let client = build_direct_client(Some(FETCH_TIMEOUT)).map_err(|e| e.to_string())?;
-    fetch_with_client(client, url, user_agent).await
 }
 
 pub async fn http_ping(url: String, count: u32) -> Result<f64, String> {
