@@ -305,8 +305,10 @@ class _GlassBottomNavState extends State<GlassBottomNav>
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(32),
                         child: _GlassFilter(
-                          blur: 3 + 14 * scope.tint,
-                          spread: 0,
+                          blur: _glassBlurSigma(scope.tint),
+                          rim: 20,
+                          amount: 10,
+                          spread: 0.035,
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
@@ -314,15 +316,29 @@ class _GlassBottomNavState extends State<GlassBottomNav>
                                 decoration: BoxDecoration(
                                   color: c.glassRgb.withValues(
                                     alpha: scope.alpha(
-                                      .14 + .46 * scope.tint,
-                                      .55,
+                                      0.08 +
+                                          0.22 * scope.tint +
+                                          0.40 * scope.tint * scope.tint,
+                                      .58,
                                     ),
                                   ),
                                   image: scope.grain,
                                   borderRadius: BorderRadius.circular(32),
                                   border: Border.all(
-                                    width: .5,
-                                    color: c.hairline,
+                                    width: 1.0,
+                                    color: Colors.white.withValues(
+                                      alpha: c.dark
+                                          ? (0.20 +
+                                                0.18 *
+                                                    _glassLensStrength(
+                                                      scope.tint,
+                                                    ))
+                                          : (0.64 +
+                                                0.30 *
+                                                    _glassLensStrength(
+                                                      scope.tint,
+                                                    )),
+                                    ),
                                   ),
                                 ),
                               ),

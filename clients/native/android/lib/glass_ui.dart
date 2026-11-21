@@ -8,6 +8,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/rendering.dart' show PipelineOwner, RenderProxyBox;
 import 'package:flutter/scheduler.dart' show Ticker;
+import 'package:flutter/services.dart' show HapticFeedback;
 
 part 'glass_navigation.dart';
 part 'glass_filter.dart';
@@ -373,6 +374,8 @@ class GlassControl extends StatelessWidget {
       return _WallpaperGlass(
         image: wallpaper,
         radius: radius,
+        tint: scope.tint,
+        refract: false,
         child: box,
       );
     }
@@ -404,15 +407,20 @@ class GlassCard extends StatelessWidget {
     final c = SingboardColors.of(context);
     final scope = GlassScope.of(context);
     final t = scope.tint.clamp(0.0, 1.0);
+    final lens = _glassLensStrength(t);
     final useBackdrop = scope.hasWallpaper || popover || floating;
-    final alpha = popover ? scope.alpha(.42 + .30 * t, .70) : floating ? scope.alpha(0.14 + 0.46 * t, .55) : scope.alpha(0.30 + 0.32 * t, .6);
-    final blur = useBackdrop ? (popover ? 4.0 + 18.0 * t : 3.0 + 14.0 * t) : 0.0;
+    final alpha = popover
+        ? scope.alpha(0.26 + 0.22 * t + 0.32 * t * t, 0.78)
+        : floating
+        ? scope.alpha(0.08 + 0.22 * t + 0.40 * t * t, 0.58)
+        : scope.alpha(0.12 + 0.24 * t + 0.38 * t * t, 0.64);
+    final blur = useBackdrop ? _glassBlurSigma(t) : 0.0;
     final bg = tintColor ?? c.glassRgb.withValues(alpha: alpha);
     final border =
         borderColor ??
-        (c.dark
-            ? Colors.white.withValues(alpha: 0.14)
-            : Colors.white.withValues(alpha: 0.72));
+        Colors.white.withValues(
+          alpha: c.dark ? (0.20 + 0.18 * lens) : (0.64 + 0.30 * lens),
+        );
     final shape = BorderRadius.circular(radius);
     if (!popover && scope.hasWallpaper) {
       final wallpaper = scope.blurredWallpaper;
@@ -423,7 +431,7 @@ class GlassCard extends StatelessWidget {
               : bg,
           image: scope.grain,
           borderRadius: shape,
-          border: Border.all(color: border, width: 0.5),
+          border: Border.all(color: border, width: 1.0),
         ),
         child: Padding(padding: padding, child: child),
       );
@@ -442,6 +450,7 @@ class GlassCard extends StatelessWidget {
             ? _WallpaperGlass(
                 image: wallpaper,
                 radius: radius,
+                tint: t,
                 child: cardBox,
               )
             : cardBox,
@@ -484,7 +493,7 @@ class GlassCard extends StatelessWidget {
         color: bg,
         image: scope.grain,
         borderRadius: shape,
-        border: Border.all(color: border, width: 0.5),
+        border: Border.all(color: border, width: 1.0),
       ),
       child: Padding(padding: padding, child: innerChild),
     );
@@ -492,7 +501,7 @@ class GlassCard extends StatelessWidget {
       borderRadius: shape,
       child: blur > 0
           ? _GlassFilter(
-              blur: blur, radius: radius, rim: popover ? 14 : 24, amount: popover ? 12 : 24,
+              blur: blur, radius: radius, rim: popover ? 18 : 20, amount: popover ? 9 : 10,
               child: box,
             )
           : box,
@@ -502,28 +511,47 @@ class GlassCard extends StatelessWidget {
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: shape,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: c.dark ? .34 : .10),
-                blurRadius: 18,
-                offset: const Offset(0, 4),
-              ),
-            ],
+            boxShadow: popover
+                ? [
+                    BoxShadow(
+                      color: (c.dark ? Colors.black : const Color(0xFF0F172A))
+                          .withValues(alpha: c.dark ? .52 : .20),
+                      blurRadius: 32,
+                      offset: const Offset(0, 12),
+                    ),
+                    BoxShadow(
+                      color: (c.dark ? Colors.black : const Color(0xFF0F172A))
+                          .withValues(alpha: c.dark ? .32 : .10),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
+                    ),
+                  ]
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: c.dark ? .34 : .10),
+                      blurRadius: 18,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
           ),
           child: clipped,
         ),
       );
     }
     return RepaintBoundary(
-      child: CustomPaint(painter: _GlassCardShadow(radius, c.dark), child: clipped),
+      child: CustomPaint(
+        painter: _GlassCardShadow(radius, c.dark, elevated: popover),
+        child: clipped,
+      ),
     );
   }
 }
 
 class _GlassCardShadow extends CustomPainter {
-  const _GlassCardShadow(this.radius, this.dark);
+  const _GlassCardShadow(this.radius, this.dark, {this.elevated = false});
   final double radius;
   final bool dark;
+  final bool elevated;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -535,19 +563,26 @@ class _GlassCardShadow extends CustomPainter {
       ..addRRect(shape);
     canvas.save();
     canvas.clipPath(mask);
+    final baseColor = dark ? Colors.black : const Color(0xFF0F172A);
     final shadow = BoxShadow(
-      color: Colors.black.withValues(alpha: dark ? .55 : .16),
-      blurRadius: dark ? 30 : 24,
-      offset: Offset(0, dark ? 10 : 8),
-      spreadRadius: -12,
+      color: baseColor.withValues(
+        alpha: elevated ? (dark ? .62 : .22) : (dark ? .55 : .16),
+      ),
+      blurRadius: elevated ? (dark ? 38 : 34) : (dark ? 30 : 24),
+      offset: Offset(0, elevated ? (dark ? 14 : 12) : (dark ? 10 : 8)),
+      spreadRadius: elevated ? -8 : -12,
     );
     canvas.drawRRect(shape.shift(shadow.offset).inflate(shadow.spreadRadius), shadow.toPaint());
-    canvas.drawRRect(shape.inflate(.5), Paint()..color = Colors.black.withValues(alpha: dark ? .6 : .08));
+    canvas.drawRRect(
+      shape.inflate(.5),
+      Paint()..color = baseColor.withValues(alpha: dark ? .6 : (elevated ? .11 : .08)),
+    );
     canvas.restore();
   }
 
   @override
-  bool shouldRepaint(_GlassCardShadow old) => old.radius != radius || old.dark != dark;
+  bool shouldRepaint(_GlassCardShadow old) =>
+      old.radius != radius || old.dark != dark || old.elevated != elevated;
 }
 
 class GlassApiGate extends StatelessWidget {
@@ -614,7 +649,7 @@ class GlassAppHeader extends StatelessWidget {
     final t = scope.tint.clamp(0.0, 1.0);
     final progress = (scrollProgress > 0 ? scrollProgress : (scrolled ? 1.0 : 0.0)).clamp(0.0, 1.0);
     final surface = scope.hasWallpaper ? 1.0 : progress;
-    final blur = surface > 0.01 && scope.hasWallpaper ? (3.0 + 14.0 * t) * surface : 0.0;
+    final blur = surface > 0.01 && scope.hasWallpaper ? _glassBlurSigma(t) * surface : 0.0;
     final titleStyle = TextStyle(
       fontSize: 15,
       fontWeight: FontWeight.w600,
@@ -943,11 +978,9 @@ class GlassTintSliderWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SingboardColors.of(context);
     double snap(double v) {
-      final rounded = (v * 100).round() / 100;
-      for (final tick in [0.0, 0.5, 1.0]) {
-        if (((rounded - tick).abs() * 100).round() <= 4) return tick;
-      }
-      return rounded;
+      final clamped = v.clamp(0.0, 1.0);
+      if ((clamped - 0.5).abs() <= 0.012) return 0.5;
+      return (clamped * 200).round() / 200;
     }
     return Row(children: [
       PanelIcon('glass-clear', size: 22, color: c.muted),
@@ -955,14 +988,18 @@ class GlassTintSliderWidget extends StatelessWidget {
       Expanded(child: SizedBox(height: 36, child: LayoutBuilder(builder: (context, limits) =>
         Stack(alignment: Alignment.center, children: [
           for (final tick in [0.0, 0.5, 1.0])
-            if ((value - tick).abs() >= 0.1)
-              Positioned(left: 18 + (limits.maxWidth - 40) * tick, top: 27, child: Container(width: 4, height: 4, decoration: BoxDecoration(color: c.muted.withValues(alpha: .55), borderRadius: BorderRadius.circular(2)))),
+            if ((value - tick).abs() >= 0.055)
+              Positioned(left: 18.25 + (limits.maxWidth - 40) * tick, top: 27, child: Container(width: 3.5, height: 3.5, decoration: BoxDecoration(color: c.muted.withValues(alpha: .42), borderRadius: BorderRadius.circular(2)))),
           SliderTheme(data: SliderTheme.of(context).copyWith(
             trackHeight: 4, activeTrackColor: c.primary, inactiveTrackColor: c.fillStrong, thumbColor: Colors.white,
             overlayShape: SliderComponentShape.noOverlay, thumbShape: const _PillThumbShape(),
           ), child: Slider(value: value.clamp(0.0, 1.0), min: 0, max: 1,
             semanticFormatterCallback: (v) => '${(v*100).round()}%',
-            onChanged: (v) => onChanged(snap(v)),
+            onChanged: (v) {
+              final next = snap(v);
+              if (next == 0.5 && value != 0.5) HapticFeedback.selectionClick();
+              onChanged(next);
+            },
             onChangeEnd: (v) => onChangeEnd?.call(snap(v)),
           )),
         ])
@@ -995,21 +1032,38 @@ class _PillThumbShape extends SliderComponentShape {
     required Size sizeWithOverflow,
   }) {
     final canvas = context.canvas;
+    final active = activationAnimation.value;
     final rect = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: center, width: 40 * (1 + .15 * activationAnimation.value), height: 26 * (1 + .15 * activationAnimation.value)),
+      Rect.fromCenter(
+        center: center,
+        width: 40 * (1 + .15 * active),
+        height: 26 * (1 + .15 * active),
+      ),
       const Radius.circular(18),
     );
     canvas.drawShadow(
       Path()..addRRect(rect),
-      Colors.black.withValues(alpha: 0.25),
-      4,
+      Colors.black.withValues(alpha: 0.22 - 0.08 * active),
+      4 + 2 * active,
       false,
     );
-    canvas.drawRRect(rect, Paint()..color = Colors.white);
+    canvas.drawRRect(
+      rect,
+      Paint()..color = Colors.white.withValues(alpha: 1.0 - 0.78 * active),
+    );
+    if (active > 0.02) {
+      canvas.drawRRect(
+        rect.deflate(0.6),
+        Paint()
+          ..color = Colors.white.withValues(alpha: 0.78 * active)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2,
+      );
+    }
     canvas.drawRRect(
       rect,
       Paint()
-        ..color = Colors.black.withValues(alpha: 0.08)
+        ..color = Colors.black.withValues(alpha: 0.08 + 0.06 * active)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 0.6,
     );

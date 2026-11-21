@@ -2400,11 +2400,7 @@ impl Workspace {
                 .id("settings-dialog-scrim")
                 .absolute()
                 .inset_0()
-                .bg(if p.0 {
-                    rgba(0x00000059)
-                } else {
-                    rgba(0xffffff38)
-                })
+                .bg(dialog::scrim_color(p.0))
                 .flex()
                 .items_center()
                 .justify_center()

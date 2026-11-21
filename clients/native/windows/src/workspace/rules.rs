@@ -1461,7 +1461,6 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .shadow_lg()
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()

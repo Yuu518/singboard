@@ -174,7 +174,7 @@ fn material_sigma(source: &RgbaImage, tint: f32, viewport: Size<Pixels>) -> (f32
     let scale = (f32::from(viewport.width) / source.width() as f32)
         .max(f32::from(viewport.height) / source.height() as f32)
         .max(0.01);
-    let css_blur = 3.0 + 22.0 * tint;
+    let css_blur = 1.2 + 7.8 * tint + 16.0 * tint * tint;
     let sigma = (css_blur / scale).clamp(0.75, 42.);
     let key = (
         (tint * 100.).round() as u16,
@@ -671,12 +671,68 @@ pub fn float_shadows(dark: bool) -> Vec<BoxShadow> {
     }
 }
 
+pub fn modal_shadows(dark: bool) -> Vec<BoxShadow> {
+    if dark {
+        vec![
+            BoxShadow {
+                color: hsla(0., 0., 0., 0.62),
+                offset: point(px(0.), px(18.)),
+                blur_radius: px(44.),
+                spread_radius: px(-10.),
+                inset: false,
+            },
+            BoxShadow {
+                color: hsla(0., 0., 0., 0.36),
+                offset: point(px(0.), px(4.)),
+                blur_radius: px(12.),
+                spread_radius: px(-2.),
+                inset: false,
+            },
+            BoxShadow {
+                color: hsla(0., 0., 1., 0.26),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(2.),
+                spread_radius: px(-0.4),
+                inset: true,
+            },
+        ]
+    } else {
+        vec![
+            BoxShadow {
+                color: hsla(222. / 360., 0.45, 0.11, 0.22),
+                offset: point(px(0.), px(18.)),
+                blur_radius: px(42.),
+                spread_radius: px(-10.),
+                inset: false,
+            },
+            BoxShadow {
+                color: hsla(222. / 360., 0.45, 0.11, 0.12),
+                offset: point(px(0.), px(4.)),
+                blur_radius: px(12.),
+                spread_radius: px(-2.),
+                inset: false,
+            },
+            BoxShadow {
+                color: hsla(0., 0., 1., 0.85),
+                offset: point(px(0.), px(1.2)),
+                blur_radius: px(2.4),
+                spread_radius: px(-0.4),
+                inset: true,
+            },
+        ]
+    }
+}
+
 pub fn current_tint(cx: &App) -> f32 {
     cx.try_global::<CardBackdrop>().map_or(0.5, |b| b.tint)
 }
 
 pub fn wallpaper_thumb(cx: &App) -> Option<Arc<RenderImage>> {
     cx.try_global::<CardBackdrop>().and_then(|b| b.thumb.clone())
+}
+
+pub fn backdrop_image(cx: &App) -> Option<Arc<RenderImage>> {
+    cx.try_global::<CardBackdrop>().and_then(|b| b.image.clone())
 }
 
 pub fn backdrop_ink(palette: crate::theme::Palette, cx: &App) -> gpui::Rgba {
@@ -769,47 +825,97 @@ pub fn card_layer(wash: gpui::Rgba, radius: Pixels, minimum_alpha: f32) -> impl 
             if backdrop.contrast {
                 color.a = color.a.max(minimum_alpha);
             }
-            let lens = (1. - 2. * backdrop.tint).clamp(0., 1.);
+            let lens = (1. - backdrop.tint).clamp(0., 1.).powf(1.35);
             let w = f32::from(bounds.size.width);
             let h = f32::from(bounds.size.height);
             let r = f32::from(radius).min(w * 0.5).min(h * 0.5).max(0.);
             let clamped = px(r);
-            let painted = if lens > 0.01 && w > 64. && h > 64. {
-                let rim_h = 24.0f32.min(w * 0.25).min(h * 0.25);
-                let max_disp = 24. * lens;
-                let center_x = bounds.origin.x + bounds.size.width * 0.5;
-                let center_y = bounds.origin.y + bounds.size.height * 0.5;
-                const STEPS: usize = 3;
+            let painted = if lens > 0.02 && w > 64. && h > 64. && r >= 6. {
+                let rim = r.min(20.0).min(w * 0.24).min(h * 0.24);
+                let disp = (rim * 0.52 * lens).min(11. * lens);
+                let a = ((rim - disp) / rim).clamp(0.42, 1.0);
+                let x0 = f32::from(bounds.origin.x);
+                let y0 = f32::from(bounds.origin.y);
+                let x1 = x0 + w;
+                let y1 = y0 + h;
+                let sf = window.scale_factor().max(1.);
+                let snap = |v: f32| (v * sf).round() / sf;
+                let ix0 = snap(x0 + rim);
+                let iy0 = snap(y0 + rim);
+                let ix1 = snap(x1 - rim);
+                let iy1 = snap(y1 - rim);
+                let cx0 = f32::from(cover.origin.x);
+                let cy0 = f32::from(cover.origin.y);
+                let cw = f32::from(cover.size.width);
+                let ch = f32::from(cover.size.height);
+                let warp = |pivot: f32, origin: f32, len: f32| -> (Pixels, Pixels) {
+                    (px(pivot - (pivot - origin) / a), px(len / a))
+                };
+                let (wx_l, ww_l) = warp(ix0, cx0, cw);
+                let (wx_r, ww_r) = warp(ix1, cx0, cw);
+                let (wy_t, wh_t) = warp(iy0, cy0, ch);
+                let (wy_b, wh_b) = warp(iy1, cy0, ch);
+                let parent_clip = window.content_mask().bounds;
                 let mut ok = false;
-                for step in 0..=STEPS {
-                    let frac = step as f32 / STEPS as f32;
-                    let inset = rim_h * frac;
-                    let t = 1. - frac;
-                    let d = (1. - (1. - t * t).max(0.).sqrt()) * max_disp;
-                    let sx = 1. + (2. * d) / w;
-                    let sy = 1. + (2. * d) / h;
-                    let shifted = Bounds::new(
-                        point(
-                            center_x - (center_x - cover.origin.x) * sx,
-                            center_y - (center_y - cover.origin.y) * sy,
-                        ),
-                        size(cover.size.width * sx, cover.size.height * sy),
-                    );
-                    let ring = Bounds::new(
-                        point(bounds.origin.x + px(inset), bounds.origin.y + px(inset)),
-                        size(
-                            (bounds.size.width - px(inset * 2.)).max(px(0.)),
-                            (bounds.size.height - px(inset * 2.)).max(px(0.)),
-                        ),
-                    );
-                    let ring_r = px((r - inset).max(0.));
-                    if window
-                        .paint_image(ring, shifted, ring_r.into(), image.clone(), 0, false)
-                        .is_ok()
-                    {
-                        ok = true;
+                let mut paint_slice = |clip: Bounds<Pixels>, img_bounds: Bounds<Pixels>| {
+                    let masked = clip.intersect(&parent_clip);
+                    if masked.size.width <= px(0.) || masked.size.height <= px(0.) {
+                        return;
                     }
+                    window.with_content_mask(Some(ContentMask { bounds: masked }), |window| {
+                        ok |= window
+                            .paint_image(bounds, img_bounds, clamped.into(), image.clone(), 0, false)
+                            .is_ok();
+                    });
+                };
+                let mid_w = (ix1 - ix0).max(0.);
+                let mid_h = (iy1 - iy0).max(0.);
+                let left_w = (ix0 - x0).max(0.);
+                let right_w = (x1 - ix1).max(0.);
+                let top_h = (iy0 - y0).max(0.);
+                let bot_h = (y1 - iy1).max(0.);
+                if mid_w > 0. && mid_h > 0. {
+                    paint_slice(
+                        Bounds::new(point(px(ix0), px(iy0)), size(px(mid_w), px(mid_h))),
+                        cover,
+                    );
                 }
+                if mid_w > 0. {
+                    paint_slice(
+                        Bounds::new(point(px(ix0), px(y0)), size(px(mid_w), px(top_h))),
+                        Bounds::new(point(cover.origin.x, wy_t), size(cover.size.width, wh_t)),
+                    );
+                    paint_slice(
+                        Bounds::new(point(px(ix0), px(iy1)), size(px(mid_w), px(bot_h))),
+                        Bounds::new(point(cover.origin.x, wy_b), size(cover.size.width, wh_b)),
+                    );
+                }
+                if mid_h > 0. {
+                    paint_slice(
+                        Bounds::new(point(px(x0), px(iy0)), size(px(left_w), px(mid_h))),
+                        Bounds::new(point(wx_l, cover.origin.y), size(ww_l, cover.size.height)),
+                    );
+                    paint_slice(
+                        Bounds::new(point(px(ix1), px(iy0)), size(px(right_w), px(mid_h))),
+                        Bounds::new(point(wx_r, cover.origin.y), size(ww_r, cover.size.height)),
+                    );
+                }
+                paint_slice(
+                    Bounds::new(point(px(x0), px(y0)), size(px(left_w), px(top_h))),
+                    Bounds::new(point(wx_l, wy_t), size(ww_l, wh_t)),
+                );
+                paint_slice(
+                    Bounds::new(point(px(ix1), px(y0)), size(px(right_w), px(top_h))),
+                    Bounds::new(point(wx_r, wy_t), size(ww_r, wh_t)),
+                );
+                paint_slice(
+                    Bounds::new(point(px(x0), px(iy1)), size(px(left_w), px(bot_h))),
+                    Bounds::new(point(wx_l, wy_b), size(ww_l, wh_b)),
+                );
+                paint_slice(
+                    Bounds::new(point(px(ix1), px(iy1)), size(px(right_w), px(bot_h))),
+                    Bounds::new(point(wx_r, wy_b), size(ww_r, wh_b)),
+                );
                 ok
             } else {
                 window
@@ -819,9 +925,9 @@ pub fn card_layer(wash: gpui::Rgba, radius: Pixels, minimum_alpha: f32) -> impl 
             if painted {
                 let dark = cx.global::<crate::theme::Appearance>().dark;
                 let rim_alpha = if dark {
-                    0.20 + 0.16 * lens
+                    0.22 + 0.18 * lens
                 } else {
-                    0.56 + 0.30 * lens
+                    0.66 + 0.28 * lens
                 };
                 let rim = rgba(0xffffff00 | ((rim_alpha * 255.).round() as u32));
                 window.paint_quad(quad(
@@ -833,7 +939,24 @@ pub fn card_layer(wash: gpui::Rgba, radius: Pixels, minimum_alpha: f32) -> impl 
                     BorderStyle::Solid,
                 ));
                 if lens > 0.05 && w > 24. && h > 24. {
-                    let bevel_alpha = if dark { 0.14 * lens } else { 0.36 * lens };
+                    let catchlight = [
+                        BoxShadow {
+                            color: hsla(0., 0., 1., if dark { 0.28 * lens } else { 0.72 * lens }),
+                            offset: point(px(0.), px(1.5)),
+                            blur_radius: px(3.),
+                            spread_radius: px(-0.5),
+                            inset: true,
+                        },
+                        BoxShadow {
+                            color: hsla(0., 0., 1., if dark { 0.10 * lens } else { 0.30 * lens }),
+                            offset: point(px(0.), px(-1.)),
+                            blur_radius: px(2.5),
+                            spread_radius: px(-0.5),
+                            inset: true,
+                        },
+                    ];
+                    window.paint_inset_shadows(bounds, clamped.into(), &catchlight);
+                    let bevel_alpha = if dark { 0.14 * lens } else { 0.38 * lens };
                     let bevel = rgba(0xffffff00 | ((bevel_alpha * 255.).round() as u32));
                     let inner = Bounds::new(
                         point(bounds.origin.x + px(1.), bounds.origin.y + px(1.)),
@@ -843,7 +966,7 @@ pub fn card_layer(wash: gpui::Rgba, radius: Pixels, minimum_alpha: f32) -> impl 
                         inner,
                         px((r - 1.).max(0.)),
                         transparent_black(),
-                        px(1.5),
+                        px(1.25),
                         bevel,
                         BorderStyle::Solid,
                     ));

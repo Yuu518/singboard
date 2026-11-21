@@ -944,11 +944,7 @@ impl Workspace {
             .items_center()
             .justify_center()
             .p_4()
-            .bg(if p.0 {
-                rgba(0x00000059)
-            } else {
-                rgba(0xffffff38)
-            })
+            .bg(dialog::scrim_color(p.0))
             .on_click(cx.listener(move |this, _, _, cx| this.apply(close.clone(), cx)))
     }
 }

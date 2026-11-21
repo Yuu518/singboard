@@ -36,7 +36,7 @@ void main() {
   vec2 side = vec2(local.x < 0.0 ? -1.0 : 1.0, local.y < 0.0 ? -1.0 : 1.0);
   vec2 normal = normalize(outward) * side;
   normal += depth * local / max(length(local), 0.0001);
-  vec2 offset = -normal / max(length(normal), 0.0001) * safeDensity * amount * (1.0 - sqrt(max(0.0, 1.0 - t*t)));
+  vec2 offset = -normal / max(length(normal), 0.0001) * safeDensity * amount * (t * t);
   vec4 green = texture(backdrop, texcoord(pos + offset));
   fragColor = vec4(texture(backdrop, texcoord(pos + offset * (1.0 - spread))).r,
                    green.g, texture(backdrop, texcoord(pos + offset * (1.0 + spread))).b, green.a);

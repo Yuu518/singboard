@@ -958,11 +958,7 @@ impl Workspace {
         let width = if matches!(dialog, ConfigDialog::ConfirmDelete { .. }) { 420. } else { 480. };
         let p = crate::theme::Palette::get(cx);
         let tint = self.glass_tint;
-        let scrim = if p.0 {
-            rgba(0x00000059)
-        } else {
-            rgba(0xffffff38)
-        };
+        let scrim = dialog::scrim_color(p.0);
         let dialog_card = |w: f32| {
             div()
                 .w(px(w))
@@ -973,7 +969,7 @@ impl Workspace {
                 .relative()
                 .border_1()
                 .border_color(p.rim())
-                .shadow(crate::glass::float_shadows(p.0))
+                .shadow(crate::glass::modal_shadows(p.0))
                 .child(crate::glass::card_layer(p.popover(tint), px(21.), 0.70))
                 .child(crate::glass::grain_layer(px(21.)))
                 .p_5()
