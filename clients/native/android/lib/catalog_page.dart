@@ -27,7 +27,7 @@ class _RuleAction {
 
 class CatalogPage extends StatefulWidget {
   final String endpoint, secret;
-  final bool proxies, enabled;
+  final bool proxies, enabled, active;
   final Map<String, dynamic> preferences;
   final Map<String, dynamic> chainSpeeds;
 
@@ -37,6 +37,7 @@ class CatalogPage extends StatefulWidget {
     required this.secret,
     required this.proxies,
     this.enabled = true,
+    this.active = true,
     this.preferences = const {},
     this.chainSpeeds = const {},
   });
@@ -187,7 +188,11 @@ class _CatalogPageState extends State<CatalogPage> {
   @override
   void didUpdateWidget(CatalogPage old) {
     super.didUpdateWidget(old);
-    if (widget.enabled && !old.enabled) load();
+    if (widget.enabled && !old.enabled) {
+      load();
+    } else if (widget.enabled && widget.active && !old.active) {
+      load(silent: items.isNotEmpty);
+    }
   }
 
   @override
@@ -198,12 +203,14 @@ class _CatalogPageState extends State<CatalogPage> {
     super.dispose();
   }
 
-  Future<void> load() async {
+  Future<void> load({bool silent = false}) async {
     final revision = ++generation;
-    setState(() {
-      busy = true;
-      error = '';
-    });
+    if (!silent) {
+      setState(() {
+        busy = true;
+        error = '';
+      });
+    }
     try {
       final op = widget.proxies ? 'proxies' : 'rules';
       final response = await clashRequest(widget.endpoint, widget.secret, op);
@@ -244,17 +251,20 @@ class _CatalogPageState extends State<CatalogPage> {
         providerItems = nextProviders;
         providersAvailable = providerApiReady;
         if (!providersAvailable) providers = false;
+        error = '';
       });
       if (!widget.proxies && query.isNotEmpty) scheduleMatch();
     } catch (e) {
-      if (mounted && revision == generation) {
+      if (mounted && revision == generation && !silent) {
         setState(() {
           items = [];
           error = e.toString();
         });
       }
     } finally {
-      if (mounted && revision == generation) setState(() => busy = false);
+      if (mounted && revision == generation && !silent) {
+        setState(() => busy = false);
+      }
     }
   }
 
@@ -704,7 +714,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontSize: 15.5,
+                                  fontSize: 16,
                                   fontWeight: FontWeight.w600,
                                   color: c.ink,
                                 ),
@@ -729,7 +739,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                 now,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: TextStyle(fontSize: 13.5, color: c.muted),
+                                style: TextStyle(fontSize: 14, color: c.muted),
                               ),
                             ),
                             if (showNowBadge) ...[
@@ -743,7 +753,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                 child: Text(
                                   _formatLatency(nowDelay),
                                   style: TextStyle(
-                                    fontSize: 11,
+                                    fontSize: 12,
                                     fontWeight: FontWeight.w500,
                                     color: nowFg,
                                     fontFeatures: const [FontFeature.tabularFigures()],
@@ -777,15 +787,15 @@ class _CatalogPageState extends State<CatalogPage> {
                             spacing: 6,
                             runSpacing: 6,
                             children: [
-                              for (final (i, node) in nodes.indexed)
-                                _ProxyDot(index: i, child: _buildDot(
+                              for (final node in nodes)
+                                _buildDot(
                                   _delayOf(node),
                                   node['name'] == now,
                                   c,
                                   onTap: selectable
                                       ? () => selectNode(group, node['name'].toString())
                                       : null,
-                                )),
+                                ),
                             ],
                           ),
                         ],
@@ -896,7 +906,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
-                                          fontSize: 13.5,
+                                          fontSize: 14,
                                           height: 1.2,
                                           fontWeight: selected
                                               ? FontWeight.w600
@@ -913,7 +923,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: TextStyle(
-                                              fontSize: 11.5,
+                                              fontSize: 12,
                                               color: selected
                                                   ? c.selectionInk
                                                   : c.muted,
@@ -940,7 +950,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                               child: Text(
                                                 testing ? '…' : _formatLatency(delay),
                                                 style: TextStyle(
-                                                  fontSize: 11,
+                                                  fontSize: 12,
                                                   fontWeight: FontWeight.w500,
                                                   color: latFg,
                                                   fontFeatures: const [
@@ -1011,7 +1021,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontSize: 15.5,
+                                  fontSize: 16,
                                   fontWeight: FontWeight.w600,
                                   color: c.ink,
                                 ),
@@ -1050,8 +1060,8 @@ class _CatalogPageState extends State<CatalogPage> {
                             spacing: 6,
                             runSpacing: 6,
                             children: [
-                              for (final (i, node) in nodes.indexed)
-                                _ProxyDot(index: i, child: _buildDot(_delayOf(node), false, c)),
+                              for (final node in nodes)
+                                _buildDot(_delayOf(node), false, c),
                             ],
                           ),
                         ],
@@ -1117,7 +1127,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                       nName,
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(fontSize: 13.5, height: 1.2, color: c.ink),
+                                      style: TextStyle(fontSize: 14, height: 1.2, color: c.ink),
                                     ),
                                   ),
                                   Row(
@@ -1127,7 +1137,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                           _formatType(node, false),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(fontSize: 11.5, color: c.muted),
+                                          style: TextStyle(fontSize: 12, color: c.muted),
                                         ),
                                       ),
                                       GestureDetector(
@@ -1141,7 +1151,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                           child: Text(
                                             testing ? '…' : _formatLatency(delay),
                                             style: TextStyle(
-                                              fontSize: 11,
+                                              fontSize: 12,
                                               color: latFg,
                                               fontFeatures: const [FontFeature.tabularFigures()],
                                             ),
@@ -1401,7 +1411,7 @@ class _CatalogPageState extends State<CatalogPage> {
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 13.5),
+                    style: const TextStyle(fontSize: 14),
                   ),
                   if (meta.isNotEmpty)
                     Text(
@@ -1439,7 +1449,7 @@ class _CatalogPageState extends State<CatalogPage> {
                   ),
                   TextSpan(
                     text: ' 条',
-                    style: TextStyle(fontSize: 11.5, color: c.muted),
+                    style: TextStyle(fontSize: 12, color: c.muted),
                   ),
                 ],
               ),
@@ -1619,7 +1629,7 @@ class _CatalogPageState extends State<CatalogPage> {
                   Text(
                     widget.proxies ? '无法读取代理列表' : '无法读取规则列表',
                     style: TextStyle(
-                      fontSize: 15,
+                      fontSize: 16,
                       fontWeight: FontWeight.w600,
                       color: c.ink,
                     ),
@@ -1628,7 +1638,7 @@ class _CatalogPageState extends State<CatalogPage> {
                   Text(
                     error,
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 12.5, color: c.muted),
+                    style: TextStyle(fontSize: 14, color: c.muted),
                   ),
                   const SizedBox(height: 12),
                   FilledButton(onPressed: load, child: const Text('重试')),
@@ -1972,27 +1982,6 @@ class _RuleDetailState extends State<_RuleDetail> {
           ),
         ])),
       ),
-    );
-  }
-}
-
-class _ProxyDot extends StatelessWidget {
-  final Widget child;
-  final int index;
-  const _ProxyDot({required this.child, required this.index});
-
-  @override
-  Widget build(BuildContext context) {
-    if (MediaQuery.disableAnimationsOf(context)) return child;
-    final delay = 60 + 12 * index.clamp(0, 30);
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1), duration: Duration(milliseconds: delay + 340),
-      child: child,
-      builder: (_, value, item) {
-        final t = ((value * (delay + 340) - delay) / 340).clamp(0.0, 1.0);
-        return Opacity(opacity: Curves.easeOut.transform(t), child: Transform.scale(
-          scale: .35 + .65 * Curves.easeOutBack.transform(t), child: item));
-      },
     );
   }
 }

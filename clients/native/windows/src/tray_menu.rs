@@ -282,7 +282,7 @@ impl Render for TrayMenu {
                             div()
                                 .px_2()
                                 .truncate()
-                                .text_size(px(10.))
+                                .text_size(crate::theme::text_px(10.))
                                 .text_color(p.danger())
                                 .child(self.error.clone()),
                         )

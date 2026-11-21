@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/rendering.dart' show PipelineOwner, RenderProxyBox;
 import 'package:flutter/scheduler.dart' show Ticker;
 
 part 'glass_navigation.dart';
@@ -106,6 +107,8 @@ class GlassScope extends InheritedWidget {
   final int wallpaperRevision;
   final bool contrastingBackdrop;
   final bool? backdropToneLight;
+  final ui.Image? blurredWallpaper;
+  final bool inPopover;
 
   const GlassScope({
     super.key,
@@ -114,6 +117,8 @@ class GlassScope extends InheritedWidget {
     required this.wallpaperRevision,
     this.contrastingBackdrop = false,
     this.backdropToneLight,
+    this.blurredWallpaper,
+    this.inPopover = false,
     required super.child,
   });
 
@@ -169,7 +174,25 @@ class GlassScope extends InheritedWidget {
       contrastingBackdrop != old.contrastingBackdrop ||
       backdropToneLight != old.backdropToneLight ||
       wallpaperPath != old.wallpaperPath ||
-      wallpaperRevision != old.wallpaperRevision;
+      wallpaperRevision != old.wallpaperRevision ||
+      !identical(blurredWallpaper, old.blurredWallpaper) ||
+      inPopover != old.inPopover;
+}
+
+class GlassScrollScope extends InheritedWidget {
+  final Listenable? listenable;
+
+  const GlassScrollScope({
+    super.key,
+    required this.listenable,
+    required super.child,
+  });
+
+  static Listenable? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<GlassScrollScope>()?.listenable;
+
+  @override
+  bool updateShouldNotify(GlassScrollScope old) => listenable != old.listenable;
 }
 
 class _DefaultAuroraPainter extends CustomPainter {
@@ -323,7 +346,7 @@ class GlassControl extends StatelessWidget {
             width: 0.5,
           )
         : null;
-    if (!scope.hasWallpaper) {
+    if (!scope.hasWallpaper || scope.inPopover) {
       return DecoratedBox(
         decoration: BoxDecoration(
           color: fill,
@@ -333,23 +356,26 @@ class GlassControl extends StatelessWidget {
         child: child,
       );
     }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: Color.alphaBlend(
-              fill,
-              c.glassRgb.withValues(alpha: scope.controlAlpha),
-            ),
-            borderRadius: BorderRadius.circular(radius),
-            border: edge,
-          ),
-          child: child,
+    final box = DecoratedBox(
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(
+          fill,
+          c.glassRgb.withValues(alpha: scope.controlAlpha),
         ),
+        borderRadius: BorderRadius.circular(radius),
+        border: edge,
       ),
+      child: child,
     );
+    final wallpaper = scope.blurredWallpaper;
+    if (wallpaper != null) {
+      return _WallpaperGlass(
+        image: wallpaper,
+        radius: radius,
+        child: box,
+      );
+    }
+    return box;
   }
 }
 
@@ -387,6 +413,39 @@ class GlassCard extends StatelessWidget {
             ? Colors.white.withValues(alpha: 0.14)
             : Colors.white.withValues(alpha: 0.72));
     final shape = BorderRadius.circular(radius);
+    if (!popover && scope.hasWallpaper) {
+      final wallpaper = scope.blurredWallpaper;
+      final cardBox = Container(
+        decoration: BoxDecoration(
+          color: wallpaper == null
+              ? (tintColor ?? c.glassRgb.withValues(alpha: scope.alpha(alpha, 0.72)))
+              : bg,
+          image: scope.grain,
+          borderRadius: shape,
+          border: Border.all(color: border, width: 0.5),
+        ),
+        child: Padding(padding: padding, child: child),
+      );
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: shape,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: c.dark ? .34 : .10),
+              blurRadius: 18,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: wallpaper != null
+            ? _WallpaperGlass(
+                image: wallpaper,
+                radius: radius,
+                child: cardBox,
+              )
+            : cardBox,
+      );
+    }
     if (!useBackdrop) {
       return RepaintBoundary(
         child: Container(
@@ -407,6 +466,18 @@ class GlassCard extends StatelessWidget {
         ),
       );
     }
+    final innerChild = popover
+        ? GlassScope(
+            tint: scope.tint,
+            wallpaperPath: scope.wallpaperPath,
+            wallpaperRevision: scope.wallpaperRevision,
+            contrastingBackdrop: scope.contrastingBackdrop,
+            backdropToneLight: scope.backdropToneLight,
+            blurredWallpaper: scope.blurredWallpaper,
+            inPopover: true,
+            child: child,
+          )
+        : child;
     final box = Container(
       decoration: BoxDecoration(
         color: bg,
@@ -414,7 +485,7 @@ class GlassCard extends StatelessWidget {
         borderRadius: shape,
         border: Border.all(color: border, width: 0.5),
       ),
-      child: Padding(padding: padding, child: child),
+      child: Padding(padding: padding, child: innerChild),
     );
     final clipped = ClipRRect(
       borderRadius: shape,
@@ -515,6 +586,7 @@ class GlassAppHeader extends StatelessWidget {
   final bool scrolled;
   final double scrollProgress;
   final bool showStatusPill;
+  final double statusPillOpacity;
   final bool connected;
   final bool busy;
   final String statusText;
@@ -527,6 +599,7 @@ class GlassAppHeader extends StatelessWidget {
     this.scrolled = false,
     this.scrollProgress = 0.0,
     required this.showStatusPill,
+    this.statusPillOpacity = 1.0,
     required this.connected,
     this.busy = false,
     required this.statusText,
@@ -619,9 +692,13 @@ class GlassAppHeader extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Expanded(child: titleWidget),
-            if (showStatusPill)
-              GestureDetector(
-                onTap: onStatusTap,
+            if (showStatusPill && statusPillOpacity > 0.01)
+              Opacity(
+                opacity: statusPillOpacity.clamp(0.0, 1.0),
+                child: IgnorePointer(
+                  ignoring: statusPillOpacity < 0.5,
+                  child: GestureDetector(
+                    onTap: onStatusTap,
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
@@ -685,9 +762,11 @@ class GlassAppHeader extends StatelessWidget {
                           color: c.ink,
                         ),
                       ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
+              ),
               ),
           ],
         ),
@@ -732,7 +811,7 @@ class GlassSearchField extends StatelessWidget {
           controller: controller,
           focusNode: focusNode,
           onChanged: onChanged,
-          style: TextStyle(fontSize: 13.5, color: c.ink),
+          style: TextStyle(fontSize: 14, color: c.ink),
           decoration: InputDecoration(
             isDense: true,
             border: InputBorder.none,
@@ -743,7 +822,7 @@ class GlassSearchField extends StatelessWidget {
               minHeight: 32,
             ),
             hintText: hint,
-            hintStyle: TextStyle(fontSize: 13.5, color: c.muted),
+            hintStyle: TextStyle(fontSize: 14, color: c.muted),
             suffixIcon: value.isNotEmpty
                 ? IconButton(
                     icon: PanelIcon('x-small', size: 10, color: c.muted),

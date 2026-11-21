@@ -151,7 +151,7 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
       autocorrect: false,
       enabled: !_saving,
       style: TextStyle(
-        fontSize: 13.5,
+        fontSize: 14,
         fontFamily: mono ? 'monospace' : null,
         color: c.ink,
       ),
@@ -160,7 +160,7 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
         border: InputBorder.none,
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
         hintText: hint,
-        hintStyle: TextStyle(fontSize: 13, color: c.muted),
+        hintStyle: TextStyle(fontSize: 14, color: c.muted),
       ),
     ),
   );
@@ -211,7 +211,7 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
                             const SizedBox(height: 6),
                             Text(
                               '填写要连接的 Clash API。sing-box 可以运行在路由器、电脑或本机上。',
-                              style: TextStyle(fontSize: 13.5, color: c.muted),
+                              style: TextStyle(fontSize: 14, color: c.muted),
                             ),
                             const SizedBox(height: 16),
                             _fieldLabel('API 地址', c),
@@ -249,7 +249,7 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
                                         Text(
                                           '使用 root 管理本机 sing-box',
                                           style: TextStyle(
-                                            fontSize: 13.5,
+                                            fontSize: 14,
                                             fontWeight: FontWeight.w500,
                                             color: c.ink,
                                           ),
@@ -258,7 +258,7 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
                                         Text(
                                           '需要 Magisk / KernelSU / APatch。支持启动、停止、重启、开机自启和核心更新。',
                                           style: TextStyle(
-                                            fontSize: 11.5,
+                                            fontSize: 12,
                                             color: c.muted,
                                           ),
                                         ),
@@ -288,7 +288,7 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
                               Text(
                                 '会在目录及子目录中自动查找核心（优先 bin 文件夹）、配置文件和规则，日志写入 logs 或 log 文件夹。',
                                 style: TextStyle(
-                                  fontSize: 11.5,
+                                  fontSize: 12,
                                   color: c.muted,
                                 ),
                               ),
@@ -298,7 +298,7 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
                               Text(
                                 _error,
                                 style: TextStyle(
-                                  fontSize: 12.5,
+                                  fontSize: 13,
                                   color: c.dangerInk,
                                 ),
                               ),

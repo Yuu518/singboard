@@ -213,7 +213,7 @@ class _PanelUpdateDialogState extends State<_PanelUpdateDialog> {
                             ? '版本相同，但本地文件和官方发布的文件不同。重新安装会覆盖当前应用。'
                             : '下载并校验后会打开系统安装器，代理服务不受影响。'
                       : message,
-                  style: TextStyle(fontSize: 13, color: c.muted),
+                  style: TextStyle(fontSize: 14, color: c.muted),
                 ),
                 const SizedBox(height: 14),
                 SizedBox(

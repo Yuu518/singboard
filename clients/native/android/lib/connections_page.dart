@@ -401,7 +401,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                     width: 86,
                     child: Text(
                       field.key,
-                      style: TextStyle(fontSize: 13, color: c.muted),
+                      style: TextStyle(fontSize: 14, color: c.muted),
                     ),
                   ),
                   Expanded(
@@ -409,7 +409,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                       field.value?.toString().isNotEmpty == true
                           ? field.value.toString()
                           : '—',
-                      style: TextStyle(fontSize: 13, color: c.ink),
+                      style: TextStyle(fontSize: 14, color: c.ink),
                     ),
                   ),
                 ],
@@ -815,7 +815,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                         Expanded(
                           child: Text(
                             sorts[effectiveSort] ?? '最新',
-                            style: TextStyle(fontSize: 13, color: c.ink),
+                            style: TextStyle(fontSize: 14, color: c.ink),
                           ),
                         ),
                         PanelIcon('select-caret', size: 16, color: c.ink),

@@ -1012,7 +1012,7 @@ impl Workspace {
                         .gap_1()
                         .child(
                             crate::glass::backdrop_heading(title, palette, cx)
-                                .text_size(px(18.))
+                                .text_size(crate::theme::text_px(18.))
                                 .font_weight(FontWeight::MEDIUM),
                         )
                         .child(

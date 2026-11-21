@@ -105,7 +105,7 @@ class _ConfigPageState extends State<ConfigPage> {
         final c = SingboardColors.of(ctx);
         InputDecoration fieldDecoration(String hint) => InputDecoration(
           hintText: hint,
-          hintStyle: TextStyle(fontSize: 13, color: c.muted),
+          hintStyle: TextStyle(fontSize: 14, color: c.muted),
           isDense: true,
           filled: true,
           fillColor: c.fill,
@@ -138,7 +138,7 @@ class _ConfigPageState extends State<ConfigPage> {
                   const SizedBox(height: 4),
                   TextFormField(
                     initialValue: name,
-                    style: TextStyle(fontSize: 13, color: c.ink),
+                    style: TextStyle(fontSize: 14, color: c.ink),
                     decoration: fieldDecoration('例如：主订阅'),
                     onChanged: (v) => name = v.trim(),
                     validator: (v) => v!.trim().isEmpty ? '请填写名称' : null,
@@ -148,7 +148,7 @@ class _ConfigPageState extends State<ConfigPage> {
                   const SizedBox(height: 4),
                   TextFormField(
                     initialValue: url,
-                    style: TextStyle(fontSize: 13, color: c.ink, fontFamily: 'monospace'),
+                    style: TextStyle(fontSize: 14, color: c.ink, fontFamily: 'monospace'),
                     decoration: fieldDecoration('https://example.com/config.json'),
                     keyboardType: TextInputType.url,
                     autocorrect: false,
@@ -170,7 +170,7 @@ class _ConfigPageState extends State<ConfigPage> {
                   const SizedBox(height: 4),
                   TextFormField(
                     initialValue: hours,
-                    style: TextStyle(fontSize: 13, color: c.ink, fontFamily: 'monospace'),
+                    style: TextStyle(fontSize: 14, color: c.ink, fontFamily: 'monospace'),
                     decoration: fieldDecoration('0'),
                     keyboardType: TextInputType.number,
                     onChanged: (v) => hours = v.trim(),
@@ -302,7 +302,7 @@ class _ConfigPageState extends State<ConfigPage> {
           child: Text(
             label,
             style: TextStyle(
-              fontSize: 12.5,
+              fontSize: 14,
               fontWeight: accent ? FontWeight.w600 : FontWeight.w500,
               color: danger
                   ? c.dangerInk
@@ -366,7 +366,7 @@ class _ConfigPageState extends State<ConfigPage> {
                             Text(
                               '本地文件',
                               style: TextStyle(
-                                fontSize: 13,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w500,
                                 color: c.ink,
                               ),
@@ -394,7 +394,7 @@ class _ConfigPageState extends State<ConfigPage> {
                             Text(
                               '添加远程配置',
                               style: TextStyle(
-                                fontSize: 13,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w500,
                                 color: c.ink,
                               ),
@@ -423,7 +423,7 @@ class _ConfigPageState extends State<ConfigPage> {
                         child: Text(
                           '编辑本机 Root 服务配置',
                           style: TextStyle(
-                            fontSize: 13,
+                            fontSize: 14,
                             fontWeight: FontWeight.w500,
                             color: c.ink,
                           ),
@@ -876,7 +876,7 @@ class _ConfigEditorState extends State<ConfigEditor> {
                     minimumSize: const Size(0, 32),
                   ),
                   onPressed: busy ? null : () => execute('save'),
-                  child: const Text('保存', style: TextStyle(fontSize: 13)),
+                  child: const Text('保存', style: TextStyle(fontSize: 14)),
                 ),
               ),
             ],

@@ -461,8 +461,8 @@ impl Workspace {
                     .gap_3()
                     .child(
                         crate::glass::backdrop_heading("连接", palette, cx)
-                            .text_size(px(26.))
-                            .line_height(px(32.))
+                            .text_size(crate::theme::text_px(26.))
+                            .line_height(rems(32. / 16.))
                             .font_weight(FontWeight::BOLD),
                     )
                     .child(tabs),
@@ -497,7 +497,7 @@ impl Workspace {
                             .items_center()
                             .justify_between()
                             .gap_1()
-                            .child(div().min_w_0().truncate().text_size(px(13.)).child(SORTS[selected].1))
+                            .child(div().min_w_0().truncate().text_sm().child(SORTS[selected].1))
                             .child(
                                 svg()
                                     .path("select-caret")
@@ -760,7 +760,7 @@ impl Workspace {
                                                     .when(closed_view && !dur.is_empty(), |el| {
                                                         el.child(
                                                             div()
-                                                                .text_size(px(11.))
+                                                                .text_size(crate::theme::text_px(11.))
                                                                 .text_color(p.muted())
                                                                 .child(dur),
                                                         )

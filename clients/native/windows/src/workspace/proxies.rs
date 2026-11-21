@@ -466,8 +466,8 @@ impl Workspace {
                     .items_center()
                     .child(
                         crate::glass::backdrop_heading("代理", palette, cx)
-                            .text_size(px(26.))
-                            .line_height(px(32.))
+                            .text_size(crate::theme::text_px(26.))
+                            .line_height(rems(32. / 16.))
                             .font_weight(FontWeight::BOLD),
                     )
                     .child(tabs)
@@ -865,8 +865,8 @@ impl Workspace {
                                                 .flex_1()
                                                 .min_h_0()
                                                 .overflow_hidden()
-                                                .text_size(px(13.5))
-                                                .line_height(px(17.))
+                                                .text_sm()
+                                                .line_height(rems(18. / 16.))
                                                 .child(n_name),
                                         )
                                         .child(
@@ -892,7 +892,7 @@ impl Workspace {
                                                         .py(px(1.))
                                                         .rounded_full()
                                                         .bg(lat_bg)
-                                                        .text_size(px(11.))
+                                                        .text_xs()
                                                         .text_color(lat_fg)
                                                         .child(format_latency(delay))
                                                         .on_click(cx.listener(
@@ -1052,7 +1052,7 @@ impl Workspace {
                         .py(px(1.))
                         .rounded_full()
                         .bg(bg)
-                        .text_size(px(11.5))
+                        .text_xs()
                         .text_color(fg)
                         .child(format_latency(now_delay)),
                 );
@@ -1356,8 +1356,8 @@ impl Workspace {
                                     .flex_1()
                                     .min_h_0()
                                     .overflow_hidden()
-                                    .text_size(px(13.5))
-                                    .line_height(px(17.))
+                                    .text_sm()
+                                    .line_height(rems(18. / 16.))
                                     .font_weight(if selected {
                                         FontWeight::MEDIUM
                                     } else {
@@ -1412,7 +1412,7 @@ impl Workspace {
                                     .py(px(1.))
                                     .rounded_full()
                                     .bg(lat_bg)
-                                    .text_size(px(11.))
+                                    .text_xs()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(lat_fg)
                                     .child(format_latency(node.delay))

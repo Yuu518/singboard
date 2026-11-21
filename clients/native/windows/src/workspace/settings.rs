@@ -157,7 +157,7 @@ pub(super) fn route_btn(
         .px_3()
         .h(px(32.)).flex().items_center().justify_center()
         .rounded_full()
-        .text_size(px(14.))
+        .text_sm()
         .font_weight(FontWeight::MEDIUM)
         .when(disabled, |d| {
             d.bg(p.fill()).text_color(p.muted()).opacity(0.6)
@@ -187,7 +187,7 @@ pub(super) fn action_btn(
         .bg(p.fill())
         .border_1()
         .border_color(p.control_rim())
-        .text_size(px(14.))
+        .text_sm()
         .font_weight(FontWeight::MEDIUM)
         .when(disabled, |d| d.text_color(p.muted()).opacity(0.6))
         .when(!disabled, |d| {
@@ -218,7 +218,7 @@ pub(super) fn danger_btn(
                 .border_1()
                 .border_color(p.control_rim())
         })
-        .text_size(px(14.))
+        .text_sm()
         .font_weight(FontWeight::MEDIUM)
         .when(disabled, |d| d.text_color(p.muted()).opacity(0.55))
         .when(!disabled, |d| {
@@ -309,7 +309,7 @@ pub(super) fn picker(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(div().min_w_0().truncate().text_size(px(13.)).child(label))
+                        .child(div().min_w_0().truncate().text_sm().child(label))
                         .child(
                             svg()
                                 .path("select-caret")
@@ -772,7 +772,7 @@ pub(super) fn setting_row(
                 .gap(px(2.))
                 .child(
                     div()
-                        .text_size(px(13.)).line_height(px(18.))
+                        .text_size(crate::theme::text_px(13.)).line_height(rems(18. / 16.))
                         .font_weight(FontWeight::MEDIUM)
                         .child(title),
                 )
@@ -853,7 +853,7 @@ impl Workspace {
                     .items_center()
                     .justify_center()
                     .rounded_full()
-                    .text_size(px(14.))
+                    .text_size(crate::theme::text_px(14.))
                     .font_weight(FontWeight::MEDIUM)
                     .when(start_disabled, |d| {
                         d.bg(palette.fill()).text_color(palette.muted()).opacity(0.6)
@@ -885,7 +885,7 @@ impl Workspace {
                     .bg(palette.fill())
                     .border_1()
                     .border_color(palette.control_rim())
-                    .text_size(px(14.))
+                    .text_size(crate::theme::text_px(14.))
                     .font_weight(FontWeight::MEDIUM)
                     .when(restart_disabled, |d| d.text_color(palette.muted()).opacity(0.6))
                     .when(!restart_disabled, |d| {
@@ -915,7 +915,7 @@ impl Workspace {
                     .bg(palette.danger_soft())
                     .border_1()
                     .border_color(palette.control_rim())
-                    .text_size(px(14.))
+                    .text_size(crate::theme::text_px(14.))
                     .font_weight(FontWeight::MEDIUM)
                     .when(stop_disabled, |d| d.text_color(palette.muted()).opacity(0.55))
                     .when(!stop_disabled, |d| {
@@ -1025,7 +1025,7 @@ impl Workspace {
                                     .flex_col()
                                     .child(
                                         div()
-                                            .text_size(px(14.)).line_height(px(20.))
+                                            .text_size(crate::theme::text_px(14.)).line_height(px(20.))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child(svc_text),
                                     )
@@ -1080,7 +1080,7 @@ impl Workspace {
                             .bg(palette.fill())
                             .border_1()
                             .border_color(palette.control_rim())
-                            .text_size(px(14.))
+                            .text_size(crate::theme::text_px(14.))
                             .font_weight(FontWeight::MEDIUM)
                             .when(install_disabled, |d| d.text_color(palette.muted()).opacity(0.6))
                             .when(!install_disabled, |d| {
@@ -1109,7 +1109,7 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .rounded_full()
-                            .text_size(px(14.))
+                            .text_size(crate::theme::text_px(14.))
                             .font_weight(FontWeight::MEDIUM)
                             .when(uninstall_disabled, |d| d.text_color(palette.muted()).opacity(0.55))
                             .when(!uninstall_disabled, |d| {
@@ -1244,7 +1244,7 @@ impl Workspace {
                             .gap(px(2.))
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(crate::theme::text_px(13.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child("玻璃效果"),
                             )
@@ -1315,7 +1315,7 @@ impl Workspace {
                             .gap(px(2.))
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(crate::theme::text_px(13.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child("背景图片"),
                             )
@@ -1480,7 +1480,7 @@ impl Workspace {
             .child(
                 crate::glass::backdrop_heading("设置", palette, cx)
                     .pb(px(20.))
-                    .text_size(px(26.))
+                    .text_size(crate::theme::text_px(26.))
                     .line_height(px(32.))
                     .font_weight(FontWeight::BOLD),
             )

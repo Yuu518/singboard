@@ -736,7 +736,7 @@ impl Workspace {
                     .gap_3()
                     .child(
                         crate::glass::backdrop_heading("规则", palette, cx)
-                            .text_size(px(26.))
+                            .text_size(crate::theme::text_px(26.))
                             .line_height(px(32.))
                             .font_weight(FontWeight::BOLD),
                     )
@@ -946,7 +946,7 @@ impl Workspace {
                                                     .flex()
                                                     .items_baseline()
                                                     .min_w_0()
-                                                    .text_size(px(13.))
+                                                    .text_size(crate::theme::text_px(13.))
                                                     .when(!prefix.is_empty(), |el| {
                                                         el.child(
                                                             div()
@@ -977,7 +977,7 @@ impl Workspace {
                                             .gap(px(3.))
                                             .child(
                                                 div()
-                                                    .text_size(px(13.))
+                                                    .text_size(crate::theme::text_px(13.))
                                                     .font_weight(FontWeight::SEMIBOLD)
                                                     .child(format_count(rule_count)),
                                             )
@@ -1114,7 +1114,7 @@ impl Workspace {
                                     .flex()
                                     .items_center()
                                     .gap(px(5.))
-                                    .text_size(px(13.));
+                                    .text_size(crate::theme::text_px(13.));
                                 for (ti, tok) in tokens.into_iter().enumerate() {
                                     match tok {
                                         ConditionToken::Word(t) => {
@@ -1164,7 +1164,7 @@ impl Workspace {
                                                     .text_color(p.ink())
                                                     .child(
                                                         div()
-                                                            .text_size(px(10.))
+                                                            .text_size(crate::theme::text_px(10.))
                                                             .text_color(p.muted())
                                                             .child(
                                                                 svg()
@@ -1202,7 +1202,7 @@ impl Workspace {
                                             .flex()
                                             .items_baseline()
                                             .gap(px(5.))
-                                            .text_size(px(13.))
+                                            .text_size(crate::theme::text_px(13.))
                                             .child(
                                                 div()
                                                     .flex_none()
@@ -1322,7 +1322,7 @@ impl Workspace {
                                             .flex_none()
                                             .flex()
                                             .justify_end()
-                                            .text_size(px(11.))
+                                            .text_size(crate::theme::text_px(11.))
                                             .text_color(p.muted())
                                             .child(if is_final {
                                                 String::new()
@@ -1531,7 +1531,7 @@ impl Workspace {
                             .child("全部")
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(crate::theme::text_px(11.))
                                     .opacity(0.75)
                                     .child(format_count(d.entries.len() as u64)),
                             )
@@ -1568,7 +1568,7 @@ impl Workspace {
                                 .child(label)
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(crate::theme::text_px(11.))
                                         .opacity(0.75)
                                         .child(format_count(*count as u64)),
                                 )
@@ -1694,7 +1694,7 @@ impl Workspace {
                                                                         .flex()
                                                                         .items_center()
                                                                         .justify_center()
-                                                                        .text_size(px(11.))
+                                                                        .text_size(crate::theme::text_px(11.))
                                                                         .font_weight(
                                                                             FontWeight::MEDIUM,
                                                                         )

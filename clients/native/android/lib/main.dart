@@ -52,47 +52,6 @@ class _GentlePageScrollPhysics extends PageScrollPhysics {
   );
 }
 
-class _SwipePageTransition extends StatelessWidget {
-  final PageController controller;
-  final int index;
-  final int activeTab;
-  final Widget child;
-
-  const _SwipePageTransition({
-    required this.controller,
-    required this.index,
-    required this.activeTab,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (MediaQuery.disableAnimationsOf(context)) return child;
-    return AnimatedBuilder(
-      animation: controller,
-      child: child,
-      builder: (_, content) {
-        final page =
-            controller.positions.length == 1 && controller.position.haveDimensions
-            ? (controller.page ?? activeTab.toDouble())
-            : activeTab.toDouble();
-        final delta = (index - page).clamp(-1.0, 1.0);
-        final abs = delta.abs();
-        final scale = abs < 0.0005 ? 1.0 : 1.0 - 0.035 * abs;
-        final opacity = abs < 0.0005 ? 1.0 : (1.0 - 0.32 * abs).clamp(0.68, 1.0);
-        final dx = abs < 0.0005 ? 0.0 : -delta * 18.0;
-        return Opacity(
-          opacity: opacity,
-          child: Transform.translate(
-            offset: Offset(dx, 0),
-            child: Transform.scale(scale: scale, child: content),
-          ),
-        );
-      },
-    );
-  }
-}
-
 class Panel extends StatelessWidget {
   const Panel({super.key});
 
@@ -151,7 +110,7 @@ class _PagerPanelState extends State<_PagerPanel> with AutomaticKeepAliveClientM
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return widget.child;
+    return RepaintBoundary(child: widget.child);
   }
 }
 
@@ -248,9 +207,10 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   final _headerScroll = ValueNotifier<int>(0);
   final _swipeProgress = ValueNotifier<double?>(null);
   bool _userSwiping = false;
-  late final _pageFade = AnimationController(vsync: this, duration: const Duration(milliseconds: 220), value: 1);
-  late final _pageOpacity = _pageFade.drive(CurveTween(curve: Curves.easeOutCubic));
-  double _pageSlideDir = 0;
+  int? _pendingTab;
+  late final _pageFade = AnimationController(vsync: this, duration: const Duration(milliseconds: 260), value: 1);
+  late final _glassMotion = Listenable.merge([_pager, _pageFade]);
+  double _tabDir = 1.0;
   int? _targetPage;
 
   void _selectTab(int next) {
@@ -274,6 +234,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     }
     final prev = tab;
     _userSwiping = false;
+    _pendingTab = null;
     _swipeProgress.value = null;
     setState(() => tab = next);
     if (!_pager.hasClients) {
@@ -282,22 +243,19 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       });
       return;
     }
-    final swipeOn = preferences['pageSwipe'] == true;
     final animated = !MediaQuery.disableAnimationsOf(context);
-    if (swipeOn && animated && (next - prev).abs() == 1) {
+    if (animated && (next - prev).abs() == 1) {
       _targetPage = next;
-      _pageSlideDir = 0;
       _pageFade.value = 1;
-      _pager.animateToPage(next, duration: const Duration(milliseconds: 340), curve: Curves.easeOutQuart)
+      _pager.animateToPage(next, duration: const Duration(milliseconds: 280), curve: const Cubic(0.22, 1.0, 0.36, 1.0))
           .whenComplete(() { if (_targetPage == next) _targetPage = null; });
     } else {
       _targetPage = null;
+      _tabDir = next > prev ? 1.0 : -1.0;
       _pager.jumpToPage(next);
       if (animated) {
-        _pageSlideDir = next > prev ? 1 : -1;
         _pageFade.forward(from: 0);
       } else {
-        _pageSlideDir = 0;
         _pageFade.value = 1;
       }
     }
@@ -710,6 +668,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     }
     final shouldRebuild = statusChanged ||
         (!_userSwiping &&
+            _targetPage == null &&
             switch (tab) {
               0 => hasConnections || hasMemory || hasTrafficSample,
               1 => hasConnections,
@@ -1356,7 +1315,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                   child: Text(
                     canStart ? '启动 sing-box' : stopped ? '前往设置' : '检查 API 配置',
                     style: TextStyle(
-                      fontSize: 13,
+                      fontSize: 14,
                       fontWeight: FontWeight.w500,
                       color: canStart ? Colors.white : c.ink,
                     ),
@@ -1872,7 +1831,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                       child: Text(
                         '显示 IP',
                         style: TextStyle(
-                          fontSize: 12.5,
+                          fontSize: 13,
                           fontWeight: FontWeight.w500,
                           color: c.selectionInk,
                         ),
@@ -1893,7 +1852,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                       child: Text(
                         networkBusy ? '检测中…' : '重新检测',
                         style: TextStyle(
-                          fontSize: 12.5,
+                          fontSize: 13,
                           fontWeight: FontWeight.w500,
                           color: networkBusy ? c.muted : c.selectionInk,
                         ),
@@ -2241,7 +2200,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                   Text(
                     countText,
                     style: TextStyle(
-                      fontSize: 13.5,
+                      fontSize: 14,
                       color: scope.backdropMuted(c),
                       shadows: scope.backdropShadows(),
                       fontFeatures: const [FontFeature.tabularFigures()],
@@ -2308,7 +2267,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                       child: Text(
                         '清空',
                         style: TextStyle(
-                          fontSize: 13,
+                          fontSize: 14,
                           fontWeight: FontWeight.w500,
                           color: entries.isEmpty && frozen == null
                               ? scope.backdropMuted(c)
@@ -2390,7 +2349,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                               ? '继续刷新'
                               : (clearedCount > 0 ? '撤销' : '检查 API 配置'),
                           style: TextStyle(
-                            fontSize: 12.5,
+                            fontSize: 14,
                             fontWeight: FontWeight.w600,
                             color: c.selectionInk,
                           ),
@@ -2422,7 +2381,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                             const SizedBox(height: 6),
                             Text(
                               '请确认 sing-box 配置里开启了 clash_api，并且地址和密钥与当前的 Clash API 配置一致。',
-                              style: TextStyle(fontSize: 13.5, color: c.muted),
+                              style: TextStyle(fontSize: 14, color: c.muted),
                             ),
                             const SizedBox(height: 12),
                             Row(
@@ -2486,7 +2445,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                                 child: Text(
                                   '检查 API 配置',
                                   style: TextStyle(
-                                    fontSize: 12.5,
+                                    fontSize: 14,
                                     fontWeight: FontWeight.w500,
                                     color: c.selectionInk,
                                   ),
@@ -2541,7 +2500,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                                           child: Text(
                                             '清除搜索',
                                             style: TextStyle(
-                                              fontSize: 12.5,
+                                              fontSize: 14,
                                               color: c.selectionInk,
                                             ),
                                           ),
@@ -2564,7 +2523,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                                           child: Text(
                                             '跟随核心级别',
                                             style: TextStyle(
-                                              fontSize: 12.5,
+                                              fontSize: 14,
                                               color: c.selectionInk,
                                             ),
                                           ),
@@ -2791,7 +2750,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                                   Text(
                                     '回到最新',
                                     style: TextStyle(
-                                      fontSize: 12.5,
+                                      fontSize: 14,
                                       fontWeight: FontWeight.w500,
                                       color: c.selectionInk,
                                     ),
@@ -2839,7 +2798,8 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       endpoint: endpoint,
       secret: secret,
       proxies: index == 1,
-      enabled: gate == null && tab == index,
+      enabled: gate == null,
+      active: tab == index,
       preferences: preferences,
       chainSpeeds:
           (metrics['chainSpeeds'] as Map<String, dynamic>?) ??
@@ -2951,7 +2911,8 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                             ? _titles[titleIdx]
                             : null,
                         scrollProgress: headerProgress,
-                        showStatusPill: tab != 0,
+                        showStatusPill: true,
+                        statusPillOpacity: pos.clamp(0.0, 1.0),
                         connected: running,
                         busy: busy,
                         statusText: statusText,
@@ -2959,46 +2920,80 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                       );
                     },
                   ),
-                  Expanded(child: FadeTransition(
-                    opacity: _pageOpacity,
+                  Expanded(
                     child: AnimatedBuilder(
-                      animation: _pageOpacity,
-                      builder: (_, child) => Transform.translate(
-                        offset: Offset(_pageSlideDir * 20.0 * (1.0 - _pageOpacity.value), 0),
-                        child: child,
-                      ),
-                      child: NotificationListener<ScrollNotification>(
-                        onNotification: (event) {
-                          if (event.depth != 0) return false;
-                          if (event is ScrollStartNotification && event.dragDetails != null) {
-                            _userSwiping = true;
-                          } else if (event is ScrollUpdateNotification && _userSwiping && _pager.positions.length == 1) {
-                            _swipeProgress.value = _pager.page;
-                          } else if (event is ScrollEndNotification && _userSwiping) {
-                            _userSwiping = false;
-                            _swipeProgress.value = null;
-                          }
-                          return false;
-                        },
-                        child: PageView.builder(
-                          controller: _pager,
-                          itemCount: _titles.length,
-                          physics: preferences['pageSwipe'] == true
-                              ? const _GentlePageScrollPhysics(parent: BouncingScrollPhysics())
-                              : const NeverScrollableScrollPhysics(),
-                          onPageChanged: (i) {
-                            if (_targetPage == null && tab != i) setState(() => tab = i);
+                      animation: _pageFade,
+                      builder: (_, child) {
+                        final t = _pageFade.value;
+                        final curved = const Cubic(0.16, 1.0, 0.3, 1.0).transform(t);
+                        final opacity = Curves.easeOut.transform(
+                          (t / 0.65).clamp(0.0, 1.0).toDouble(),
+                        );
+                        final dx = _tabDir * 28.0 * (1.0 - curved);
+                        final scale = 0.985 + 0.015 * curved;
+                        return Opacity(
+                          opacity: opacity,
+                          child: Transform.translate(
+                            offset: Offset(dx, 0),
+                            child: Transform.scale(scale: scale, child: child),
+                          ),
+                        );
+                      },
+                      child: GlassScrollScope(
+                        listenable: _glassMotion,
+                        child: NotificationListener<ScrollNotification>(
+                          onNotification: (event) {
+                            if (event.depth != 0) return false;
+                            if (event is ScrollStartNotification &&
+                                event.dragDetails != null) {
+                              _userSwiping = true;
+                              _pendingTab = null;
+                            } else if (event is ScrollUpdateNotification &&
+                                _userSwiping &&
+                                _pager.positions.length == 1) {
+                              _swipeProgress.value = _pager.page;
+                            } else if (event is ScrollEndNotification &&
+                                _userSwiping) {
+                              _userSwiping = false;
+                              _swipeProgress.value = null;
+                              final settled =
+                                  _pendingTab ??
+                                  (_pager.positions.length == 1 &&
+                                          _pager.position.haveDimensions
+                                      ? (_pager.page?.round() ?? tab)
+                                      : tab);
+                              _pendingTab = null;
+                              if (settled != tab) {
+                                if (settled != 0) hoveredTopology = null;
+                                setState(() => tab = settled);
+                              }
+                            }
+                            return false;
                           },
-                          itemBuilder: (_, i) => _SwipePageTransition(
+                          child: PageView.builder(
                             controller: _pager,
-                            index: i,
-                            activeTab: tab,
-                            child: _page(i),
+                            allowImplicitScrolling: true,
+                            itemCount: _titles.length,
+                            physics: preferences['pageSwipe'] == true
+                                ? const _GentlePageScrollPhysics(
+                                    parent: BouncingScrollPhysics(),
+                                  )
+                                : const NeverScrollableScrollPhysics(),
+                            onPageChanged: (i) {
+                              if (_targetPage != null) return;
+                              if (_userSwiping) {
+                                _pendingTab = i;
+                              } else if (tab != i) {
+                                if (i != 0) hoveredTopology = null;
+                                setState(() => tab = i);
+                              }
+                            },
+                            itemBuilder: (_, i) => _page(i),
                           ),
                         ),
                       ),
                     ),
-                  )),
+                  ),
                 ],
               ),
               bottomNavigationBar: MediaQuery.viewInsetsOf(context).bottom > 0 ? null : GlassBottomNav(

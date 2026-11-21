@@ -166,7 +166,7 @@ impl Workspace {
                             .items_center()
                             .justify_between()
                             .gap_2()
-                            .child(div().min_w_0().truncate().text_size(px(13.)).child(level_label))
+                            .child(div().min_w_0().truncate().text_sm().child(level_label))
                             .child(
                                 svg()
                                     .path("select-caret")
@@ -208,8 +208,8 @@ impl Workspace {
             .gap_2()
             .child(
                 crate::glass::backdrop_heading("日志", palette, cx)
-                    .text_size(px(26.))
-                    .line_height(px(32.))
+                    .text_size(crate::theme::text_px(26.))
+                    .line_height(rems(32. / 16.))
                     .font_weight(FontWeight::BOLD),
             )
             .child(
@@ -500,7 +500,7 @@ impl Workspace {
                             .gap_2()
                             .child(
                                 div()
-                                    .text_size(px(16.))
+                                    .text_base()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("无法连接 Clash API"),
                             )
@@ -630,7 +630,7 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap_3()
-                        .text_size(px(11.5))
+                        .text_size(crate::theme::text_px(11.5))
                         .text_color(p.muted())
                         .child(div().flex_1().h(px(0.5)).bg(p.line()))
                         .child(div().flex_none().child(entry.payload.clone()))
@@ -683,8 +683,8 @@ impl Workspace {
                             .w(px(62.))
                             .flex_none()
                             .font_family("Consolas")
-                            .text_size(px(11.5))
-                            .line_height(px(18.))
+                            .text_size(crate::theme::text_px(11.5))
+                            .line_height(rems(18. / 16.))
                             .text_color(p.muted())
                             .child(entry.time.clone()),
                     )
@@ -698,7 +698,7 @@ impl Workspace {
                             .justify_center()
                             .rounded_full()
                             .bg(pill_bg)
-                            .text_size(px(10.5))
+                            .text_size(crate::theme::text_px(10.5))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(pill_fg)
                             .child(label),

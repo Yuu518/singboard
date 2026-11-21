@@ -153,7 +153,7 @@ impl Overview {
                     .child(img(self.brand.clone()).size(px(24.)).rounded_md())
                     .child(
                         div()
-                            .text_size(px(15.))
+                            .text_size(crate::theme::text_px(15.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("singboard"),
                     ),
@@ -170,7 +170,7 @@ impl Overview {
                     .px_3()
                     .h(px(35.))
                     .rounded(px(12.))
-                    .text_size(px(13.))
+                    .text_size(crate::theme::text_px(13.))
                     .cursor_pointer()
                     .when(selected, |item| {
                         item.bg(palette.primary_soft())
@@ -352,7 +352,7 @@ impl Overview {
                         div()
                             .mt(px(6. * (1. - opacity)))
                             .opacity(opacity)
-                            .text_size(px(15.))
+                            .text_size(crate::theme::text_px(15.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(palette.ink())
                             .child(page_title),

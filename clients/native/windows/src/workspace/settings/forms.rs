@@ -128,7 +128,7 @@ impl Workspace {
                     .gap(px(2.))
                     .child(
                         div()
-                            .text_size(px(13.)).line_height(px(18.))
+                            .text_size(crate::theme::text_px(13.)).line_height(px(18.))
                             .font_weight(FontWeight::MEDIUM)
                             .child(label),
                     )
@@ -513,7 +513,7 @@ impl Workspace {
                             .gap(px(2.))
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(crate::theme::text_px(13.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child("登录后延迟启动"),
                             )
@@ -745,7 +745,7 @@ impl Workspace {
                     .gap(px(2.))
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(crate::theme::text_px(13.))
                             .font_weight(FontWeight::MEDIUM)
                             .child("当前端点"),
                     )
@@ -898,7 +898,7 @@ impl Workspace {
                         .gap(px(2.))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(crate::theme::text_px(13.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .child(if new { "新增端点" } else { "编辑端点" }),
                         )
@@ -997,7 +997,7 @@ impl Workspace {
                         .gap(px(2.))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(crate::theme::text_px(13.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .child("默认测速地址"),
                         )
@@ -1405,7 +1405,7 @@ impl Workspace {
                                     .py(px(1.))
                                     .rounded_full()
                                     .bg(p.fill_strong())
-                                    .text_size(px(11.))
+                                    .text_size(crate::theme::text_px(11.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(p.ink())
                                     .child(rec.record_type.clone()),
@@ -1426,14 +1426,14 @@ impl Workspace {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(crate::theme::text_px(11.))
                                             .text_color(p.muted())
                                             .child(format!("TTL {}", rec.ttl)),
                                     )
                                     .when(!rec.geo.is_empty(), |el| {
                                         el.child(
                                             div()
-                                                .text_size(px(11.))
+                                                .text_size(crate::theme::text_px(11.))
                                                 .text_color(p.muted())
                                                 .truncate()
                                                 .child(rec.geo.clone()),
@@ -1454,7 +1454,7 @@ impl Workspace {
                 div()
                     .px_3()
                     .py_2()
-                    .text_size(px(11.))
+                    .text_size(crate::theme::text_px(11.))
                     .text_color(p.muted())
                     .child(view.source_label.clone()),
             );
@@ -1631,7 +1631,7 @@ impl Workspace {
                             .gap(px(6.))
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(crate::theme::text_px(13.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child("singboard 面板"),
                             )
@@ -1683,7 +1683,7 @@ impl Workspace {
                             .gap_2()
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(crate::theme::text_px(13.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child("GitHub Token"),
                             )
@@ -1694,7 +1694,7 @@ impl Workspace {
                                         .py(px(1.))
                                         .rounded_full()
                                         .bg(p.fill())
-                                        .text_size(px(11.))
+                                        .text_size(crate::theme::text_px(11.))
                                         .text_color(p.muted())
                                         .child("已填写"),
                                 )
@@ -1822,7 +1822,7 @@ impl Workspace {
                     .gap(px(2.))
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(crate::theme::text_px(13.))
                             .font_weight(FontWeight::MEDIUM)
                             .child(label),
                     )
@@ -1860,7 +1860,7 @@ impl Workspace {
                 .gap_4()
                 .child(
                     div()
-                        .text_size(px(16.))
+                        .text_size(crate::theme::text_px(16.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("停止核心？"),
                 )
@@ -1916,7 +1916,7 @@ impl Workspace {
                 .gap_4()
                 .child(
                     div()
-                        .text_size(px(16.))
+                        .text_size(crate::theme::text_px(16.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("卸载 Windows 服务？"),
                 )
@@ -1986,7 +1986,7 @@ impl Workspace {
                     .gap_4()
                     .child(
                         div()
-                            .text_size(px(16.))
+                            .text_size(crate::theme::text_px(16.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(format!("删除端点「{name}」？")),
                     )
@@ -2059,7 +2059,7 @@ impl Workspace {
                     .gap_4()
                     .child(
                         div()
-                            .text_size(px(16.))
+                            .text_size(crate::theme::text_px(16.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("GitHub Token"),
                     )
@@ -2107,7 +2107,7 @@ impl Workspace {
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(crate::theme::text_px(11.))
                                     .text_color(p.muted())
                                     .child("公开仓库不需要任何权限，建议创建一个不勾选权限的 Fine-grained Token。"),
                             ),
@@ -2192,7 +2192,7 @@ impl Workspace {
                     .gap_4()
                     .child(
                         div()
-                            .text_size(px(16.))
+                            .text_size(crate::theme::text_px(16.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("发现新核心版本"),
                     )

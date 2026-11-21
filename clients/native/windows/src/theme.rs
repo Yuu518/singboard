@@ -1,4 +1,4 @@
-use gpui::{App, Global, Hsla, Rgba, Window, WindowAppearance, rgb, rgba, transparent_black};
+use gpui::{App, Global, Hsla, Rems, Rgba, Window, WindowAppearance, px, rems, rgb, rgba, transparent_black};
 use gpui_component::{Theme, ThemeMode};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,20 @@ use windows_sys::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWin
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SystemParametersInfoW,
 };
+use winreg::RegKey;
+use winreg::enums::HKEY_CURRENT_USER;
+
+pub fn text_scale() -> f32 {
+    let raw = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey("Software\\Microsoft\\Accessibility")
+        .and_then(|key| key.get_value::<u32, _>("TextScaleFactor"))
+        .unwrap_or(100);
+    (raw as f32 / 100.).clamp(1., 2.25)
+}
+
+pub fn text_px(size: f32) -> Rems {
+    rems(size / 16.)
+}
 
 pub fn system_ui_font() -> &'static str {
     static FONT: OnceLock<String> = OnceLock::new();
@@ -140,8 +154,11 @@ impl Appearance {
             ThemeMode::Light
         };
         Theme::change(mode, None, cx);
+        let scale = text_scale();
         let theme = Theme::global_mut(cx);
         theme.font_family = system_ui_font().into();
+        theme.font_size = px(16. * scale);
+        theme.mono_font_size = px(13. * scale);
         let palette = Palette(dark);
         let highlight = std::sync::Arc::make_mut(&mut theme.highlight_theme);
         highlight.style.editor_background = Some(transparent_black());

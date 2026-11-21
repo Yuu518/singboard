@@ -76,6 +76,8 @@ class _SettingsPageState extends State<SettingsPage> {
   late double _tint = widget.glassTint;
   bool _saving = false;
   final _inputs = <String, TextEditingController>{};
+  final _focusNodes = <String, FocusNode>{};
+  final _commitHandlers = <String, VoidCallback>{};
   final _open = <String>{};
   final _busy = <String>{};
   final _messages = <String, String>{};
@@ -116,7 +118,8 @@ class _SettingsPageState extends State<SettingsPage> {
       final previous = old.preferences[pref] as String? ?? '';
       final value = widget.preferences[pref] as String? ?? '';
       final input = _inputs[key];
-      if (previous != value && input != null && input.text == previous) {
+      final focused = _focusNodes[key]?.hasFocus ?? false;
+      if (!focused && previous != value && input != null && input.text == previous) {
         input.text = value;
       }
     }
@@ -136,6 +139,9 @@ class _SettingsPageState extends State<SettingsPage> {
     for (final c in _inputs.values) {
       c.dispose();
     }
+    for (final f in _focusNodes.values) {
+      f.dispose();
+    }
     super.dispose();
   }
 
@@ -149,29 +155,50 @@ class _SettingsPageState extends State<SettingsPage> {
   TextEditingController _input(String key, [String initial = '']) =>
       _inputs.putIfAbsent(key, () => TextEditingController(text: initial));
 
+  FocusNode _focusNode(String key, VoidCallback onCommit) {
+    _commitHandlers[key] = onCommit;
+    return _focusNodes.putIfAbsent(key, () {
+      final node = FocusNode();
+      node.addListener(() {
+        if (!node.hasFocus) _commitHandlers[key]?.call();
+      });
+      return node;
+    });
+  }
+
   Widget _glassInput(
     String key,
     String hint, {
     String initial = '',
     bool secret = false,
     bool mono = false,
+    VoidCallback? onCommit,
   }) {
     final c = SingboardColors.of(context);
+    final node = onCommit == null ? null : _focusNode(key, onCommit);
     return TextField(
       controller: _input(key, initial),
+      focusNode: node,
+      textInputAction: onCommit == null ? null : TextInputAction.done,
+      onSubmitted: onCommit == null ? null : (_) => onCommit(),
+      onTapOutside: node == null
+          ? null
+          : (_) {
+              if (node.hasFocus) node.unfocus();
+            },
       onTap: key == 'domain'
           ? () => setState(() => _showDnsHistory = true)
           : null,
       obscureText: secret,
       autocorrect: false,
       style: TextStyle(
-        fontSize: 13,
+        fontSize: 14,
         color: c.ink,
         fontFamily: mono ? 'monospace' : null,
       ),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: TextStyle(fontSize: 13, color: c.muted),
+        hintStyle: TextStyle(fontSize: 14, color: c.muted),
         isDense: true,
         filled: true,
         fillColor: c.fill,
@@ -214,7 +241,7 @@ class _SettingsPageState extends State<SettingsPage> {
               child: Text(
                 label,
                 style: TextStyle(
-                  fontSize: 12.5,
+                  fontSize: 14,
                   fontWeight: FontWeight.w500,
                   color: fg,
                 ),
@@ -261,7 +288,7 @@ class _SettingsPageState extends State<SettingsPage> {
               child: Text(
                 label,
                 style: TextStyle(
-                  fontSize: 12.5,
+                  fontSize: 14,
                   fontWeight: FontWeight.w500,
                   color: fg,
                 ),
@@ -567,7 +594,7 @@ class _SettingsPageState extends State<SettingsPage> {
               const SizedBox(height: 8),
               Text(
                 message,
-                style: TextStyle(fontSize: 13, height: 1.5, color: c.muted),
+                style: TextStyle(fontSize: 14, height: 1.5, color: c.muted),
               ),
               const SizedBox(height: 16),
               Row(
@@ -593,7 +620,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       child: Text(
                         confirmLabel,
                         style: const TextStyle(
-                          fontSize: 12.5,
+                          fontSize: 14,
                           fontWeight: FontWeight.w500,
                           color: Colors.white,
                         ),
@@ -640,7 +667,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   Text(
                     '填写后，检查核心和面板更新都会带上这个 Token，不受匿名限流影响。Token 只保存在本机，只发给 api.github.com。',
                     style: TextStyle(
-                      fontSize: 12.5,
+                      fontSize: 14,
                       height: 1.5,
                       color: c.muted,
                     ),
@@ -654,13 +681,13 @@ class _SettingsPageState extends State<SettingsPage> {
                           obscureText: !reveal,
                           autocorrect: false,
                           style: TextStyle(
-                            fontSize: 13,
+                            fontSize: 14,
                             fontFamily: 'monospace',
                             color: c.ink,
                           ),
                           decoration: InputDecoration(
                             hintText: 'github_pat_… 或 ghp_…',
-                            hintStyle: TextStyle(fontSize: 13, color: c.muted),
+                            hintStyle: TextStyle(fontSize: 14, color: c.muted),
                             isDense: true,
                             filled: true,
                             fillColor: c.fill,
@@ -941,18 +968,14 @@ class _SettingsPageState extends State<SettingsPage> {
               style: TextStyle(fontSize: 12, color: c.muted),
             ),
             const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: _glassInput(
-                    'test_url',
-                    'https://www.gstatic.com/generate_204',
-                    mono: true,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                _settingsBtn('保存', () => save()),
-              ],
+            _glassInput(
+              'test_url',
+              'https://www.gstatic.com/generate_204',
+              mono: true,
+              onCommit: () {
+                final saved = (widget.preferences['latencyTestUrl'] as String? ?? '').trim();
+                if (test.text.trim() != saved) save();
+              },
             ),
           ],
         ),
@@ -1388,19 +1411,18 @@ class _SettingsPageState extends State<SettingsPage> {
           const SizedBox(height: 2),
           Text(desc, style: TextStyle(fontSize: 12, color: c.muted)),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _glassInput(
-                  key,
-                  placeholder,
-                  initial: values[key]!,
-                  mono: true,
-                ),
-              ),
-              const SizedBox(width: 8),
-              _settingsBtn('保存', () => save(key, _input(key).text)),
-            ],
+          _glassInput(
+            key,
+            placeholder,
+            initial: values[key]!,
+            mono: true,
+            onCommit: () {
+              final latest = _updateValues();
+              final next = _input(key).text.trim();
+              if (next != (latest[key] ?? '').trim()) {
+                _run('coreUpdate', 'update_preferences', {...latest, key: next});
+              }
+            },
           ),
         ],
       ),
@@ -2097,7 +2119,7 @@ class _SettingsSelectState extends State<_SettingsSelect> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontSize: 13,
+                      fontSize: 14,
                       fontFamily: widget.mono ? 'monospace' : null,
                       color: c.ink,
                     ),

@@ -215,13 +215,13 @@ impl Render for SetupWizard {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_size(px(18.))
+                                    .text_lg()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("初始化向导"),
                             )
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_sm()
                                     .text_color(p.muted())
                                     .child("只需填写工作目录，系统会自动扫描该目录及其子目录，识别 sing-box 核心与配置文件。"),
                             ),
@@ -233,7 +233,7 @@ impl Render for SetupWizard {
                             .gap_2()
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_sm()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(p.muted())
                                     .child("路径配置"),
@@ -271,7 +271,7 @@ impl Render for SetupWizard {
                                                     .rounded(px(10.))
                                                     .bg(p.fill())
                                                     .hover(|s| s.bg(p.fill_strong()))
-                                                    .text_xs()
+                                                    .text_sm()
                                                     .font_weight(FontWeight::MEDIUM)
                                                     .child("浏览")
                                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -289,7 +289,7 @@ impl Render for SetupWizard {
                             .gap_2()
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_sm()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(p.muted())
                                     .child("Clash API"),
@@ -344,7 +344,7 @@ impl Render for SetupWizard {
                                     .py(px(7.))
                                     .rounded_full()
                                     .hover(|s| s.bg(p.hover()))
-                                    .text_xs()
+                                    .text_sm()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(p.muted())
                                     .child("前往设置页")
@@ -360,7 +360,7 @@ impl Render for SetupWizard {
                                     .py(px(7.))
                                     .rounded_full()
                                     .bg(p.primary_fill())
-                                    .text_xs()
+                                    .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(rgb(0xffffff))
                                     .child(if self.saving {

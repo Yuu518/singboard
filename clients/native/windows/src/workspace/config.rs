@@ -797,7 +797,7 @@ impl Workspace {
                     .child(
                         div()
                             .relative()
-                            .text_size(px(17.))
+                            .text_size(crate::theme::text_px(17.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("添加本地配置"),
                     )
@@ -907,7 +907,7 @@ impl Workspace {
                     .child(
                         div()
                             .relative()
-                            .text_size(px(17.))
+                            .text_size(crate::theme::text_px(17.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("添加远程配置"),
                     )
@@ -1013,7 +1013,7 @@ impl Workspace {
                     .child(
                         div()
                             .relative()
-                            .text_size(px(17.))
+                            .text_size(crate::theme::text_px(17.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("修改信息"),
                     )
@@ -1158,7 +1158,7 @@ impl Workspace {
                     .child(
                         div()
                             .relative()
-                            .text_size(px(17.))
+                            .text_size(crate::theme::text_px(17.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("删除配置"),
                     )
@@ -1272,7 +1272,7 @@ impl Workspace {
             .gap_3()
             .child(
                 crate::glass::backdrop_heading("配置", palette, cx)
-                    .text_size(px(26.))
+                    .text_size(crate::theme::text_px(26.))
                     .line_height(px(32.))
                     .font_weight(FontWeight::BOLD),
             )
@@ -1506,7 +1506,7 @@ impl Workspace {
                             div()
                                 .min_w_0()
                                 .flex_1()
-                                .text_size(px(15.))
+                                .text_size(crate::theme::text_px(15.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .truncate()
                                 .child(profile.name.clone()),
@@ -1528,7 +1528,7 @@ impl Workspace {
                                 .bg(palette.fill())
                                 .flex()
                                 .items_center()
-                                .text_size(px(11.))
+                                .text_size(crate::theme::text_px(11.))
                                 .text_color(palette.muted())
                                 .gap_1()
                                 .child(
@@ -1548,7 +1548,7 @@ impl Workspace {
                                 .flex_1()
                                 .min_w_0()
                                 .font_family("Consolas")
-                                .text_size(px(11.5))
+                                .text_size(crate::theme::text_px(11.5))
                                 .text_color(palette.muted())
                                 .truncate()
                                 .child(source_label(&profile.kind, &profile.source)),

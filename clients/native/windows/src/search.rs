@@ -241,7 +241,7 @@ impl Render for Search {
             } else {
                 palette.control_rim()
             })
-            .text_size(px(13.))
+            .text_sm()
             .text_color(palette.ink())
             .cursor_text()
             .child(crate::glass::control_layer(palette, px(9.), true))

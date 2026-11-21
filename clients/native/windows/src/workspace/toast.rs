@@ -162,8 +162,8 @@ impl Render for ToastHost {
                                 div()
                                     .min_w_0()
                                     .flex_1()
-                                    .text_size(px(14. * scale))
-                                    .line_height(px(19. * scale))
+                                    .text_size(crate::theme::text_px(14. * scale))
+                                    .line_height(rems(19. * scale / 16.))
                                     .text_color(p.ink())
                                     .child(entry.text.clone()),
                             )

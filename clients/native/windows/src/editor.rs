@@ -697,7 +697,7 @@ impl Render for Editor {
                         .bg(palette.fill())
                         .flex()
                         .items_center()
-                        .text_size(px(11.))
+                        .text_size(crate::theme::text_px(11.))
                         .text_color(palette.muted())
                         .child("未保存"),
                 )
@@ -802,7 +802,7 @@ impl Render for Editor {
                         )
                         .child(
                             crate::glass::backdrop_heading(inline.name.clone(), palette, cx)
-                                .text_size(px(22.))
+                                .text_size(crate::theme::text_px(22.))
                                 .line_height(px(28.))
                                 .font_weight(FontWeight::BOLD),
                         )
