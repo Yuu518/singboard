@@ -1,7 +1,17 @@
 use std::fs;
+use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 pub const SERVICE_ERROR_LOG_NAME: &str = "singbox_last_error.log";
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+const MAX_LOG_DIR_DEPTH: usize = 2;
+const MAX_LOG_DIR_VISITS: usize = 128;
+
+pub fn is_reparse_point(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|meta| meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+        .unwrap_or(false)
+}
 
 pub fn write_panel_sid(service_name: &str, sid: &str) -> Result<(), String> {
     if !crate::ipc::valid_sid(sid) {
@@ -31,15 +41,23 @@ fn is_log_dir_name(name: &str) -> bool {
 }
 
 fn find_log_dir(base_dir: &Path) -> Option<PathBuf> {
+    if is_reparse_point(base_dir) {
+        return None;
+    }
     for candidate in ["log", "logs"] {
         let path = base_dir.join(candidate);
-        if path.is_dir() {
+        if path.is_dir() && !is_reparse_point(&path) {
             return Some(path);
         }
     }
 
-    let mut stack = vec![base_dir.to_path_buf()];
-    while let Some(dir) = stack.pop() {
+    let mut stack = vec![(base_dir.to_path_buf(), 0usize)];
+    let mut visited = 0usize;
+    while let Some((dir, depth)) = stack.pop() {
+        if depth >= MAX_LOG_DIR_DEPTH || visited >= MAX_LOG_DIR_VISITS {
+            continue;
+        }
+        visited += 1;
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(_) => continue,
@@ -47,7 +65,10 @@ fn find_log_dir(base_dir: &Path) -> Option<PathBuf> {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_dir() {
+            let Ok(meta) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !meta.is_dir() {
                 continue;
             }
 
@@ -56,7 +77,9 @@ fn find_log_dir(base_dir: &Path) -> Option<PathBuf> {
                     return Some(path);
                 }
             }
-            stack.push(path);
+            if depth + 1 < MAX_LOG_DIR_DEPTH {
+                stack.push((path, depth + 1));
+            }
         }
     }
 

@@ -12,9 +12,9 @@ pub fn apply_update(
 ) -> Result<bool, String> {
     let status = scm::query_service_status(service)?;
     if status.state == "not_installed" {
-        return crate::commands::update::platform::swap_and_restart(
-            progress, files, target, service,
-        );
+        progress("replace");
+        super::source_files::SourceFiles::replace(target, files)?.commit();
+        return Ok(false);
     }
     let current = Snapshot::read(service)?;
     let _source_directory =
@@ -40,7 +40,6 @@ pub fn apply_update(
             &current.working_dir,
         )?
     };
-    let next = capture_update(&previous, files)?;
     let was_running = matches!(status.state.as_str(), "running" | "starting");
     progress("replace");
     if was_running {
@@ -50,9 +49,17 @@ pub fn apply_update(
         if was_running {
             let _ = scm::start_service(service);
         }
-        next.discard_replaced_by(&previous);
         return Err(error);
     }
+    let next = match capture_update(&previous, files) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            if was_running {
+                let _ = scm::start_service(service);
+            }
+            return Err(error);
+        }
+    };
     let mut source_files = None;
     let result = (|| {
         source_files = Some(super::source_files::SourceFiles::replace(&target, files)?);

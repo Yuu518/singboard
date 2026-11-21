@@ -22,7 +22,30 @@ fn to_wide(s: &str) -> Vec<u16> {
 }
 
 fn ps_single_quoted(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    let cleaned: String = s
+        .chars()
+        .filter(|c| !matches!(c, '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}'))
+        .collect();
+    format!("'{}'", cleaned.replace('\'', "''"))
+}
+
+fn system_root() -> std::path::PathBuf {
+    std::env::var_os("SYSTEMROOT")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"))
+}
+
+fn powershell_exe() -> std::path::PathBuf {
+    system_root().join(r"System32\WindowsPowerShell\v1.0\powershell.exe")
+}
+
+fn schtasks_exe() -> std::path::PathBuf {
+    system_root().join(r"System32\schtasks.exe")
+}
+
+fn sc_exe() -> std::path::PathBuf {
+    system_root().join(r"System32\sc.exe")
 }
 
 fn to_wide_multi(strings: &[&str]) -> Vec<u16> {
@@ -155,8 +178,41 @@ pub fn start_service(service_name: &str) -> Result<(), String> {
                 && (status.dwCurrentState == SERVICE_START_PENDING
                     || status.dwCurrentState == SERVICE_STOP_PENDING)
             {
-                // Kill zombie process if it exists
-                if status.dwProcessId != 0 {
+                let mut last_checkpoint = status.dwCheckPoint;
+                let mut stagnant_ticks = 0u32;
+                let mut settled = false;
+                for _ in 0..30 {
+                    thread::sleep(Duration::from_millis(500));
+                    let qok2 = QueryServiceStatusEx(
+                        svc,
+                        SC_STATUS_PROCESS_INFO,
+                        &mut status as *mut _ as *mut u8,
+                        std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
+                        &mut bytes_needed,
+                    );
+                    if qok2 == 0 {
+                        continue;
+                    }
+                    if status.dwCurrentState == SERVICE_RUNNING {
+                        CloseServiceHandle(svc);
+                        CloseServiceHandle(scm);
+                        return Ok(());
+                    }
+                    if status.dwCurrentState == SERVICE_STOPPED {
+                        settled = true;
+                        break;
+                    }
+                    if status.dwCheckPoint != last_checkpoint {
+                        last_checkpoint = status.dwCheckPoint;
+                        stagnant_ticks = 0;
+                    } else {
+                        stagnant_ticks += 1;
+                        if stagnant_ticks >= 20 {
+                            break;
+                        }
+                    }
+                }
+                if !settled && status.dwProcessId != 0 {
                     let handle = windows_sys::Win32::System::Threading::OpenProcess(
                         windows_sys::Win32::System::Threading::PROCESS_TERMINATE,
                         0,
@@ -166,18 +222,18 @@ pub fn start_service(service_name: &str) -> Result<(), String> {
                         windows_sys::Win32::System::Threading::TerminateProcess(handle, 1);
                         windows_sys::Win32::Foundation::CloseHandle(handle);
                     }
-                }
-                for _ in 0..20 {
-                    thread::sleep(Duration::from_millis(500));
-                    let qok2 = QueryServiceStatusEx(
-                        svc,
-                        SC_STATUS_PROCESS_INFO,
-                        &mut status as *mut _ as *mut u8,
-                        std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
-                        &mut bytes_needed,
-                    );
-                    if qok2 != 0 && status.dwCurrentState == SERVICE_STOPPED {
-                        break;
+                    for _ in 0..20 {
+                        thread::sleep(Duration::from_millis(500));
+                        let qok2 = QueryServiceStatusEx(
+                            svc,
+                            SC_STATUS_PROCESS_INFO,
+                            &mut status as *mut _ as *mut u8,
+                            std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
+                            &mut bytes_needed,
+                        );
+                        if qok2 != 0 && status.dwCurrentState == SERVICE_STOPPED {
+                            break;
+                        }
                     }
                 }
             }
@@ -264,27 +320,63 @@ pub fn stop_service(service_name: &str) -> Result<(), String> {
         }
 
         let mut status: SERVICE_STATUS = std::mem::zeroed();
-        let ok = ControlService(svc, SERVICE_CONTROL_STOP, &mut status);
+        let mut ok = ControlService(svc, SERVICE_CONTROL_STOP, &mut status);
 
         if ok == 0 {
-            let err = GetLastError();
-            CloseServiceHandle(svc);
-            CloseServiceHandle(scm);
-            if err == 1062 {
-                if old_pid != 0 {
-                    let handle = windows_sys::Win32::System::Threading::OpenProcess(
-                        windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE,
-                        0,
-                        old_pid,
-                    );
-                    if !handle.is_null() {
-                        windows_sys::Win32::System::Threading::WaitForSingleObject(handle, 5000);
-                        windows_sys::Win32::Foundation::CloseHandle(handle);
+            let mut err = GetLastError();
+            if err == 1061 {
+                for _ in 0..50 {
+                    thread::sleep(Duration::from_millis(500));
+                    let mut bytes_needed: u32 = 0;
+                    let mut proc_status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
+                    if QueryServiceStatusEx(
+                        svc,
+                        SC_STATUS_PROCESS_INFO,
+                        &mut proc_status as *mut _ as *mut u8,
+                        std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
+                        &mut bytes_needed,
+                    ) == 0
+                    {
+                        continue;
+                    }
+                    if proc_status.dwProcessId != 0 {
+                        old_pid = proc_status.dwProcessId;
+                    }
+                    if proc_status.dwCurrentState == SERVICE_STOPPED {
+                        err = 1062;
+                        break;
+                    }
+                    if proc_status.dwCurrentState == SERVICE_RUNNING {
+                        ok = ControlService(svc, SERVICE_CONTROL_STOP, &mut status);
+                        if ok != 0 {
+                            break;
+                        }
+                        err = GetLastError();
+                        if err != 1061 {
+                            break;
+                        }
                     }
                 }
-                return Ok(());
             }
-            return Err(format!("ControlService(STOP) failed: error {}", err));
+            if ok == 0 {
+                CloseServiceHandle(svc);
+                CloseServiceHandle(scm);
+                if err == 1062 {
+                    if old_pid != 0 {
+                        let handle = windows_sys::Win32::System::Threading::OpenProcess(
+                            windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE,
+                            0,
+                            old_pid,
+                        );
+                        if !handle.is_null() {
+                            windows_sys::Win32::System::Threading::WaitForSingleObject(handle, 5000);
+                            windows_sys::Win32::Foundation::CloseHandle(handle);
+                        }
+                    }
+                    return Ok(());
+                }
+                return Err(format!("ControlService(STOP) failed: error {}", err));
+            }
         }
 
         let mut stopped = false;
@@ -497,6 +589,15 @@ pub fn install_service(
             &mut failure as *mut _ as *mut _,
         );
 
+        let mut failure_flag = SERVICE_FAILURE_ACTIONS_FLAG {
+            fFailureActionsOnNonCrashFailures: 1,
+        };
+        ChangeServiceConfig2W(
+            svc,
+            SERVICE_CONFIG_FAILURE_ACTIONS_FLAG,
+            &mut failure_flag as *mut _ as *mut _,
+        );
+
         CloseServiceHandle(svc);
         Ok(())
     }
@@ -536,9 +637,11 @@ pub fn create_startup_task(
     let action_args = format!("start {}", super::elevation::quote_arg(service_name));
     let delay = startup_delay_seconds.min(3600);
     let delay_duration = format!("PT{}S", delay);
+    let sc_path = sc_exe().to_string_lossy().to_string();
     let script = format!(
-        "$u={user};\
-         $a=New-ScheduledTaskAction -Execute 'sc.exe' -Argument {args};\
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;\
+         $u={user};\
+         $a=New-ScheduledTaskAction -Execute {sc_bin} -Argument {args};\
          $t=New-ScheduledTaskTrigger -AtLogOn -User $u;\
          $t.Delay={delay};\
          $s=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit 0 -Compatibility Vista -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1);\
@@ -550,6 +653,7 @@ pub fn create_startup_task(
          $created=Get-ScheduledTask -TaskName {name};\
          $actual=[string]$created.Triggers[0].Delay;\
          if ($actual -ne {delay}) {{ throw \"计划任务延迟保存不一致: expected {delay_text}, actual $actual\" }}",
+        sc_bin = ps_single_quoted(&sc_path),
         args = ps_single_quoted(&action_args),
         name = ps_single_quoted(&task_name),
         delay = ps_single_quoted(&delay_duration),
@@ -557,7 +661,7 @@ pub fn create_startup_task(
         user = ps_single_quoted(user_sid),
     );
 
-    let output = std::process::Command::new("powershell")
+    let output = std::process::Command::new(powershell_exe())
         .args(["-NonInteractive", "-NoProfile", "-Command", &script])
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .output()
@@ -584,7 +688,8 @@ pub fn copy_startup_task(old_name: &str, new_name: &str) -> Result<bool, String>
     let old_task = format!("singboard-autostart-{old_name}");
     let new_task = format!("singboard-autostart-{new_name}");
     let script = format!(
-        "$ErrorActionPreference='Stop';\
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;\
+         $ErrorActionPreference='Stop';\
          $task=Get-ScheduledTask -TaskName {old} -ErrorAction SilentlyContinue;\
          if ($null -eq $task) {{ Write-Output 'absent'; exit 0 }};\
          [xml]$xml=Export-ScheduledTask -TaskName {old};\
@@ -596,7 +701,7 @@ pub fn copy_startup_task(old_name: &str, new_name: &str) -> Result<bool, String>
         new = ps_single_quoted(&new_task),
         args = ps_single_quoted(&format!("start {}", super::elevation::quote_arg(new_name))),
     );
-    let output = std::process::Command::new("powershell")
+    let output = std::process::Command::new(powershell_exe())
         .args(["-NonInteractive", "-NoProfile", "-Command", &script])
         .creation_flags(0x08000000)
         .output()
@@ -617,16 +722,22 @@ pub fn delete_startup_task(service_name: &str) -> Result<(), String> {
     if !startup_task_exists(service_name) {
         return Ok(());
     }
-    let output = std::process::Command::new("schtasks")
-        .args(["/Delete", "/TN", &task_name, "/F"])
+    let script = format!(
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;\
+         $ErrorActionPreference='Stop';\
+         Unregister-ScheduledTask -TaskName {name} -Confirm:$false",
+        name = ps_single_quoted(&task_name),
+    );
+    let output = std::process::Command::new(powershell_exe())
+        .args(["-NonInteractive", "-NoProfile", "-Command", &script])
         .creation_flags(0x08000000)
         .output()
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
-        return Err(format!(
-            "删除自启任务失败: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(format!("删除自启任务失败: {}", detail));
     }
     Ok(())
 }
@@ -635,7 +746,7 @@ pub fn startup_task_exists(service_name: &str) -> bool {
     use std::os::windows::process::CommandExt;
 
     let task_name = format!("singboard-autostart-{}", service_name);
-    std::process::Command::new("schtasks")
+    std::process::Command::new(schtasks_exe())
         .args(["/Query", "/TN", &task_name])
         .creation_flags(0x08000000)
         .output()

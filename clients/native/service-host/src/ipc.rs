@@ -102,7 +102,11 @@ pub fn server(name: &str, sid: &str, read_only: bool) -> io::Result<NamedPipeSer
             "invalid user SID",
         ));
     }
-    let sddl = wide(&format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;{sid})"));
+    let sddl = if read_only {
+        wide(&format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;{sid})"))
+    } else {
+        wide("D:P(A;;GA;;;SY)(A;;GA;;;BA)")
+    };
     let mut descriptor = std::ptr::null_mut();
     if unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(

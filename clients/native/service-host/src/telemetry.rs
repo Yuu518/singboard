@@ -45,13 +45,20 @@ impl Server {
                 tokio::select! {
                     _ = &mut stopped => break,
                     connected = pipe.connect() => {
-                        if connected.is_err() { break; }
+                        if connected.is_err() {
+                            let _ = pipe.disconnect();
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                            continue;
+                        }
                         let snapshot = Snapshot { version: 1, pid: std::process::id(), uptime_seconds: started.elapsed().as_secs() };
                         let _ = tokio::time::timeout(Duration::from_millis(250), ipc::send(&mut pipe, &snapshot)).await;
                         // Wait for the reader to close, bounded so a stalled client cannot monopolize the endpoint.
-                        let deadline = Instant::now() + Duration::from_millis(250);
-                        while Instant::now() < deadline && ipc::client_pid(&pipe).is_ok() {
-                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        let deadline = Instant::now() + Duration::from_millis(150);
+                        while Instant::now() < deadline {
+                            match pipe.try_write(&[]) {
+                                Err(e) if e.kind() == io::ErrorKind::BrokenPipe || e.raw_os_error() == Some(232) => break,
+                                _ => tokio::time::sleep(Duration::from_millis(5)).await,
+                            }
                         }
                         let _ = pipe.disconnect();
                     }

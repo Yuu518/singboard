@@ -6,7 +6,19 @@ pub const APPLY: &str = "--apply-native-update";
 pub const CLEANUP: &str = "--finish-native-update";
 
 pub fn preferences() -> Result<Settings, String> {
-    Settings::load(&service::data_dir()?)
+    static CACHE: std::sync::Mutex<Option<(u64, Settings)>> = std::sync::Mutex::new(None);
+    let rev = Settings::revision();
+    if let Ok(guard) = CACHE.lock()
+        && let Some((cached_rev, settings)) = guard.as_ref()
+        && *cached_rev == rev
+    {
+        return Ok(settings.clone());
+    }
+    let loaded = Settings::load(&service::data_dir()?)?;
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some((rev, loaded.clone()));
+    }
+    Ok(loaded)
 }
 
 pub fn launch_installer(source: &Path, digest: &str) -> Result<(), String> {
@@ -63,7 +75,27 @@ pub fn apply(
     }
     let before = fs::read(&worker).map_err(|e| e.to_string())?;
     let content = fs::read(&staged).map_err(|e| e.to_string())?;
-    if let Err(e) = replace_update(target, &before, &content, digest) {
+    let replaced = match replace_update(target, &before, &content, digest) {
+        Ok(()) => Ok(()),
+        Err(first_err) => {
+            let needs_elevation = target
+                .parent()
+                .and_then(|dir| tempfile::NamedTempFile::new_in(dir).err())
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
+            if needs_elevation {
+                singboard_stream::runtime().block_on(service::request(
+                    service::admin::Operation::ReplacePanel {
+                        source: staged.clone(),
+                        target: target.to_path_buf(),
+                        hash: digest.to_string(),
+                    },
+                ))
+            } else {
+                Err(first_err)
+            }
+        }
+    };
+    if let Err(e) = replaced {
         if fs::read(target).ok().as_ref() == Some(&before) {
             let _ = Command::new(target).args(restart_args).spawn();
         }
@@ -125,7 +157,22 @@ fn replace_update(
     if format!("{:x}", Sha256::digest(content)) != digest {
         return Err("下载的 EXE 已发生变化".into());
     }
-    singboard_stream::config_files::replace_checked(target, content, Some(before)).map(|_| ())
+    let mut last_error = None;
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        match singboard_stream::config_files::replace_checked(target, content, Some(before)) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                if e.contains("磁盘上的配置已更改") {
+                    return Err(e);
+                }
+                last_error = Some(e);
+            }
+        }
+    }
+    Err(last_error.unwrap())
 }
 
 #[cfg(test)]

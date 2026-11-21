@@ -67,7 +67,8 @@ unsafe fn trusted_sid(sid: PSID) -> bool {
         while *value.add(size) != 0 {
             size += 1;
         }
-        String::from_utf16_lossy(std::slice::from_raw_parts(value, size)) == TRUSTED_INSTALLER
+        let text = String::from_utf16_lossy(std::slice::from_raw_parts(value, size));
+        text == TRUSTED_INSTALLER || (text.starts_with("S-1-5-21-") && text.ends_with("-500"))
     };
     unsafe { LocalFree(value as _) };
     result
@@ -114,10 +115,13 @@ unsafe fn validate_descriptor_access(
             return false;
         }
         let header = unsafe { &*(ace as *const ACE_HEADER) };
-        if u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0 || header.AceType == 1 {
+        if u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0
+            || header.AceType == 1
+            || header.AceType == 10
+        {
             continue;
         }
-        if header.AceType != 0 {
+        if header.AceType != 0 && header.AceType != 9 {
             return false;
         }
         let allowed = unsafe { &*(ace as *const ACCESS_ALLOWED_ACE) };

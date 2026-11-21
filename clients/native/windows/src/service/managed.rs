@@ -53,11 +53,15 @@ pub fn migrate(data_dir: &Path, old_name: &str, user_sid: &str) -> Result<(), St
         return Err("服务安装状态已变化，请重新打开面板后重试迁移".into());
     }
     let previous = runtime::Snapshot::read(old_name)?;
-    let snapshot = runtime::capture(
-        &previous.source_core,
-        &previous.source_config,
-        &previous.working_dir,
-    )?;
+    let source_config = if previous.config != previous.source_config
+        && !previous.source_config.exists()
+        && previous.config.is_file()
+    {
+        &previous.config
+    } else {
+        &previous.source_config
+    };
+    let snapshot = runtime::capture(&previous.source_core, source_config, &previous.working_dir)?;
     let was_running = matches!(
         scm::query_service_status(old_name)?.state.as_str(),
         "running" | "starting"

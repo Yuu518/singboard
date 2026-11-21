@@ -68,44 +68,44 @@ pub fn status() -> Result<Status, String> {
     })
 }
 
-static STARTUP_SYNC: tokio::sync::OnceCell<Result<String, String>> =
-    tokio::sync::OnceCell::const_new();
+static STARTUP_SYNC: tokio::sync::Mutex<Option<String>> = tokio::sync::Mutex::const_new(None);
 
 pub async fn sync() -> Result<String, String> {
-    STARTUP_SYNC
-        .get_or_init(|| async {
-            let dir = data_dir()?;
-            let operation = tokio::task::spawn_blocking(move || {
-                if scm::query_service_status(SERVICE_NAME)?.state == "not_installed" {
-                    return Ok::<_, String>(
-                        managed::legacy_service_name(&dir)?
-                            .map(|service| admin::Operation::Migrate { service }),
-                    );
-                }
-                Ok(match helper::sync_needed(SERVICE_NAME)? {
-                    helper::SyncNeed::UpToDate => None,
-                    _ => Some(admin::Operation::Sync {
-                        service: SERVICE_NAME.into(),
-                    }),
-                })
-            })
-            .await
-            .map_err(|e| e.to_string())??;
-            if let Some(operation) = operation {
-                let result = admin::request(
-                    operation,
-                    data_dir()?,
-                    singboard_service::ipc::current_user_sid().map_err(|e| e.to_string())?,
-                    |_| {},
-                )
-                .await?;
-                Ok(result.as_str().unwrap_or("updated").to_string())
-            } else {
-                Ok("ok".into())
-            }
+    let mut guard = STARTUP_SYNC.lock().await;
+    if let Some(cached) = guard.as_ref() {
+        return Ok(cached.clone());
+    }
+    let dir = data_dir()?;
+    let operation = tokio::task::spawn_blocking(move || {
+        if scm::query_service_status(SERVICE_NAME)?.state == "not_installed" {
+            return Ok::<_, String>(
+                managed::legacy_service_name(&dir)?
+                    .map(|service| admin::Operation::Migrate { service }),
+            );
+        }
+        Ok(match helper::sync_needed(SERVICE_NAME)? {
+            helper::SyncNeed::UpToDate => None,
+            _ => Some(admin::Operation::Sync {
+                service: SERVICE_NAME.into(),
+            }),
         })
-        .await
-        .clone()
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let outcome = if let Some(operation) = operation {
+        let result = admin::request(
+            operation,
+            data_dir()?,
+            singboard_service::ipc::current_user_sid().map_err(|e| e.to_string())?,
+            |_| {},
+        )
+        .await?;
+        result.as_str().unwrap_or("updated").to_string()
+    } else {
+        "ok".into()
+    };
+    *guard = Some(outcome.clone());
+    Ok(outcome)
 }
 
 pub fn error_log() -> Result<String, String> {

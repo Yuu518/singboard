@@ -186,7 +186,19 @@ pub fn run_child(name: &str, parent_pid: u32, extra: Extra) -> Result<(), String
         .build()
         .map_err(io_error)?
         .block_on(async {
-            let mut pipe = ClientOptions::new().open(name).map_err(io_error)?;
+            let mut pipe = {
+                let mut attempts = 0u32;
+                loop {
+                    match ClientOptions::new().open(name) {
+                        Ok(pipe) => break pipe,
+                        Err(e) if e.raw_os_error() == Some(231) && attempts < 10 => {
+                            attempts += 1;
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                        Err(e) => return Err(io_error(e)),
+                    }
+                }
+            };
             if ipc::server_pid(&pipe).map_err(io_error)? != parent_pid {
                 return Err("管理端点进程不匹配".into());
             }
@@ -231,9 +243,13 @@ fn absolute(path: &Path) -> Result<(), String> {
 fn valid_service(name: &str) -> bool {
     !name.is_empty()
         && name.encode_utf16().count() <= 256
-        && !name
-            .chars()
-            .any(|c| c.is_control() || matches!(c, '/' | '\\' | '"'))
+        && !name.chars().any(|c| {
+            c.is_control()
+                || matches!(
+                    c,
+                    '/' | '\\' | '"' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}'
+                )
+        })
 }
 
 fn validate(request: &Request) -> Result<(), String> {
@@ -313,7 +329,7 @@ fn valid_asset_name(name: &str) -> bool {
             || name.to_ascii_lowercase().ends_with(".dll"))
 }
 
-fn execute(request: Request, extra: Extra, progress: &dyn Fn(&str)) -> Result<Value, String> {
+fn execute(request: Request, _extra: Extra, progress: &dyn Fn(&str)) -> Result<Value, String> {
     let Request {
         operation,
         data_dir,
@@ -348,7 +364,7 @@ fn execute(request: Request, extra: Extra, progress: &dyn Fn(&str)) -> Result<Va
                 return Err("请先同步旧版服务组件".into());
             }
             let current = runtime::Snapshot::read(&service)?;
-            let snapshot = runtime::capture(&current.source_core, &config, &current.working_dir)?;
+            let snapshot = current.refresh_with_config(&config)?;
             super::managed::configure(&service, &snapshot, &user_sid, false)?;
         }
         Operation::Uninstall { service } => {
@@ -422,7 +438,39 @@ fn execute(request: Request, extra: Extra, progress: &dyn Fn(&str)) -> Result<Va
             )
             .map(Value::Bool);
         }
-        other => return extra(other, data_dir, user_sid, progress),
+        Operation::ReplacePanel {
+            source,
+            target,
+            hash,
+        } => {
+            use sha2::{Digest, Sha256};
+            let _source_dir =
+                super::protected::Directory::pin(source.parent().ok_or("更新源目录无效")?)?;
+            let _target_dir =
+                super::protected::Directory::pin(target.parent().ok_or("面板目录无效")?)?;
+            super::snapshot::require_regular_source(&source)?;
+            super::snapshot::require_regular_source(&target)?;
+            let content = std::fs::read(&source).map_err(|e| format!("读取更新文件失败: {e}"))?;
+            if format!("{:x}", Sha256::digest(&content)) != hash.to_ascii_lowercase() {
+                return Err("下载的 EXE 已发生变化".into());
+            }
+            let mut last_error = None;
+            for attempt in 0..5 {
+                if attempt > 0 {
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+                match singboard_stream::config_files::replace_checked(&target, &content, None) {
+                    Ok(_) => {
+                        last_error = None;
+                        break;
+                    }
+                    Err(e) => last_error = Some(e),
+                }
+            }
+            if let Some(error) = last_error {
+                return Err(error);
+            }
+        }
     }
     Ok(Value::Null)
 }

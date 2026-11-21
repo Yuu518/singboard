@@ -1,9 +1,14 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs;
+use std::io::Write;
+use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::process::CommandExt;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows_service::service::{
     ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType,
@@ -11,7 +16,7 @@ use windows_service::service::{
 use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
 use windows_service::service_dispatcher;
 
-use crate::params::{read_service_params, resolve_service_error_log_path};
+use crate::params::{is_reparse_point, read_service_params, resolve_service_error_log_path};
 
 static SERVICE_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
@@ -19,6 +24,9 @@ const STARTUP_VERIFY_SECONDS: u64 = 2;
 const STARTUP_RETRY_DELAYS: [u64; 3] = [3, 5, 8];
 const STARTUP_MAX_ATTEMPTS: u32 = 4;
 const STDERR_TAIL_BYTES: usize = 64 * 1024;
+const GRACEFUL_STOP_SECONDS: u64 = 6;
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 struct JobHandle(windows_sys::Win32::Foundation::HANDLE);
 
@@ -30,14 +38,16 @@ impl Drop for JobHandle {
     }
 }
 
-fn attach_kill_on_close_job(child: &Child) -> Option<JobHandle> {
-    use std::os::windows::io::AsRawHandle;
+fn attach_kill_on_close_job(child: &Child) -> Result<JobHandle, String> {
     use windows_sys::Win32::System::JobObjects::*;
 
     unsafe {
         let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
         if job.is_null() {
-            return None;
+            return Err(format!(
+                "CreateJobObjectW failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
         let handle = JobHandle(job);
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
@@ -49,19 +59,25 @@ fn attach_kill_on_close_job(child: &Child) -> Option<JobHandle> {
             std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
         ) == 0
         {
-            return None;
+            return Err(format!(
+                "SetInformationJobObject failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
         if AssignProcessToJobObject(handle.0, child.as_raw_handle()) == 0 {
-            return None;
+            return Err(format!(
+                "AssignProcessToJobObject failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
-        Some(handle)
+        Ok(handle)
     }
 }
 
 struct CoreProcess {
     child: Child,
     stderr: mpsc::Receiver<String>,
-    _job: Option<JobHandle>,
+    _job: JobHandle,
 }
 
 impl CoreProcess {
@@ -70,7 +86,14 @@ impl CoreProcess {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("Failed to spawn sing-box: {e}"))?;
-        let _job = attach_kill_on_close_job(&child);
+        let _job = match attach_kill_on_close_job(&child) {
+            Ok(job) => job,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
         let stderr = child
             .stderr
             .take()
@@ -181,8 +204,130 @@ fn read_stderr_output(child: &CoreProcess) -> Option<String> {
         .filter(|output| !output.is_empty())
 }
 
-fn save_error_log(log_path: &std::path::Path, message: &str) {
-    let _ = fs::write(log_path, message);
+fn path_has_reparse_ancestor(path: &Path) -> bool {
+    let mut current = std::path::PathBuf::new();
+    for component in path.components() {
+        current.push(component);
+        if matches!(component, std::path::Component::Normal(_)) && is_reparse_point(&current) {
+            return true;
+        }
+    }
+    false
+}
+
+fn wide_path(path: &Path) -> Vec<u16> {
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+fn remove_error_log(svc_name: &str) {
+    let log_path = resolve_service_error_log_path(svc_name);
+    if path_has_reparse_ancestor(&log_path) || is_reparse_point(&log_path) {
+        return;
+    }
+    let _ = fs::remove_file(&log_path);
+}
+
+fn save_error_log(svc_name: &str, message: &str) {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::*;
+
+    let log_path = resolve_service_error_log_path(svc_name);
+    let Some(parent) = log_path.parent() else {
+        return;
+    };
+    if path_has_reparse_ancestor(parent) || is_reparse_point(&log_path) {
+        return;
+    }
+    let wide = wide_path(&log_path);
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_GENERIC_WRITE,
+            FILE_SHARE_READ,
+            std::ptr::null(),
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return;
+    }
+    let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+    let mut info: FILE_ATTRIBUTE_TAG_INFO = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle(),
+            FileAttributeTagInfo,
+            &mut info as *mut _ as _,
+            std::mem::size_of_val(&info) as u32,
+        )
+    };
+    if ok == 0 || info.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY) != 0 {
+        return;
+    }
+    let mut file = fs::File::from(handle);
+    let _ = file.set_len(0);
+    let _ = file.write_all(message.as_bytes());
+}
+
+fn send_ctrl_break(pid: u32) -> bool {
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, CTRL_BREAK_EVENT, FreeConsole, GenerateConsoleCtrlEvent,
+        SetConsoleCtrlHandler,
+    };
+
+    unsafe {
+        let _ = FreeConsole();
+        if AttachConsole(pid) == 0 {
+            return false;
+        }
+        let _ = SetConsoleCtrlHandler(None, 1);
+        let sent = GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) != 0;
+        std::thread::sleep(Duration::from_millis(50));
+        let _ = FreeConsole();
+        let _ = SetConsoleCtrlHandler(None, 0);
+        sent
+    }
+}
+
+fn stop_core_gracefully(
+    child: &mut CoreProcess,
+    status_handle: &service_control_handler::ServiceStatusHandle,
+) {
+    if matches!(child.child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    let pid = child.child.id();
+    let mut checkpoint = 1u32;
+    if send_ctrl_break(pid) {
+        let deadline = Instant::now() + Duration::from_secs(GRACEFUL_STOP_SECONDS);
+        let mut last_tick = Instant::now();
+        while Instant::now() < deadline {
+            if matches!(child.child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            if last_tick.elapsed() >= Duration::from_secs(1) {
+                checkpoint = checkpoint.saturating_add(1);
+                let _ = status_handle.set_service_status(ServiceStatus {
+                    service_type: SERVICE_TYPE,
+                    current_state: ServiceState::StopPending,
+                    controls_accepted: ServiceControlAccept::empty(),
+                    exit_code: ServiceExitCode::Win32(0),
+                    checkpoint,
+                    wait_hint: Duration::from_secs(10),
+                    process_id: None,
+                });
+                last_tick = Instant::now();
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
+    let _ = child.child.kill();
+    let _ = child.child.wait();
 }
 
 fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
@@ -220,10 +365,8 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
             return Err(e);
         }
     };
-    let log_path = resolve_service_error_log_path(svc_name);
-
     // 启动前清除旧的错误日志
-    let _ = fs::remove_file(&log_path);
+    remove_error_log(svc_name);
 
     let mut child: Option<CoreProcess> = None;
     let mut startup_succeeded = false;
@@ -235,7 +378,7 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
         let mut current_child = match spawn_singbox(&singbox_path, &config_path, &working_dir) {
             Ok(c) => c,
             Err(e) => {
-                save_error_log(&log_path, &e);
+                save_error_log(svc_name, &e);
                 status_handle.set_service_status(make_stopped_status()).ok();
                 return Err(e);
             }
@@ -247,7 +390,7 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
             Ok(Some(_)) => {
                 if let Some(stderr_output) = read_stderr_output(&current_child) {
                     if is_fatal_config_error(&stderr_output) {
-                        save_error_log(&log_path, &stderr_output);
+                        save_error_log(svc_name, &stderr_output);
                         status_handle.set_service_status(make_stopped_status()).ok();
                         return Err("sing-box 启动失败，核心已输出错误日志".into());
                     }
@@ -276,11 +419,11 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
                 }
 
                 if let Some(stderr_output) = last_stderr.as_deref() {
-                    save_error_log(&log_path, stderr_output);
+                    save_error_log(svc_name, stderr_output);
                     status_handle.set_service_status(make_stopped_status()).ok();
                     return Err("sing-box 启动失败，核心已输出错误日志".into());
                 }
-                save_error_log(&log_path, "sing-box 启动后立即退出，未捕获到错误输出");
+                save_error_log(svc_name, "sing-box 启动后立即退出，未捕获到错误输出");
                 status_handle.set_service_status(make_stopped_status()).ok();
                 return Err("sing-box 启动失败，已多次重试".into());
             }
@@ -321,6 +464,7 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
         })
         .map_err(|e| format!("Failed to set status: {:?}", e))?;
 
+    let mut crashed = false;
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(()) => {
@@ -331,17 +475,21 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
                 match child.child.try_wait() {
                     Ok(Some(_status)) => {
                         // 核心进程退出，收集错误信息，不再重试
+                        crashed = true;
                         if let Some(stderr_output) = read_stderr_output(&child) {
-                            save_error_log(&log_path, &stderr_output);
+                            save_error_log(svc_name, &stderr_output);
                         } else {
-                            save_error_log(&log_path, "sing-box 异常退出，未捕获到错误输出");
+                            save_error_log(svc_name, "sing-box 异常退出，未捕获到错误输出");
                         }
                         break;
                     }
                     Ok(None) => {
                         // 核心正常运行
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        crashed = true;
+                        break;
+                    }
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -354,14 +502,15 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
             current_state: ServiceState::StopPending,
             controls_accepted: ServiceControlAccept::empty(),
             exit_code: ServiceExitCode::Win32(0),
-            checkpoint: 0,
+            checkpoint: 1,
             wait_hint: Duration::from_secs(10),
             process_id: None,
         })
         .ok();
 
-    let _ = child.child.kill();
-    let _ = child.child.wait();
+    if !crashed {
+        stop_core_gracefully(&mut child, &status_handle);
+    }
     drop(child);
 
     status_handle
@@ -369,7 +518,7 @@ fn run_service_inner(_arguments: Vec<OsString>) -> Result<(), String> {
             service_type: SERVICE_TYPE,
             current_state: ServiceState::Stopped,
             controls_accepted: ServiceControlAccept::empty(),
-            exit_code: ServiceExitCode::Win32(0),
+            exit_code: ServiceExitCode::Win32(if crashed { 1 } else { 0 }),
             checkpoint: 0,
             wait_hint: Duration::default(),
             process_id: None,
@@ -384,7 +533,7 @@ fn spawn_singbox(
     config_path: &str,
     working_dir: &str,
 ) -> Result<CoreProcess, String> {
-    let work_dir = if working_dir.is_empty() {
+    let work_dir = if working_dir.trim().is_empty() {
         let config = std::path::Path::new(config_path);
         config
             .parent()
@@ -398,7 +547,7 @@ fn spawn_singbox(
                     .to_string()
             })?
     } else {
-        std::path::PathBuf::from(working_dir)
+        std::path::PathBuf::from(working_dir.trim())
     };
 
     if !work_dir.is_dir() {
@@ -414,7 +563,9 @@ fn spawn_singbox(
             std::path::Path::new(singbox_path)
                 .parent()
                 .ok_or("Invalid sing-box path")?,
-        );
+        )
+        .stdin(Stdio::null())
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 
     CoreProcess::spawn(&mut cmd)
 }

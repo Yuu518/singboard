@@ -85,7 +85,43 @@ impl Snapshot {
     }
 
     pub fn refresh_config(&self) -> Result<Self, String> {
-        capture(&self.source_core, &self.source_config, &self.working_dir)
+        if self.is_protected() {
+            let files = read_core_files(&self.core)?;
+            let bytes = read_config_with_fallback(&self.source_config, Some(&self.config))?;
+            return write_snapshot(
+                &files,
+                &bytes,
+                &self.source_core,
+                &self.source_config,
+                &self.working_dir,
+            );
+        }
+        let config = if self.config != self.source_config
+            && !self.source_config.exists()
+            && self.config.is_file()
+        {
+            &self.config
+        } else {
+            &self.source_config
+        };
+        capture(&self.source_core, config, &self.working_dir)
+    }
+
+    pub fn refresh_with_config(&self, config: &Path) -> Result<Self, String> {
+        if self.is_protected() {
+            require_regular_source(config)?;
+            let files = read_core_files(&self.core)?;
+            let bytes = std::fs::read(config)
+                .map_err(|e| format!("读取源配置失败: {e}"))?;
+            return write_snapshot(
+                &files,
+                &bytes,
+                &self.source_core,
+                config,
+                &self.working_dir,
+            );
+        }
+        capture(&self.source_core, config, &self.working_dir)
     }
 
     pub fn discard_replaced_by(&self, replacement: &Self) {
@@ -141,6 +177,7 @@ fn is_runtime_path(path: &Path, root: &Path) -> bool {
 
 fn read_core_files(core: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
     let parent = core.parent().ok_or("核心目录无效")?;
+    require_regular_source(core)?;
     let mut files = vec![(
         "sing-box.exe".into(),
         std::fs::read(core).map_err(|e| format!("读取核心失败: {e}"))?,
@@ -148,10 +185,16 @@ fn read_core_files(core: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
     for entry in std::fs::read_dir(parent).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.to_ascii_lowercase().ends_with(".dll") && entry.path().is_file() {
+        let path = entry.path();
+        if name.to_ascii_lowercase().ends_with(".dll") {
+            let meta = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+            use std::os::windows::fs::MetadataExt;
+            if !meta.is_file() || meta.file_attributes() & 0x400 != 0 {
+                return Err(format!("核心依赖不能是目录或重解析点: {}", path.display()));
+            }
             files.push((
                 name,
-                std::fs::read(entry.path()).map_err(|e| e.to_string())?,
+                std::fs::read(&path).map_err(|e| e.to_string())?,
             ));
         }
     }
@@ -197,6 +240,7 @@ fn write_snapshot(
 pub fn capture(core: &Path, config: &Path, working_dir: &str) -> Result<Snapshot, String> {
     let _directory = protected::Directory::pin(core.parent().ok_or("源核心目录无效")?)?;
     require_regular_source(core)?;
+    require_regular_source(config)?;
     let files = read_core_files(core)?;
     let bytes = std::fs::read(config).map_err(|e| format!("读取源配置失败: {e}"))?;
     let working_dir = if working_dir.trim().is_empty() {
@@ -232,9 +276,27 @@ pub(super) fn normalized_source_path(path: &Path) -> Result<PathBuf, String> {
         .join(name))
 }
 
+fn read_config_with_fallback(
+    source_config: &Path,
+    protected_fallback: Option<&Path>,
+) -> Result<Vec<u8>, String> {
+    require_regular_source(source_config)?;
+    match std::fs::read(source_config) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(fallback) = protected_fallback {
+                std::fs::read(fallback).map_err(|e| format!("读取运行配置副本失败: {e}"))
+            } else {
+                Err(format!("读取源配置失败: {error}"))
+            }
+        }
+        Err(error) => Err(format!("读取源配置失败: {error}")),
+    }
+}
+
 pub fn capture_update(current: &Snapshot, files: &[(String, Vec<u8>)]) -> Result<Snapshot, String> {
-    let config =
-        std::fs::read(&current.source_config).map_err(|e| format!("读取源配置失败: {e}"))?;
+    let fallback = current.is_protected().then_some(current.config.as_path());
+    let config = read_config_with_fallback(&current.source_config, fallback)?;
     write_snapshot(
         files,
         &config,
@@ -262,5 +324,25 @@ mod tests {
         ));
         assert!(!is_runtime_path(&root.join("runtime-user-files"), root));
         assert!(!is_runtime_path(&root.join("runtime-"), root));
+    }
+
+    #[test]
+    fn missing_source_config_falls_back_to_protected_snapshot_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.json");
+        let existing = dir.path().join("source.json");
+        let snapshot_cfg = dir.path().join("runtime-config.json");
+        std::fs::write(&existing, b"{\"from\":\"source\"}").unwrap();
+        std::fs::write(&snapshot_cfg, b"{\"from\":\"snapshot\"}").unwrap();
+
+        assert_eq!(
+            read_config_with_fallback(&existing, Some(&snapshot_cfg)).unwrap(),
+            b"{\"from\":\"source\"}"
+        );
+        assert_eq!(
+            read_config_with_fallback(&missing, Some(&snapshot_cfg)).unwrap(),
+            b"{\"from\":\"snapshot\"}"
+        );
+        assert!(read_config_with_fallback(&missing, None).is_err());
     }
 }
