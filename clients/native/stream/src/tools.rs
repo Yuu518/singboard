@@ -673,7 +673,7 @@ pub async fn run(
         }
         "exit_ip" => {
             let (direct, proxy) = tokio::join!(
-                network::fetch_url_direct("http://myip.ipip.net".into(), None),
+                network::fetch_url("http://myip.ipip.net".into(), None),
                 network::fetch_url("https://api.ip.sb/geoip".into(), None)
             );
             let proxy = proxy
@@ -875,7 +875,7 @@ pub async fn readiness(prefs: &Settings) -> String {
 pub const OVERVIEW_SITES: [(&str, &str, &str); 5] = [
     ("wechat", "微信", "https://res.wx.qq.com/favicon.ico"),
     ("bilibili", "Bilibili", "https://i0.hdslb.com/favicon.ico"),
-    ("github", "GitHub", "https://github.github.io"),
+    ("github", "GitHub", "https://github.com/favicon.ico"),
     ("cloudflare", "Cloudflare", "https://www.cloudflare.com/favicon.ico"),
     ("youtube", "YouTube", "https://yt3.ggpht.com/favicon.ico"),
 ];
@@ -917,7 +917,7 @@ pub async fn network_overview() -> Value {
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let domestic_fut = async {
-        match network::fetch_url_direct(format!("http://myip.ipip.net?t={stamp}"), None).await {
+        match network::fetch_url(format!("http://myip.ipip.net?t={stamp}"), None).await {
             Ok(text) => {
                 let (ip, location) = parse_ipipnet(&text);
                 if ip.is_empty() {
