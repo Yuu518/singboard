@@ -6,6 +6,7 @@ pub(crate) use singboard_stream::{settings, tools};
 #[path = "../../stream/src/core_actions.rs"]
 mod core_actions;
 mod editor;
+mod emoji;
 mod glass;
 mod maintenance;
 mod search;
@@ -283,7 +284,7 @@ fn run() -> Result<(), String> {
         .with_assets(chrome::Assets)
         .run(move |cx: &mut App| {
             let _ = cx.text_system().add_fonts(vec![std::borrow::Cow::Borrowed(
-                include_bytes!("../assets/TwemojiMozilla-flags.ttf"),
+                emoji::FONT_DATA,
             )]);
             gpui_component::init(cx);
             editor::init(cx);

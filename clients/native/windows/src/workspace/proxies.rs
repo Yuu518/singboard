@@ -674,7 +674,7 @@ impl Workspace {
                                         .text_base()
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .truncate()
-                                        .child(name.clone()),
+                                        .child(crate::emoji::text(name.clone())),
                                 )
                                 .child(div().text_xs().text_color(palette.muted()).child(format!(
                                     "{} 个节点 ({tested} 已测试)",
@@ -873,7 +873,7 @@ impl Workspace {
                                                 .overflow_hidden()
                                                 .text_sm()
                                                 .line_height(rems(18. / 16.))
-                                                .child(n_name),
+                                                .child(crate::emoji::text(n_name)),
                                         )
                                         .child(
                                             div()
@@ -1045,7 +1045,7 @@ impl Workspace {
                         .size(px(14.))
                         .text_color(palette.muted()),
                 )
-                .child(div().truncate().child(g.now.clone()));
+                .child(div().truncate().child(crate::emoji::text(g.now.clone())));
             if show_now_badge {
                 let (bg, fg) = latency_badge_style(now_delay, palette);
                 current = current.child(
@@ -1110,7 +1110,7 @@ impl Workspace {
                                         .text_base()
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .truncate()
-                                        .child(g.name.clone()),
+                                        .child(crate::emoji::text(g.name.clone())),
                                 )
                                 .child(
                                     div()
@@ -1372,7 +1372,7 @@ impl Workspace {
                                     } else {
                                         FontWeight::NORMAL
                                     })
-                                    .child(name.clone()),
+                                    .child(crate::emoji::text(name.clone())),
                             );
                         if selectable && !selected {
                             tile = tile

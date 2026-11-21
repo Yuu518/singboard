@@ -165,7 +165,7 @@ impl Render for ToastHost {
                                     .text_size(crate::theme::text_px(14. * scale))
                                     .line_height(rems(19. * scale / 16.))
                                     .text_color(p.ink())
-                                    .child(entry.text.clone()),
+                                    .child(crate::emoji::text(entry.text.clone())),
                             )
                             .child(
                                 div()

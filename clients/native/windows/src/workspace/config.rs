@@ -1705,7 +1705,7 @@ impl Workspace {
                                 .text_size(crate::theme::text_px(15.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .truncate()
-                                .child(profile.name.clone()),
+                                .child(crate::emoji::text(profile.name.clone())),
                         )
                         .child(status_btn),
                 )

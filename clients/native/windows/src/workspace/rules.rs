@@ -958,7 +958,7 @@ impl Workspace {
                                                         div()
                                                             .font_weight(FontWeight::SEMIBOLD)
                                                             .truncate()
-                                                            .child(base.to_owned()),
+                                                            .child(crate::emoji::text(base.to_owned())),
                                                     ),
                                             )
                                             .child(
@@ -1208,7 +1208,7 @@ impl Workspace {
                                                     .flex_none()
                                                     .font_weight(FontWeight::SEMIBOLD)
                                                     .text_color(p.ink())
-                                                    .child(outbound),
+                                                    .child(crate::emoji::text(outbound)),
                                             )
                                             .when_some(final_node, |el, node| {
                                                 el.child(
@@ -1219,7 +1219,7 @@ impl Workspace {
                                                         } else {
                                                             p.muted()
                                                         })
-                                                        .child(format!("› {node}")),
+                                                        .child(crate::emoji::text(format!("› {node}"))),
                                                 )
                                             })
                                             .into_any_element()
@@ -1475,7 +1475,7 @@ impl Workspace {
                                     .truncate()
                                     .text_lg()
                                     .font_weight(FontWeight::BOLD)
-                                    .child(d.tag.clone()),
+                                    .child(crate::emoji::text(d.tag.clone())),
                             )
                             .child(
                                 dialog::keyboard_action(div()
@@ -1494,7 +1494,7 @@ impl Workspace {
                             ),
                     )
                     .child(div().text_xs().text_color(palette.muted()).child(meta))
-                    .when_some(detail_uses, |e, uses| e.child(div().text_xs().child(uses)))
+                    .when_some(detail_uses, |e, uses| e.child(div().text_xs().child(crate::emoji::text(uses))))
                     .child(d.search.clone())
                     .when(!d.match_status.is_empty(), |e| {
                         e.child(

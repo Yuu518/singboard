@@ -696,7 +696,7 @@ impl Workspace {
                             .line_height(px(18.))
                             .text_color(p.ink())
                             .when(!expanded, |el| el.truncate())
-                            .child(entry.payload.clone()),
+                            .child(crate::emoji::text(entry.payload.clone())),
                     )
                     .into_any_element()
             })

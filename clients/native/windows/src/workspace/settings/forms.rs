@@ -1130,7 +1130,7 @@ impl Workspace {
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(p.accent())
                                 .truncate()
-                                .child(group.clone()),
+                                .child(crate::emoji::text(group.clone())),
                         )
                         .when(!narrow, |d| {
                             d.child(div().text_xs().text_color(p.muted()).child("→"))

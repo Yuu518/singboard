@@ -673,7 +673,7 @@ impl Workspace {
                                                                 .line_height(px(16.))
                                                                 .text_color(p.ink().opacity(0.80))
                                                                 .truncate()
-                                                                .child(chains),
+                                                                .child(crate::emoji::text(chains)),
                                                         )
                                                     }),
                                             )
@@ -841,7 +841,7 @@ impl Workspace {
                     div().flex().flex_col().gap_1().child(div().mb_1().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(palette.muted()).child(title))
                         .children(fields.into_iter().map(|(key, value)| div().flex().gap_3().text_sm()
                             .child(div().w(px(90.)).flex_none().text_color(palette.muted()).child(key))
-                            .child(div().flex_1().min_w_0().child(if value.is_empty() { "—".into() } else { value }))))
+                            .child(div().flex_1().min_w_0().child(crate::emoji::text(if value.is_empty() { "—".into() } else { value })))))
                 };
                 let mut basic = vec![("ID", field(r,"id")), ("网络", field(m,"network").to_uppercase()), ("入站", field(m,"type")),
                     ("主机", dashboard::host(r).to_owned()), ("规则", r["rule"].as_str().filter(|s| !s.is_empty()).unwrap_or("final").to_owned())];

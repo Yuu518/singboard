@@ -1,28 +1,8 @@
 use super::*;
 use singboard_stream::Traffic;
 
-fn node_label(text: String) -> StyledText {
-    let mut chars = text.char_indices().peekable();
-    let mut flags = Vec::new();
-    let regional = |c: char| ('🇦'..='🇿').contains(&c);
-    while let Some((start, first)) = chars.next() {
-        if regional(first)
-            && let Some((end, second)) = chars.next_if(|&(_, c)| regional(c))
-        {
-            flags.push(start..end + second.len_utf8());
-        }
-    }
-    let label = StyledText::new(text);
-    if flags.is_empty() {
-        return label;
-    }
-    label
-        .with_highlights(
-            flags.iter().cloned().map(|range| (range, HighlightStyle::default())),
-        )
-        .with_font_family_overrides(
-            flags.into_iter().map(|range| (range, "Twemoji Mozilla".into())),
-        )
+fn node_label(text: impl Into<SharedString>) -> StyledText {
+    crate::emoji::text(text)
 }
 
 fn mode_phrase(mode: &str) -> String {
@@ -748,7 +728,7 @@ impl Workspace {
                     .text_size(crate::theme::text_px(13.))
                     .line_height(px(19.5))
                     .text_color(palette.muted())
-                    .child(div().truncate().child(profile_label))
+                    .child(div().truncate().child(node_label(profile_label)))
                     .when(self.active_profile_failed, |el| {
                         el.child(
                             div()
@@ -1759,7 +1739,7 @@ impl Workspace {
                         .px(px(12.))
                         .py(px(8.))
                         .text_size(crate::theme::text_px(12.))
-                        .child(message.clone()));
+                        .child(node_label(message.clone())));
                 }
                 topo_card = topo_card.child(
                     div()
