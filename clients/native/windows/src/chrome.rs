@@ -1,4 +1,4 @@
-use super::{Overview, visibility, workspace::PAGES};
+use super::{Overview, workspace::PAGES};
 use gpui::{prelude::*, *};
 use std::borrow::Cow;
 
@@ -378,6 +378,7 @@ impl Overview {
             bar = bar.child(
                 div()
                     .id(("caption", i))
+                    .when(i == 1, |d| d.window_control_area(WindowControlArea::Max))
                     .relative()
                     .size(px(28.))
                     .rounded_full()
@@ -420,7 +421,6 @@ impl Overview {
                     )
                     .on_click(move |_, win, cx| match i {
                         0 => win.minimize_window(),
-                        1 if win.is_maximized() => visibility(win, true),
                         1 => win.zoom_window(),
                         _ => super::close_window(win, cx),
                     }),

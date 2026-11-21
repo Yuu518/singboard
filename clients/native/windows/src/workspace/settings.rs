@@ -746,6 +746,27 @@ pub(super) fn setting_row(
         .child(right)
 }
 
+static AUTO_LAUNCH_CACHE: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
+fn cached_auto_launch() -> bool {
+    if let Ok(guard) = AUTO_LAUNCH_CACHE.lock()
+        && let Some(val) = *guard
+    {
+        return val;
+    }
+    let val = singboard_stream::settings::get_auto_launch();
+    if let Ok(mut guard) = AUTO_LAUNCH_CACHE.lock() {
+        *guard = Some(val);
+    }
+    val
+}
+
+fn set_cached_auto_launch(enabled: bool) {
+    if let Ok(mut guard) = AUTO_LAUNCH_CACHE.lock() {
+        *guard = Some(enabled);
+    }
+}
+
 impl Workspace {
     pub(super) fn settings_page(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let palette = crate::theme::Palette::get(cx);
@@ -753,7 +774,7 @@ impl Workspace {
         let tint = self.glass_tint;
         let prefs = crate::maintenance::preferences().unwrap_or_default();
         let current_theme = cx.global::<crate::theme::Appearance>().mode;
-        let auto_launch = singboard_stream::settings::get_auto_launch();
+        let auto_launch = cached_auto_launch();
         let close_to_tray = prefs.close_to_tray.unwrap_or(false);
         let vp = window.viewport_size();
         let width = (f32::from(vp.width) - 256.).min(760.);
@@ -1410,6 +1431,7 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         match singboard_stream::settings::set_auto_launch(!auto_launch) {
                             Ok(()) => {
+                                set_cached_auto_launch(!auto_launch);
                                 this.message(if !auto_launch {
                                     "已启用开机启动面板".into()
                                 } else {

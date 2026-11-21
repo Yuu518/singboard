@@ -231,8 +231,22 @@ pub fn open(win_ratio: f32, window: &mut Window, cx: &mut App) {
         let _ = handle.update(cx, |_, window, cx| match result {
             Ok(source) => {
                 let view = cx.new(|cx| {
+                    cx.on_release(|this: &mut WallpaperEditor, cx| {
+                        if let Some(old) = this.preview.take() {
+                            cx.drop_image(old, None);
+                        }
+                    })
+                    .detach();
+                    let thumb = if source.width() > 960 || source.height() > 640 {
+                        DynamicImage::ImageRgba8(source.clone())
+                            .thumbnail(960, 640)
+                            .to_rgba8()
+                    } else {
+                        source.clone()
+                    };
                     let mut view = WallpaperEditor {
                         source,
+                        thumb,
                         preview: None,
                         drag: None,
                         focus: cx.focus_handle(),
@@ -241,7 +255,7 @@ pub fn open(win_ratio: f32, window: &mut Window, cx: &mut App) {
                         status: String::new(),
                         busy: false,
                     };
-                    view.rebuild_preview();
+                    view.rebuild_preview(window, cx);
                     view
                 });
                 window.open_dialog(cx, move |dialog, window, cx| {
@@ -271,6 +285,7 @@ fn load_rgba(path: &Path) -> Result<RgbaImage, String> {
 
 struct WallpaperEditor {
     source: RgbaImage,
+    thumb: RgbaImage,
     preview: Option<Arc<RenderImage>>,
     drag: Option<(Crop, (i8, i8), Point<Pixels>)>,
     focus: FocusHandle,
@@ -297,7 +312,7 @@ fn stage_frame(area: Bounds<Pixels>, w: u32, h: u32) -> Bounds<Pixels> {
 }
 
 impl WallpaperEditor {
-    fn rotate(&mut self, clockwise: bool) {
+    fn rotate(&mut self, clockwise: bool, window: &mut Window, cx: &mut Context<Self>) {
         let tf = &mut self.transform;
         tf.rotation = (tf.rotation + if clockwise { 1 } else { 3 }) % 4;
         std::mem::swap(&mut tf.flip_h, &mut tf.flip_v);
@@ -318,10 +333,10 @@ impl WallpaperEditor {
                 width: crop.height,
                 height: crop.width,
             });
-        self.rebuild_preview();
+        self.rebuild_preview(window, cx);
     }
 
-    fn flip(&mut self, horizontal: bool) {
+    fn flip(&mut self, horizontal: bool, window: &mut Window, cx: &mut Context<Self>) {
         if horizontal {
             self.transform.flip_h = !self.transform.flip_h;
         } else {
@@ -334,7 +349,7 @@ impl WallpaperEditor {
                 crop.top = 1. - crop.top - crop.height;
             }
         }
-        self.rebuild_preview();
+        self.rebuild_preview(window, cx);
     }
 
     fn crop_stage(&self, preview: Arc<RenderImage>, cx: &Context<Self>) -> Stateful<Div> {
@@ -532,16 +547,11 @@ impl WallpaperEditor {
             )
     }
 
-    fn rebuild_preview(&mut self) {
-        let src = &self.source;
-        let preview = if src.width() > 960 || src.height() > 640 {
-            DynamicImage::ImageRgba8(src.clone())
-                .thumbnail(960, 640)
-                .to_rgba8()
-        } else {
-            src.clone()
-        };
-        self.preview = Some(render_image(orient(&preview, self.transform)));
+    fn rebuild_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let next = render_image(orient(&self.thumb, self.transform));
+        if let Some(old) = self.preview.replace(next) {
+            cx.drop_image(old, Some(window));
+        }
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -666,33 +676,33 @@ impl Render for WallpaperEditor {
             .items_center()
             .gap_2()
             .child(tool_btn("rot-l", "左转 90°", palette).on_click(cx.listener(
-                |this, _, _, cx| {
-                    this.rotate(false);
+                |this, _, window, cx| {
+                    this.rotate(false, window, cx);
                     cx.notify();
                 },
             )))
             .child(tool_btn("rot-r", "右转 90°", palette).on_click(cx.listener(
-                |this, _, _, cx| {
-                    this.rotate(true);
+                |this, _, window, cx| {
+                    this.rotate(true, window, cx);
                     cx.notify();
                 },
             )))
             .child(
-                tool_btn("flip-h", "水平镜像", palette).on_click(cx.listener(|this, _, _, cx| {
-                    this.flip(true);
+                tool_btn("flip-h", "水平镜像", palette).on_click(cx.listener(|this, _, window, cx| {
+                    this.flip(true, window, cx);
                     cx.notify();
                 })),
             )
             .child(
-                tool_btn("flip-v", "垂直镜像", palette).on_click(cx.listener(|this, _, _, cx| {
-                    this.flip(false);
+                tool_btn("flip-v", "垂直镜像", palette).on_click(cx.listener(|this, _, window, cx| {
+                    this.flip(false, window, cx);
                     cx.notify();
                 })),
             )
             .child(tool_btn("reset-tf", "重置", palette).on_click(cx.listener(
-                |this, _, _, cx| {
+                |this, _, window, cx| {
                     this.transform = Transform { aspect: this.transform.aspect, ..Default::default() };
-                    this.rebuild_preview();
+                    this.rebuild_preview(window, cx);
                     cx.notify();
                 },
             )));

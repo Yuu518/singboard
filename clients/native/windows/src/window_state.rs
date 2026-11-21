@@ -1,8 +1,14 @@
 use gpui::{App, Bounds, Pixels, WindowBounds, point, px, size};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use windows_sys::Win32::{
-    Foundation::{ERROR_ALREADY_EXISTS, GetLastError, WAIT_OBJECT_0},
-    System::Threading::{CreateEventW, SetEvent, WaitForSingleObject},
+    Foundation::{ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, GetLastError, LocalFree, WAIT_OBJECT_0},
+    Security::{
+        Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW, SECURITY_ATTRIBUTES,
+    },
+    System::Threading::{
+        CreateEventW, EVENT_MODIFY_STATE, OpenEventW, SetEvent, WaitForSingleObject,
+    },
+    UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow},
 };
 
 pub struct Instance(OwnedHandle);
@@ -16,15 +22,59 @@ pub fn instance(hidden: bool) -> Result<Option<Instance>, String> {
     let name = format!("Local\\Singboard.Native.Show.{sid}\0")
         .encode_utf16()
         .collect::<Vec<_>>();
-    let raw = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
-    if raw.is_null() {
-        return Err(std::io::Error::last_os_error().to_string());
+    let sddl = singboard_service::ipc::wide(&format!(
+        "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{sid})"
+    ));
+    let mut descriptor = std::ptr::null_mut();
+    let has_descriptor = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        ) != 0
+    };
+    let attrs = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor,
+        bInheritHandle: 0,
+    };
+    let raw = unsafe {
+        CreateEventW(
+            if has_descriptor { &attrs } else { std::ptr::null() },
+            0,
+            0,
+            name.as_ptr(),
+        )
+    };
+    let last_err = unsafe { GetLastError() };
+    if has_descriptor {
+        unsafe {
+            LocalFree(descriptor);
+        }
     }
-    let exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+    if raw.is_null() {
+        if last_err == ERROR_ACCESS_DENIED {
+            let opened = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr()) };
+            if !opened.is_null() {
+                let _handle = unsafe { OwnedHandle::from_raw_handle(opened) };
+                if !hidden {
+                    unsafe {
+                        AllowSetForegroundWindow(ASFW_ANY);
+                        SetEvent(opened);
+                    }
+                }
+                return Ok(None);
+            }
+        }
+        return Err(std::io::Error::from_raw_os_error(last_err as i32).to_string());
+    }
+    let exists = last_err == ERROR_ALREADY_EXISTS;
     let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
     if exists {
         if !hidden {
             unsafe {
+                AllowSetForegroundWindow(ASFW_ANY);
                 SetEvent(raw);
             }
         }
@@ -51,7 +101,19 @@ pub fn save(window: WindowBounds) -> Result<(), String> {
         h: bounds.size.height.into(),
         maximized: matches!(window, WindowBounds::Maximized(_)),
     };
-    if p.w < 800. || p.h < 500. || p.x < -30000. || p.y < -30000. {
+    if !p.x.is_finite()
+        || !p.y.is_finite()
+        || !p.w.is_finite()
+        || !p.h.is_finite()
+        || p.w < 800.
+        || p.h < 500.
+        || p.w > 32000.
+        || p.h > 32000.
+        || p.x < -30000.
+        || p.y < -30000.
+        || p.x > 30000.
+        || p.y > 30000.
+    {
         return Ok(());
     }
     let dir = crate::service::data_dir()?;
@@ -70,18 +132,33 @@ pub fn restore(cx: &App) -> WindowBounds {
     else {
         return fallback;
     };
-    if p.w < 800. || p.h < 500. || p.w > 32000. || p.h > 32000. {
+    if !p.x.is_finite()
+        || !p.y.is_finite()
+        || !p.w.is_finite()
+        || !p.h.is_finite()
+        || p.w < 800.
+        || p.h < 500.
+        || p.w > 32000.
+        || p.h > 32000.
+    {
         return fallback;
     }
     let bounds: Bounds<Pixels> = Bounds {
         origin: point(px(p.x), px(p.y)),
         size: size(px(p.w), px(p.h)),
     };
-    if !cx
-        .displays()
-        .iter()
-        .any(|d| d.bounds().contains(&point(px(p.x + 80.), px(p.y + 20.))))
-    {
+    let probes = [
+        point(px(p.x + 240.), px(p.y + 20.)),
+        point(px(p.x + p.w - 60.), px(p.y + 20.)),
+    ];
+    let visible = cx.displays().iter().any(|d| {
+        let db = d.bounds();
+        let safe_bottom = db.origin.y + db.size.height - px(48.);
+        probes
+            .iter()
+            .all(|pt| db.contains(pt) && pt.y < safe_bottom)
+    });
+    if !visible {
         return fallback;
     }
     if p.maximized {

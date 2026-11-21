@@ -281,6 +281,24 @@ impl Editor {
                     Ok((_, message)) => message.into(),
                     Err(e) => e,
                 };
+                if let Some(pending) = editor.pending {
+                    if !editor.dirty {
+                        editor.pending = None;
+                        match pending {
+                            Pending::Quit => {
+                                cx.global_mut::<OpenEditor>().0 = None;
+                                cx.quit();
+                            }
+                            Pending::Close => {
+                                if let Some(inline) = &editor.inline {
+                                    cx.global_mut::<OpenEditor>().0 = None;
+                                    let _ = inline.owner.update(cx, |owner, cx| owner.close_editor(cx));
+                                }
+                            }
+                            Pending::Backup => {}
+                        }
+                    }
+                }
                 cx.notify();
             });
         })
@@ -344,7 +362,18 @@ impl Editor {
         }
         let text = self.input.read(cx).value();
         let selection = self.input.read(cx).selected_range();
-        let (value, _) = singboard_stream::editor::toggle_comment(&text, selection);
+        let (mut value, _) = singboard_stream::editor::toggle_comment(&text, selection);
+        if !self.suffix.is_empty()
+            && !self.suffix.starts_with('\n')
+            && !self.suffix.starts_with("\r\n")
+            && !value.ends_with('\n')
+            && value
+                .rsplit('\n')
+                .next()
+                .is_some_and(|line| line.trim_start().starts_with("//"))
+        {
+            value.push('\n');
+        }
         self.input
             .update(cx, |f, cx| f.replace_all(value, window, cx));
         cx.notify();
@@ -393,6 +422,8 @@ impl Editor {
             });
         }
         if self.busy {
+            self.pending = Some(action);
+            cx.notify();
             return;
         }
         if self.dirty {

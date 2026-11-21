@@ -24,7 +24,7 @@ use singboard_stream::{Feed, Subscription};
 use std::{path::Path, sync::Arc, time::Duration};
 use tray_icon::{TrayIconBuilder, TrayIconEvent};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    IsWindowVisible, MessageBoxW, SW_HIDE, SW_RESTORE, ShowWindow,
+    IsIconic, IsWindowVisible, MessageBoxW, SW_HIDE, SW_RESTORE, SW_SHOW, ShowWindow,
 };
 use workspace::{Page, Workspace};
 
@@ -108,11 +108,6 @@ impl Render for Overview {
             )
             .child(self.navigation(window, cx))
             .children(self.workspace.update(cx, |state, cx| state.page_overlay(window, cx)))
-            .children(self.workspace.update(cx, |state, cx| match state.page {
-                Page::Config => state.render_config_dialog(cx),
-                Page::Settings => state.render_settings_dialog(cx),
-                _ => None,
-            }))
             .child(self.wizard.clone())
             .when(!self.wizard.read(cx).visible, |root| {
                 root.children(self.workspace.update(cx, |state, cx| state.panel_update_overlay(window, cx)))
@@ -137,7 +132,8 @@ fn close_window(window: &Window, cx: &mut App) {
 fn is_window_visible(window: &Window) -> bool {
     if let Ok(handle) = HasWindowHandle::window_handle(window) {
         if let RawWindowHandle::Win32(handle) = handle.as_raw() {
-            return unsafe { IsWindowVisible(handle.hwnd.get() as _) != 0 };
+            let hwnd = handle.hwnd.get() as _;
+            return unsafe { IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 };
         }
     }
     true
@@ -146,11 +142,16 @@ fn is_window_visible(window: &Window) -> bool {
 fn visibility(window: &Window, show: bool) {
     if let Ok(handle) = HasWindowHandle::window_handle(window) {
         if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+            let hwnd = handle.hwnd.get() as _;
             unsafe {
-                ShowWindow(
-                    handle.hwnd.get() as _,
-                    if show { SW_RESTORE } else { SW_HIDE },
-                );
+                let cmd = if !show {
+                    SW_HIDE
+                } else if IsIconic(hwnd) != 0 {
+                    SW_RESTORE
+                } else {
+                    SW_SHOW
+                };
+                ShowWindow(hwnd, cmd);
             }
         }
     }
@@ -458,9 +459,10 @@ fn run() -> Result<(), String> {
                                 }
                                 if geometry != observed
                                     && moved.elapsed() >= Duration::from_millis(450)
-                                    && window_state::save(observed).is_ok()
                                 {
                                     geometry = observed;
+                                    singboard_stream::runtime()
+                                        .spawn_blocking(move || window_state::save(observed));
                                 }
                                 let saved = settings::Settings::revision();
                                 if revision != saved
@@ -468,21 +470,22 @@ fn run() -> Result<(), String> {
                                 {
                                     let next = endpoint(&prefs);
                                     let want_connect = should_connect(&prefs);
+                                    let mut applied = true;
                                     panel.workspace.update(cx, |state, cx| {
                                         if want_connect && (!connected || current != next) {
-                                            if let (Ok(mut new), Ok(stream)) = (
-                                                Workspace::new(&next.0, &next.1, &prefs, true, true),
-                                                Subscription::start(&next.0, &next.1, Feed::Traffic),
-                                            ) {
-                                                let page = state.page;
-                                                new.custom_wallpaper = state.custom_wallpaper;
-                                                new.glass_tint = prefs.glass_tint.unwrap_or(0.5);
-                                                new.inherit_view(state);
-                                                *state = new;
-                                                state.open(page, cx);
-                                                panel.stream = Some(stream);
-                                                current = next;
-                                                connected = true;
+                                            match Subscription::start(&next.0, &next.1, Feed::Traffic) {
+                                                Ok(stream) => {
+                                                    if state.switch_endpoint(&next.0, &next.1, &prefs, cx).is_ok() {
+                                                        panel.stream = Some(stream);
+                                                        current = next;
+                                                        connected = true;
+                                                    } else {
+                                                        applied = false;
+                                                    }
+                                                }
+                                                Err(_) => {
+                                                    applied = false;
+                                                }
                                             }
                                         } else {
                                             state.preferences(&prefs, cx);
@@ -498,7 +501,9 @@ fn run() -> Result<(), String> {
                                         state.glass_tint = tint_val;
                                         cx.notify();
                                     });
-                                    revision = saved;
+                                    if applied {
+                                        revision = saved;
+                                    }
                                     cx.notify();
                                 }
                                 let wp_saved = wallpaper_editor::revision();

@@ -204,6 +204,8 @@ pub struct Workspace {
     geo: Option<Result<Value, String>>,
     pending_restart: Option<String>,
     config_busy: Option<String>,
+    last_profile_auto_check: Option<std::time::Instant>,
+    auto_updating_profiles: bool,
     config_editor: Option<Entity<crate::editor::Editor>>,
     config_two_columns: bool,
     config_dialog: Option<config::ConfigDialog>,
@@ -234,13 +236,56 @@ pub struct Workspace {
     load_error: String,
     pub(crate) toasts: Option<Entity<toast::ToastHost>>,
     busy: bool,
+    refreshing: bool,
     generation: u64,
 }
 
 impl Workspace {
-    pub fn inherit_view(&mut self, old: &mut Self) {
-        self.generation = old.generation;
-        self.filter = old.filter.take();
+    pub fn switch_endpoint(
+        &mut self,
+        base: &str,
+        secret: &str,
+        prefs: &singboard_stream::settings::Settings,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let api = Clash::new(base, secret)?;
+        let log_level = self.effective_log_level();
+        let (log_feed, conn_feed) = if !self.suspended {
+            (
+                Some(Subscription::start_logs(base, secret, &log_level)?),
+                Some(Subscription::start(base, secret, Feed::Connections)?),
+            )
+        } else {
+            (None, None)
+        };
+        self.api = api;
+        self.api_enabled = true;
+        self.endpoint = base.into();
+        self.secret = secret.into();
+        self.log_feed = log_feed;
+        self.conn_feed = conn_feed;
+        self.log_subscribed_level = log_level;
+        self.generation += 1;
+        self.busy = false;
+        self.refreshing = false;
+        self.groups.clear();
+        self.rules.clear();
+        self.providers.clear();
+        self.snapshot = None;
+        self.summary = Value::Null;
+        self.load_error.clear();
+        self.traffic_status = "连接中";
+        self.log_status = "连接中";
+        self.conn_status = "连接中";
+        self.traffic_failures = 0;
+        self.conn_failures = 0;
+        self.log_failures = 0;
+        self.has_traffic = false;
+        self.traffic_samples.clear();
+        self.preferences(prefs, cx);
+        let page = self.page;
+        self.open(page, cx);
+        Ok(())
     }
 
     pub fn push_traffic(
@@ -537,6 +582,8 @@ impl Workspace {
             geo: None,
             pending_restart: None,
             config_busy: None,
+            last_profile_auto_check: None,
+            auto_updating_profiles: false,
             config_editor: None,
             config_two_columns: false,
             config_dialog: None,
@@ -578,6 +625,7 @@ impl Workspace {
             load_error: String::new(),
             toasts: None,
             busy: false,
+            refreshing: false,
             generation: 0,
         })
     }
@@ -887,10 +935,11 @@ impl Workspace {
             self.closed.push_front(row);
         }
         self.closed.truncate(500);
+        self.poll_due_remote_profiles(cx);
         if matches!(
             self.page,
             Page::Proxies | Page::Rules | Page::Overview | Page::Logs | Page::Settings
-        ) && !self.busy
+        ) && !self.refreshing
             && (reconnected || self.last_read.elapsed().as_secs() >= 30)
         {
             self.refresh(cx);
@@ -1117,6 +1166,7 @@ impl Workspace {
         }
         self.generation += 1;
         self.busy = false;
+        self.refreshing = false;
         self.show_providers = false;
         if self.filter.is_none() {
             let search = cx.new(crate::search::Search::new);
@@ -1131,10 +1181,29 @@ impl Workspace {
                 if matches!(this.page, Page::Connections | Page::Rules) && this.leaving_dialog.is_some() {
                     return;
                 }
-                if key.key == "escape" && matches!(this.page, Page::Rules | Page::Connections) {
-                    if this.rule_browser.detail.is_some() { this.apply(Action::CloseRuleDetail, cx); return; }
-                    if this.detail.is_some() { this.apply(Action::Dismiss, cx); return; }
-                    if this.confirm.is_some() { this.apply(Action::Cancel, cx); return; }
+                if key.key == "escape" {
+                    if this.page == Page::Rules && this.rule_browser.detail.is_some() {
+                        this.apply(Action::CloseRuleDetail, cx);
+                        return;
+                    }
+                    if this.page == Page::Connections {
+                        if this.detail.is_some() {
+                            this.apply(Action::Dismiss, cx);
+                            return;
+                        }
+                        if this.confirm.is_some() {
+                            this.apply(Action::Cancel, cx);
+                            return;
+                        }
+                    }
+                    if this.page == Page::Config && this.config_dialog.is_some() {
+                        this.close_config_dialog(cx);
+                        return;
+                    }
+                    if this.page == Page::Settings && this.settings_layout.dialog.is_some() {
+                        this.close_settings_dialog(cx);
+                        return;
+                    }
                 }
                 if this.page == Page::Connections
                     && key.key == "delete"
@@ -1257,8 +1326,34 @@ impl Workspace {
     }
 
     fn run(&mut self, command: Command, cx: &mut Context<Self>) {
-        if self.busy {
-            return;
+        let is_read = matches!(
+            command,
+            Command::Proxies
+                | Command::Rules
+                | Command::ProxyProviders
+                | Command::RuleProviders
+                | Command::Config
+                | Command::Summary
+                | Command::Version
+        );
+        let is_exclusive_action = matches!(
+            command,
+            Command::GroupDelay { .. }
+                | Command::UpdateProviders { .. }
+                | Command::UpdateProxyProvider { .. }
+                | Command::UpdateRuleProvider { .. }
+                | Command::HealthCheck { .. }
+        );
+        if is_read {
+            if self.refreshing {
+                return;
+            }
+            self.refreshing = true;
+        } else if is_exclusive_action {
+            if self.busy {
+                return;
+            }
+            self.busy = true;
         }
         if let Command::GroupDelay{name,..} = &command {
             self.proxy_ui.testing = Some(name.clone());
@@ -1277,8 +1372,9 @@ impl Workspace {
             }
             _ => {}
         }
-        self.busy = true;
-        self.load_error.clear();
+        if is_read {
+            self.load_error.clear();
+        }
         let generation = self.generation;
         let api = self.api.clone();
         let request = command.clone();
@@ -1289,7 +1385,11 @@ impl Workspace {
                 if this.generation != generation {
                     return;
                 }
-                this.busy = false;
+                if is_read {
+                    this.refreshing = false;
+                } else if is_exclusive_action {
+                    this.busy = false;
+                }
                 if matches!(&command,Command::GroupDelay{..}) {
                     this.proxy_ui.testing = None;
                     this.release_proxy_order();
@@ -1410,6 +1510,7 @@ impl Workspace {
             Action::Providers => {
                 self.generation += 1;
                 self.busy = false;
+                self.refreshing = false;
                 self.show_providers = !self.show_providers;
                 if self.page == Page::Rules {
                     if let Some(filter) = &self.filter {
@@ -1736,6 +1837,22 @@ impl Workspace {
             .map(|s| crate::editor::Core {
                 executable: s.core.clone(),
                 working_dir: s.working_dir.clone().into(),
+            })
+            .or_else(|| {
+                let prefs = crate::maintenance::preferences().ok()?;
+                let exe = std::path::PathBuf::from(prefs.singbox_path.trim());
+                if !exe.is_file() {
+                    return None;
+                }
+                let working_dir = if !prefs.working_dir.trim().is_empty() {
+                    std::path::PathBuf::from(prefs.working_dir.trim())
+                } else {
+                    path.parent()?.to_path_buf()
+                };
+                Some(crate::editor::Core {
+                    executable: exe,
+                    working_dir,
+                })
             });
         match crate::editor::inline(path, core, name, remote, cx.weak_entity(), window, cx) {
             Ok(editor) => {

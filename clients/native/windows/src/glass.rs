@@ -779,7 +779,7 @@ pub fn card_layer(wash: gpui::Rgba, radius: Pixels, minimum_alpha: f32) -> impl 
                 let max_disp = 24. * lens;
                 let center_x = bounds.origin.x + bounds.size.width * 0.5;
                 let center_y = bounds.origin.y + bounds.size.height * 0.5;
-                const STEPS: usize = 10;
+                const STEPS: usize = 3;
                 let mut ok = false;
                 for step in 0..=STEPS {
                     let frac = step as f32 / STEPS as f32;
@@ -1019,13 +1019,18 @@ pub fn bar_layer(
     .size_full()
 }
 
+const GRAIN_TILE: u32 = 160;
+const GRAIN_SHEET: u32 = GRAIN_TILE * 6;
+
 fn tiled_grain() -> &'static Arc<RenderImage> {
     static GRAIN: OnceLock<Arc<RenderImage>> = OnceLock::new();
     GRAIN.get_or_init(|| {
         let image = image::load_from_memory(include_bytes!("../../android/assets/glass_grain.png"))
             .expect("glass grain PNG")
             .into_rgba8();
-        let tile = RgbaImage::from_fn(320, 320, |x, y| *image.get_pixel(x % 160, y % 160));
+        let tile = RgbaImage::from_fn(GRAIN_SHEET, GRAIN_SHEET, |x, y| {
+            *image.get_pixel(x % GRAIN_TILE, y % GRAIN_TILE)
+        });
         render_image(tile)
     })
 }
@@ -1038,41 +1043,20 @@ pub fn grain_layer(radius: Pixels) -> impl IntoElement {
                 return;
             }
             let tile = tiled_grain();
-            let step = |remaining: Pixels| {
-                if remaining > px(320.) {
-                    px(160.)
-                } else {
-                    remaining
-                }
-            };
-            let mut y = px(0.);
-            while y < bounds.size.height {
-                let h = step(bounds.size.height - y);
-                let bottom = y + h >= bounds.size.height;
-                let mut x = px(0.);
-                while x < bounds.size.width {
-                    let w = step(bounds.size.width - x);
-                    let right = x + w >= bounds.size.width;
-                    let corner = |edge| if edge { radius } else { px(0.) };
-                    let corners = Corners {
-                        top_left: corner(x == px(0.) && y == px(0.)),
-                        top_right: corner(right && y == px(0.)),
-                        bottom_left: corner(x == px(0.) && bottom),
-                        bottom_right: corner(right && bottom),
-                    };
-                    let origin = bounds.origin + point(x, y);
-                    let _ = window.paint_image(
-                        Bounds::new(origin, size(w, h)),
-                        Bounds::new(origin, size(px(320.), px(320.))),
-                        corners,
-                        tile.clone(),
-                        0,
-                        false,
-                    );
-                    x += w;
-                }
-                y += h;
-            }
+            let sheet = px(GRAIN_SHEET as f32);
+            let r = radius
+                .min(bounds.size.width * 0.5)
+                .min(bounds.size.height * 0.5)
+                .max(px(0.));
+            let image_size = size(bounds.size.width.max(sheet), bounds.size.height.max(sheet));
+            let _ = window.paint_image(
+                bounds,
+                Bounds::new(bounds.origin, image_size),
+                r.into(),
+                tile.clone(),
+                0,
+                false,
+            );
         },
     )
     .absolute()
@@ -1089,16 +1073,18 @@ pub fn render_image(mut image: RgbaImage) -> Arc<RenderImage> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Wallpaper, default_backdrop, tiled_grain};
+    use super::{GRAIN_SHEET, GRAIN_TILE, Wallpaper, default_backdrop, tiled_grain};
 
     #[test]
     fn grain_repeats_every_160_pixels_without_changing_its_alpha() {
         let tile = tiled_grain().as_bytes(0).unwrap();
-        assert_eq!(tile.len(), 320 * 320 * 4);
-        for y in 0..160 {
-            let at = |x: usize, y: usize| &tile[(y * 320 + x) * 4..(y * 320 + x + 160) * 4];
-            assert_eq!(at(0, y), at(160, y));
-            assert_eq!(at(0, y), at(0, y + 160));
+        let sheet = GRAIN_SHEET as usize;
+        let stride = GRAIN_TILE as usize;
+        assert_eq!(tile.len(), sheet * sheet * 4);
+        for y in 0..stride {
+            let at = |x: usize, y: usize| &tile[(y * sheet + x) * 4..(y * sheet + x + stride) * 4];
+            assert_eq!(at(0, y), at(stride, y));
+            assert_eq!(at(0, y), at(0, y + stride));
         }
         let alpha = tile.chunks_exact(4).map(|pixel| pixel[3]);
         assert_eq!((alpha.clone().min(), alpha.max()), (Some(1), Some(10)));

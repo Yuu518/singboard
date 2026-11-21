@@ -18,13 +18,17 @@ impl Workspace {
         let visible = match self.page {
             Page::Connections => self.detail.is_some() || self.confirm.is_some(),
             Page::Rules => self.rule_browser.detail.is_some(),
+            Page::Config => self.config_dialog.is_some(),
+            Page::Settings => self.settings_layout.dialog.is_some(),
             _ => false,
         };
         if visible && self.page_dialog_focus.is_none() {
             let scope = cx.focus_handle();
             let previous = window.focused(cx);
             let initial = self.rule_browser.detail.as_ref().map(|d| d.search.read(cx).focus.clone());
-            window.focus(initial.as_ref().unwrap_or(&scope), cx);
+            if !matches!(self.page, Page::Config) || previous.is_none() {
+                window.focus(initial.as_ref().unwrap_or(&scope), cx);
+            }
             self.page_dialog_focus = Some((scope, previous));
         } else if !visible && self.leaving_dialog.is_some() {
             if let Some((scope, _)) = &self.page_dialog_focus {
@@ -40,6 +44,8 @@ impl Workspace {
         let overlay = match self.page {
             Page::Connections => self.connection_overlay(window, cx),
             Page::Rules => self.rule_overlay(window, cx),
+            Page::Config => self.render_config_dialog(cx).map(|el| div().absolute().inset_0().child(el)),
+            Page::Settings => self.render_settings_dialog(cx).map(|el| div().absolute().inset_0().child(el)),
             _ => None,
         }?;
         Some(match &self.page_dialog_focus {

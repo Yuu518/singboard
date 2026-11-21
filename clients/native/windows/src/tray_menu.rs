@@ -29,26 +29,26 @@ struct TrayMenu {
     error: String,
 }
 
-fn place(window: &Window, x: i32, y: i32) {
+fn place(window: &Window, x: i32, y: i32) -> bool {
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
-        return;
+        return false;
     };
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-        return;
+        return false;
     };
     unsafe {
         let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
         let mut info: MONITORINFO = std::mem::zeroed();
         info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
         if GetMonitorInfoW(monitor, &mut info) == 0 {
-            return;
+            return false;
         }
         let (mut dx, mut dy) = (96, 96);
         if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) < 0 {
             dx = 96;
             dy = 96;
         }
-        let screen = info.rcMonitor;
+        let screen = info.rcWork;
         let w = ((144 * dx + 48) / 96) as i32;
         let h = ((132 * dy + 48) / 96) as i32;
         let left = if x + w <= screen.right { x } else { x - w };
@@ -69,7 +69,7 @@ fn place(window: &Window, x: i32, y: i32) {
             h,
             SWP_SHOWWINDOW | SWP_FRAMECHANGED,
         );
-        SetForegroundWindow(hwnd);
+        SetForegroundWindow(hwnd) != 0
     }
 }
 
@@ -126,10 +126,25 @@ pub fn open(x: i32, y: i32, panel: AnyWindowHandle, workspace: Entity<Workspace>
 impl TrayMenu {
     fn present(&mut self, x: i32, y: i32, window: &mut Window, cx: &mut Context<Self>) {
         self.selected = None;
+        self.error.clear();
         self.workspace
             .update(cx, |ws, cx| ws.refresh_local_state(cx));
-        place(window, x, y);
+        let focused = place(window, x, y);
         window.focus(&self.focus, cx);
+        if !focused {
+            let handle = gpui::Window::window_handle(window);
+            cx.spawn(async move |_, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(350))
+                    .await;
+                let _ = handle.update(cx, |_, window, _| {
+                    if !window.is_window_active() {
+                        visibility(window, false);
+                    }
+                });
+            })
+            .detach();
+        }
         cx.notify();
     }
 

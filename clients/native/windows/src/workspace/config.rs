@@ -101,6 +101,68 @@ fn short_timestamp(iso: &str) -> String {
     }
 }
 
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn parse_iso_seconds(iso: &str) -> Option<i64> {
+    let clean = iso.trim().trim_end_matches('Z');
+    let (date, time) = clean.split_once('T')?;
+    let mut dp = date.split('-');
+    let y: i64 = dp.next()?.parse().ok()?;
+    let m: i64 = dp.next()?.parse().ok()?;
+    let d: i64 = dp.next()?.parse().ok()?;
+    let mut tp = time.split(':');
+    let hh: i64 = tp.next()?.parse().ok()?;
+    let mm: i64 = tp.next()?.parse().ok()?;
+    let ss: i64 = tp.next()?.split('.').next()?.parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || hh > 23 || mm > 59 || ss > 59 {
+        return None;
+    }
+    Some(days_from_civil(y, m, d) * 86400 + hh * 3600 + mm * 60 + ss)
+}
+
+fn is_remote_profile_due(profile: &ConfigProfile, now_secs: i64) -> bool {
+    if profile.kind != "remote" || profile.auto_update_interval == 0 {
+        return false;
+    }
+    let Some(last_secs) = parse_iso_seconds(&profile.last_updated) else {
+        return true;
+    };
+    now_secs.saturating_sub(last_secs) >= i64::from(profile.auto_update_interval) * 3600
+}
+
+async fn sync_service_config(path: &Path) -> Result<(), String> {
+    let status = tokio::task::spawn_blocking(crate::service::status)
+        .await
+        .map_err(|e| e.to_string())??;
+    if status.state == "not_installed" {
+        return Ok(());
+    }
+    if let Ok(Some(snapshot)) = tokio::task::spawn_blocking(crate::service::snapshot)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        if snapshot
+            .source_config
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&path.to_string_lossy())
+        {
+            return Ok(());
+        }
+    }
+    crate::service::request(crate::service::admin::Operation::UseConfig {
+        service: status.name,
+        config: path.to_path_buf(),
+    })
+    .await
+}
+
 fn resolve_local_input(raw: &str, working_dir: &str) -> Result<PathBuf, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -499,6 +561,9 @@ impl Workspace {
             }
 
             let now = super::now_iso();
+            if is_active && !is_remote && !next_source.eq_ignore_ascii_case(&before.source) {
+                sync_service_config(Path::new(&next_source)).await?;
+            }
             Settings::edit(&dir, |p| {
                 if let Some(entry) = p.config_profiles.iter_mut().find(|v| v.id == id) {
                     entry.name = name_val.clone();
@@ -568,6 +633,7 @@ impl Workspace {
                 )
                 .await?;
             }
+            sync_service_config(&path).await?;
             let path_str = path.to_string_lossy().into_owned();
             Settings::edit(&dir, |p| {
                 p.active_config_profile_id = id.clone();
@@ -595,6 +661,136 @@ impl Workspace {
         })
         .detach();
         cx.notify();
+    }
+
+    pub(super) fn poll_due_remote_profiles(&mut self, cx: &mut Context<Self>) {
+        if self.auto_updating_profiles || self.config_busy.is_some() {
+            return;
+        }
+        if self
+            .last_profile_auto_check
+            .is_some_and(|last| last.elapsed() < std::time::Duration::from_secs(300))
+        {
+            return;
+        }
+        self.last_profile_auto_check = Some(std::time::Instant::now());
+        self.auto_updating_profiles = true;
+        let task = singboard_stream::runtime().spawn(async move {
+            let dir = crate::service::data_dir()?;
+            let prefs = crate::maintenance::preferences()?;
+            let Some(now_secs) = parse_iso_seconds(&super::now_iso()) else {
+                return Ok::<_, String>((Vec::new(), Vec::new(), false));
+            };
+            let due: Vec<ConfigProfile> = prefs
+                .config_profiles
+                .iter()
+                .filter(|p| is_remote_profile_due(p, now_secs))
+                .cloned()
+                .collect();
+            if due.is_empty() {
+                return Ok((Vec::new(), Vec::new(), false));
+            }
+            let mut updated_names = Vec::new();
+            let mut errors = Vec::new();
+            let mut active_changed = false;
+            for profile in due {
+                let dest = match remote_config_path(&profile.id) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        errors.push(format!("{} · {e}", profile.name));
+                        continue;
+                    }
+                };
+                if let Some(parent) = dest.parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        errors.push(format!("{} · {e}", profile.name));
+                        continue;
+                    }
+                }
+                let res: Result<bool, String> = async {
+                    let text = download(&profile.source).await?;
+                    if !prefs.singbox_path.trim().is_empty() {
+                        let tmp = dest.with_extension("tmp.json");
+                        std::fs::write(&tmp, text.as_bytes()).map_err(|e| e.to_string())?;
+                        let check = config_files::run_singbox_check(
+                            &prefs.singbox_path,
+                            &tmp.to_string_lossy(),
+                            (!prefs.working_dir.trim().is_empty())
+                                .then_some(prefs.working_dir.as_str()),
+                        )
+                        .await;
+                        let _ = std::fs::remove_file(&tmp);
+                        check?;
+                    }
+                    config_files::replace_with_backup(&dest, text.as_bytes())
+                }
+                .await;
+                let now = super::now_iso();
+                match res {
+                    Ok(changed) => {
+                        let is_active = prefs.active_config_profile_id == profile.id;
+                        let _ = Settings::edit(&dir, |p| {
+                            if let Some(entry) =
+                                p.config_profiles.iter_mut().find(|v| v.id == profile.id)
+                            {
+                                if changed {
+                                    entry.backup_updated_at = entry.last_updated.clone();
+                                }
+                                entry.last_updated = now;
+                                entry.last_fetch_error.clear();
+                            }
+                            Ok(())
+                        });
+                        if changed {
+                            updated_names.push(profile.name);
+                            if is_active {
+                                active_changed = true;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let _ = Settings::edit(&dir, |p| {
+                            if let Some(entry) =
+                                p.config_profiles.iter_mut().find(|v| v.id == profile.id)
+                            {
+                                entry.last_fetch_error = err.clone();
+                            }
+                            Ok(())
+                        });
+                        errors.push(format!("{} · {err}", profile.name));
+                    }
+                }
+            }
+            Ok((updated_names, errors, active_changed))
+        });
+        cx.spawn(async move |weak, cx| {
+            let result = task.await.unwrap_or_else(|e| Err(e.to_string()));
+            let _ = weak.update(cx, |this, cx| {
+                this.auto_updating_profiles = false;
+                if let Ok((updated, errors, active_changed)) = result {
+                    if !updated.is_empty() {
+                        this.message(
+                            format!("已自动更新远程配置：{}", updated.join("、")),
+                            false,
+                            cx,
+                        );
+                    }
+                    if active_changed {
+                        this.pending_restart =
+                            Some("当前使用的远程配置已自动更新，重启核心后生效。".into());
+                    }
+                    if !errors.is_empty() {
+                        this.message(
+                            format!("远程配置自动更新失败：{}", errors.join("；")),
+                            true,
+                            cx,
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn update_remote_profile(&mut self, profile: ConfigProfile, cx: &mut Context<Self>) {

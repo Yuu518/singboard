@@ -94,20 +94,41 @@ impl Workspace {
             .and_then(|&i| source_slice.get(i))
             .map(|r| r.seq);
 
-        if filter_key != self.log_list_filter || shown == 0 || self.log_list_len == 0 {
+        let prev_head = self.log_list_head;
+        let prev_len = self.log_list_len;
+        if filter_key != self.log_list_filter || shown == 0 || prev_len == 0 {
             self.cancel_scroll(scrolling::ScrollTarget::Logs);
             self.log_list.reset_with_uniform_height(shown, px(26.));
             self.log_auto_scroll = true;
             self.log_list.set_follow_mode(FollowMode::Tail);
-        } else if head_seq == self.log_list_head {
-            if shown > self.log_list_len {
+        } else if head_seq == prev_head {
+            if shown > prev_len {
                 self.log_list
-                    .splice(self.log_list_len..self.log_list_len, shown - self.log_list_len);
-            } else if shown < self.log_list_len {
+                    .splice(prev_len..prev_len, shown - prev_len);
+            } else if shown < prev_len {
                 self.cancel_scroll(scrolling::ScrollTarget::Logs);
                 self.log_list.reset_with_uniform_height(shown, px(26.));
                 self.log_auto_scroll = true;
                 self.log_list.set_follow_mode(FollowMode::Tail);
+            }
+        } else if let (Some(old_head), Some(new_head)) = (prev_head, head_seq)
+            && new_head > old_head
+        {
+            let dropped = (new_head - old_head) as usize;
+            if dropped < prev_len {
+                let kept = prev_len - dropped;
+                self.log_list.splice(0..dropped, 0);
+                if shown > kept {
+                    self.log_list.splice(kept..kept, shown - kept);
+                } else if shown < kept {
+                    self.log_list.splice(shown..kept, 0);
+                }
+            } else {
+                self.cancel_scroll(scrolling::ScrollTarget::Logs);
+                self.log_list.reset_with_uniform_height(shown, px(26.));
+                if self.log_auto_scroll {
+                    self.log_list.set_follow_mode(FollowMode::Tail);
+                }
             }
         } else {
             self.cancel_scroll(scrolling::ScrollTarget::Logs);

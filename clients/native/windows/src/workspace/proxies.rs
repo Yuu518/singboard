@@ -834,7 +834,13 @@ impl Workspace {
                             .px_5()
                             .pb_4();
                         for (row_idx, chunk) in proxies_arr.chunks(cols).take(shown_rows).enumerate() {
-                            let mut row = div().w_full().h(px(76.)).flex_none().flex().gap(px(8.));
+                            let mut row = div()
+                                .w_full()
+                                .h(px(76.))
+                                .flex_none()
+                                .grid()
+                                .grid_cols(cols as u16)
+                                .gap(px(8.));
                             for (col_idx, node) in chunk.iter().enumerate() {
                                 let ni = row_idx * cols + col_idx;
                                 let n_name = node["name"].as_str().unwrap_or("").to_owned();
@@ -848,7 +854,7 @@ impl Workspace {
                                 let url = self.latency_test_url.clone();
                                 row = row.child(
                                     div()
-                                        .flex_1()
+                                        .w_full()
                                         .min_w_0()
                                         .h(px(76.))
                                         .p(px(10.))
@@ -910,9 +916,6 @@ impl Workspace {
                                                 ),
                                         ),
                                 );
-                            }
-                            for _ in chunk.len()..cols {
-                                row = row.child(div().flex_1().min_w_0());
                             }
                             grid = grid.child(row);
                         }
@@ -1288,7 +1291,13 @@ impl Workspace {
                     .pb_4()
                     .pt_1();
                 for chunk in nodes.chunks(cols).take(shown_rows) {
-                    let mut row = div().w_full().h(px(76.)).flex_none().flex().gap(px(8.));
+                    let mut row = div()
+                        .w_full()
+                        .h(px(76.))
+                        .flex_none()
+                        .grid()
+                        .grid_cols(cols as u16)
+                        .gap(px(8.));
                     for &(ni, node) in chunk {
                         let selected = node.name == g.now;
                         let name = node.name.clone();
@@ -1322,7 +1331,7 @@ impl Workspace {
                                     .size_full(),
                                 )
                             })
-                            .flex_1()
+                            .w_full()
                             .min_w_0()
                             .h(px(76.))
                             .p(px(10.))
@@ -1430,9 +1439,6 @@ impl Workspace {
                             );
                         }
                         row = row.child(tile.child(bottom));
-                    }
-                    for _ in chunk.len()..cols {
-                        row = row.child(div().flex_1().min_w_0());
                     }
                     grid = grid.child(row);
                 }

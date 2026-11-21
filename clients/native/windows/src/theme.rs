@@ -16,7 +16,7 @@ pub fn text_scale() -> f32 {
         .open_subkey("Software\\Microsoft\\Accessibility")
         .and_then(|key| key.get_value::<u32, _>("TextScaleFactor"))
         .unwrap_or(100);
-    (raw as f32 / 100.).clamp(1., 2.25)
+    (raw as f32 / 100.).clamp(1., 1.25)
 }
 
 pub fn text_px(size: f32) -> Rems {

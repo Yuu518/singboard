@@ -37,7 +37,7 @@ fn active_config_file(prefs: &Settings) -> Result<PathBuf, String> {
     {
         if p.kind == "remote" {
             let path = crate::service::data_dir()?
-                .join("configs")
+                .join("remote-configs")
                 .join(format!("{}.json", p.id));
             if path.is_file() {
                 return Ok(path);
@@ -545,7 +545,84 @@ impl Workspace {
                                             .child(glass_input("svc-delay-input", &delay_input, true, p)),
                                     )
                                     .child(div().text_xs().text_color(p.muted()).child("秒")),
-                            ),
+                            )
+                            .when(!self.local_state.contains("未安装"), |row| {
+                                row.child(
+                                    action_btn("enable-svc-autostart", "启用自启", busy, p)
+                                        .when(!busy, |b| {
+                                            b.on_click(cx.listener(|v, _, _, cx| {
+                                                let values = v.values(&["delay"], cx);
+                                                let delay = values["delay"]
+                                                    .trim()
+                                                    .parse::<u32>()
+                                                    .unwrap_or(30)
+                                                    .min(3600);
+                                                v.settings_layout.pending.insert("service");
+                                                let job = singboard_stream::runtime().spawn(async move {
+                                                    let service = crate::service::service_name()?;
+                                                    crate::service::request(
+                                                        crate::service::admin::Operation::CreateTask {
+                                                            service,
+                                                            delay,
+                                                        },
+                                                    )
+                                                    .await
+                                                });
+                                                cx.spawn(async move |weak, cx| {
+                                                    let r = job
+                                                        .await
+                                                        .map_err(|e| e.to_string())
+                                                        .and_then(|r| r);
+                                                    let _ = weak.update(cx, |v, cx| {
+                                                        v.settings_layout.pending.remove("service");
+                                                        v.settings_layout.results.insert(
+                                                            "service",
+                                                            r.map(|()| "已启用服务开机自启".to_string())
+                                                                .unwrap_or_else(|e| e),
+                                                        );
+                                                        cx.notify();
+                                                    });
+                                                })
+                                                .detach();
+                                                cx.notify();
+                                            }))
+                                        }),
+                                )
+                                .child(
+                                    action_btn("disable-svc-autostart", "取消自启", busy, p)
+                                        .when(!busy, |b| {
+                                            b.on_click(cx.listener(|v, _, _, cx| {
+                                                v.settings_layout.pending.insert("service");
+                                                let job = singboard_stream::runtime().spawn(async move {
+                                                    let service = crate::service::service_name()?;
+                                                    crate::service::request(
+                                                        crate::service::admin::Operation::DeleteTask {
+                                                            service,
+                                                        },
+                                                    )
+                                                    .await
+                                                });
+                                                cx.spawn(async move |weak, cx| {
+                                                    let r = job
+                                                        .await
+                                                        .map_err(|e| e.to_string())
+                                                        .and_then(|r| r);
+                                                    let _ = weak.update(cx, |v, cx| {
+                                                        v.settings_layout.pending.remove("service");
+                                                        v.settings_layout.results.insert(
+                                                            "service",
+                                                            r.map(|()| "已取消服务开机自启".to_string())
+                                                                .unwrap_or_else(|e| e),
+                                                        );
+                                                        cx.notify();
+                                                    });
+                                                })
+                                                .detach();
+                                                cx.notify();
+                                            }))
+                                        }),
+                                )
+                            }),
                     ),
             )
             .child(path_row(
@@ -583,7 +660,7 @@ impl Workspace {
                             v.settings_layout.pending.insert("service");
                             let job = singboard_stream::runtime().spawn(async move {
                                 let dir = crate::service::data_dir()?;
-                                if Settings::load(&dir)?.startup_delay_seconds.unwrap_or(0) != delay
+                                if Settings::load(&dir)?.startup_delay_seconds.unwrap_or(30) != delay
                                 {
                                     let status = crate::service::status()?;
                                     if status.autostart {
