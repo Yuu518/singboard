@@ -183,7 +183,12 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
             child: SafeArea(
               child: Center(
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(16),
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    16,
+                    16,
+                    16 + MediaQuery.viewInsetsOf(context).bottom,
+                  ),
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 576),
                     child: TweenAnimationBuilder<double>(

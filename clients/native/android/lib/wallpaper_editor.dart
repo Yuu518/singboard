@@ -48,17 +48,41 @@ class _WallpaperEditorDialogState extends State<WallpaperEditorDialog> {
   }
 
   Future<void> _decodeBytes(Uint8List bytes) async {
-    final codec = await ui.instantiateImageCodec(bytes);
-    final frame = await codec.getNextFrame();
-    codec.dispose();
-    if (!mounted) {
-      frame.image.dispose();
-      return;
+    const maxDecodeDim = 2048;
+    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+    ui.ImageDescriptor? descriptor;
+    ui.Codec? codec;
+    try {
+      descriptor = await ui.ImageDescriptor.encoded(buffer);
+      final srcW = descriptor.width;
+      final srcH = descriptor.height;
+      int? targetW;
+      int? targetH;
+      if (srcW > maxDecodeDim || srcH > maxDecodeDim) {
+        if (srcW >= srcH) {
+          targetW = maxDecodeDim;
+        } else {
+          targetH = maxDecodeDim;
+        }
+      }
+      codec = await descriptor.instantiateCodec(
+        targetWidth: targetW,
+        targetHeight: targetH,
+      );
+      final frame = await codec.getNextFrame();
+      if (!mounted) {
+        frame.image.dispose();
+        return;
+      }
+      setState(() {
+        _decoded?.dispose();
+        _decoded = frame.image;
+      });
+    } finally {
+      codec?.dispose();
+      descriptor?.dispose();
+      buffer.dispose();
     }
-    setState(() {
-      _decoded?.dispose();
-      _decoded = frame.image;
-    });
   }
 
   double _targetRatio(Size screenSize, double srcRatio) => switch (_aspect) {
@@ -267,7 +291,7 @@ class _WallpaperEditorDialogState extends State<WallpaperEditorDialog> {
       final crop = _selection(screenSize);
       final cropW = crop.width * rotatedW;
       final cropH = crop.height * rotatedH;
-      const maxDim = 4096.0;
+      const maxDim = 2048.0;
       final outScale = math.min(1.0, maxDim / math.max(cropW, cropH));
       final outW = math.max(1, (cropW * outScale).round());
       final outH = math.max(1, (cropH * outScale).round());

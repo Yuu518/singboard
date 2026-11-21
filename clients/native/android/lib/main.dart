@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
@@ -20,7 +21,11 @@ final _wallpaper = ValueNotifier<String?>(null);
 final _wallpaperRev = ValueNotifier<int>(0);
 const _platformChannel = MethodChannel('singboard/config');
 
-void main() => runApp(const Panel());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
+  runApp(const Panel());
+}
 
 class _GlassScrollBehavior extends MaterialScrollBehavior {
   const _GlassScrollBehavior();
@@ -79,12 +84,26 @@ class Panel extends StatelessWidget {
         ),
         scaffoldBackgroundColor: Colors.transparent,
       ),
-      builder: (_, navigator) => GlassEnvironment(
-        tint: _glassTint.value,
-        wallpaperPath: _wallpaper.value,
-        wallpaperRevision: _wallpaperRev.value,
-        child: GlassToastHost(child: navigator ?? const SizedBox.shrink()),
-      ),
+      builder: (ctx, navigator) {
+        final dark = Theme.of(ctx).brightness == Brightness.dark;
+        final overlay = SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          systemNavigationBarColor: Colors.transparent,
+          systemNavigationBarDividerColor: Colors.transparent,
+          statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
+          systemNavigationBarIconBrightness: dark ? Brightness.light : Brightness.dark,
+          statusBarBrightness: dark ? Brightness.dark : Brightness.light,
+        );
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: overlay,
+          child: GlassEnvironment(
+            tint: _glassTint.value,
+            wallpaperPath: _wallpaper.value,
+            wallpaperRevision: _wallpaperRev.value,
+            child: GlassToastHost(child: navigator ?? const SizedBox.shrink()),
+          ),
+        );
+      },
       home: const Dashboard(),
     ),
   );
@@ -538,11 +557,16 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       rootTimer?.cancel();
       rootTimer = null;
     }
-    profileTimer ??= Timer.periodic(
-      const Duration(minutes: 5),
-      (_) => refreshDue(),
-    );
-    unawaited(refreshDue());
+    if (preferences['nativeRootEnabled'] == true) {
+      profileTimer ??= Timer.periodic(
+        const Duration(minutes: 5),
+        (_) => refreshDue(),
+      );
+      unawaited(refreshDue());
+    } else {
+      profileTimer?.cancel();
+      profileTimer = null;
+    }
     if (timer != null) return;
     unawaited(readSummary());
     summaryTimer ??= Timer.periodic(
@@ -564,11 +588,19 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   }
 
   void poll() {
-    final batch = logs!.drain();
-    final sample = traffic!.drain();
-    final snapshot = connections!.drain();
-    final lines = (batch['logs'] as List).cast<Map<String, dynamic>>();
-    final samples = sample['traffic'] as List;
+    if (logs == null || traffic == null || connections == null) return;
+    final Map<String, dynamic> batch;
+    final Map<String, dynamic> sample;
+    final Map<String, dynamic> snapshot;
+    try {
+      batch = logs!.drain();
+      sample = traffic!.drain();
+      snapshot = connections!.drain();
+    } catch (_) {
+      return;
+    }
+    final lines = (batch['logs'] as List? ?? const []).cast<Map<String, dynamic>>();
+    final samples = sample['traffic'] as List? ?? const [];
     final nextFailures = (batch['failures'] as num?)?.toInt() ?? 0;
     final trafficFailures = (sample['failures'] as num?)?.toInt() ?? 0;
     final connectionFailures = (snapshot['failures'] as num?)?.toInt() ?? 0;
@@ -586,7 +618,8 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     final hasMemory =
         snapshot['memory'] != null ||
         (coreMemory != null && snapshot['memory_open'] != true);
-    final hasLogs = lines.isNotEmpty || (batch['dropped'] as int) > 0;
+    final dropped = (batch['dropped'] as num?)?.toInt() ?? 0;
+    final hasLogs = lines.isNotEmpty || dropped > 0;
     if (!statusChanged &&
         !hasConnections &&
         !hasClosed &&
@@ -596,21 +629,21 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       return;
     }
     final prevLogStatus = logStatus;
-    logStatus = batch['status'] as String;
+    logStatus = batch['status'] as String? ?? logStatus;
     _logFailures = nextFailures;
     _trafficFailures = trafficFailures;
     _connectionFailures = connectionFailures;
-    trafficStatus = sample['status'] as String;
-    connectionStatus = snapshot['status'] as String;
+    trafficStatus = sample['status'] as String? ?? trafficStatus;
+    connectionStatus = snapshot['status'] as String? ?? connectionStatus;
     _syncNetwork();
     if (snapshot['connections'] case final Map data) {
       active = (data['connections'] as List? ?? []).cast<Item>();
       metrics = data['metrics'] as Item? ?? {};
       appendSample(connectionTrend, active.length);
     }
-    if (snapshot['memory'] case final int bytes) {
-      coreMemory = bytes;
-      appendSample(memoryTrend, bytes);
+    if (snapshot['memory'] case final num bytes) {
+      coreMemory = bytes.toInt();
+      appendSample(memoryTrend, bytes.toInt());
     }
     if (snapshot['memory_open'] != true) coreMemory = null;
     if (snapshot['has_frame'] != true) {
@@ -642,7 +675,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       }
       _logGapSince = null;
     }
-    total += lines.length + (batch['dropped'] as int);
+    total += lines.length + dropped;
     for (final raw in lines) {
       entries.add({...raw, 'seq': _logSeq++});
     }
@@ -659,11 +692,11 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     final hasTrafficSample = samples.isNotEmpty && trafficStatus == '已连接';
     if (hasTrafficSample) {
       hasTraffic = true;
-      up = samples.last['up'] as int;
-      down = samples.last['down'] as int;
+      up = (samples.last['up'] as num?)?.toInt() ?? 0;
+      down = (samples.last['down'] as num?)?.toInt() ?? 0;
       for (final value in samples) {
-        appendSample(downTrend, value['down']);
-        appendSample(upTrend, value['up']);
+        appendSample(downTrend, (value['down'] as num?)?.toInt() ?? 0);
+        appendSample(upTrend, (value['up'] as num?)?.toInt() ?? 0);
       }
     }
     final shouldRebuild = statusChanged ||
@@ -671,7 +704,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
             _targetPage == null &&
             switch (tab) {
               0 => hasConnections || hasMemory || hasTrafficSample,
-              1 => hasConnections,
+              1 => false,
               2 => hasConnections || hasClosed,
               3 => hasLogs || addedLogMarker,
               _ => false,
@@ -701,7 +734,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     metrics = {};
     frozenTopology = hoveredTopology = null;
     coreMemory = null;
-    connectionStatus = trafficStatus = '未连接';
+    connectionStatus = trafficStatus = logStatus = '未连接';
   }
 
   @override
@@ -797,7 +830,10 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
         }
       }
     } catch (e) {
-      if (mounted) setState(() => rootStatus = e.toString());
+      if (mounted) {
+        setState(() => rootStatus = e.toString());
+        showGlassToast(context, e.toString(), error: true);
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -2845,6 +2881,13 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       onThemeChanged: (m) => _theme.value = m,
       onTintChanged: (t) => _glassTint.value = t,
       onWallpaperChanged: (p) {
+        final prev = _wallpaper.value;
+        if (prev != null && prev.isNotEmpty) {
+          unawaited(FileImage(File(prev)).evict());
+        }
+        if (p != null && p.isNotEmpty) {
+          unawaited(FileImage(File(p)).evict());
+        }
         _wallpaper.value = p;
         _wallpaperRev.value++;
       },
@@ -2881,128 +2924,150 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
         ? () => rootOperation(rootRunning ? 'root_stop' : 'root_start', rootRunning ? '停止核心' : '启动核心')
         : null;
     return PopScope(
-      canPop: tab == 0,
+      canPop: !showSetupWizard && tab == 0,
       onPopInvokedWithResult: (popped, _) {
-        if (!popped && tab != 0) _selectTab(0);
+        if (!popped && !showSetupWizard && tab != 0) _selectTab(0);
       },
       child: GlassBackdrop(
         child: Stack(
           children: [
-            Scaffold(
-              backgroundColor: Colors.transparent,
-              extendBody: true,
-              body: Column(
-                children: [
-                  AnimatedBuilder(
-                    animation: Listenable.merge([_pager, _headerScroll]),
-                    builder: (_, __) {
-                      final pos = _pager.positions.length == 1 && _pager.position.haveDimensions
-                          ? (_pager.page ?? tab.toDouble())
-                          : tab.toDouble();
-                      final lo = pos.floor().clamp(0, _scrollProgress.length - 1);
-                      final hi = pos.ceil().clamp(0, _scrollProgress.length - 1);
-                      final frac = (pos - lo).clamp(0.0, 1.0);
-                      final headerProgress =
-                          _scrollProgress[lo] + (_scrollProgress[hi] - _scrollProgress[lo]) * frac;
-                      final titleIdx = _scrollProgress[lo] >= _scrollProgress[hi] ? lo : hi;
-                      return GlassAppHeader(
-                        title: 'singboard',
-                        scrolledTitle: titleIdx != 3 && headerProgress > 0.01
-                            ? _titles[titleIdx]
-                            : null,
-                        scrollProgress: headerProgress,
-                        showStatusPill: true,
-                        statusPillOpacity: pos.clamp(0.0, 1.0),
-                        connected: running,
-                        busy: busy,
-                        statusText: statusText,
-                        onStatusTap: onStatusTap,
-                      );
-                    },
-                  ),
-                  Expanded(
-                    child: AnimatedBuilder(
-                      animation: _pageFade,
-                      builder: (_, child) {
-                        final t = _pageFade.value;
-                        final curved = const Cubic(0.16, 1.0, 0.3, 1.0).transform(t);
-                        final opacity = Curves.easeOut.transform(
-                          (t / 0.65).clamp(0.0, 1.0).toDouble(),
-                        );
-                        final dx = _tabDir * 28.0 * (1.0 - curved);
-                        final scale = 0.985 + 0.015 * curved;
-                        return Opacity(
-                          opacity: opacity,
-                          child: Transform.translate(
-                            offset: Offset(dx, 0),
-                            child: Transform.scale(scale: scale, child: child),
-                          ),
-                        );
-                      },
-                      child: GlassScrollScope(
-                        listenable: _glassMotion,
-                        child: NotificationListener<ScrollNotification>(
-                          onNotification: (event) {
-                            if (event.depth != 0) return false;
-                            if (event is ScrollStartNotification &&
-                                event.dragDetails != null) {
-                              _userSwiping = true;
-                              _pendingTab = null;
-                            } else if (event is ScrollUpdateNotification &&
-                                _userSwiping &&
-                                _pager.positions.length == 1) {
-                              _swipeProgress.value = _pager.page;
-                            } else if (event is ScrollEndNotification &&
-                                _userSwiping) {
-                              _userSwiping = false;
-                              _swipeProgress.value = null;
-                              final settled =
-                                  _pendingTab ??
-                                  (_pager.positions.length == 1 &&
-                                          _pager.position.haveDimensions
-                                      ? (_pager.page?.round() ?? tab)
-                                      : tab);
-                              _pendingTab = null;
-                              if (settled != tab) {
-                                if (settled != 0) hoveredTopology = null;
-                                setState(() => tab = settled);
-                              }
-                            }
-                            return false;
-                          },
-                          child: PageView.builder(
-                            controller: _pager,
-                            allowImplicitScrolling: true,
-                            itemCount: _titles.length,
-                            physics: preferences['pageSwipe'] == true
-                                ? const _GentlePageScrollPhysics(
-                                    parent: BouncingScrollPhysics(),
-                                  )
-                                : const NeverScrollableScrollPhysics(),
-                            onPageChanged: (i) {
-                              if (_targetPage != null) return;
-                              if (_userSwiping) {
-                                _pendingTab = i;
-                              } else if (tab != i) {
-                                if (i != 0) hoveredTopology = null;
-                                setState(() => tab = i);
-                              }
+            ExcludeFocus(
+              excluding: showSetupWizard,
+              child: IgnorePointer(
+                ignoring: showSetupWizard,
+                child: Stack(
+                  children: [
+                    Scaffold(
+                      backgroundColor: Colors.transparent,
+                      extendBody: true,
+                      body: Column(
+                        children: [
+                          AnimatedBuilder(
+                            animation: Listenable.merge([_pager, _headerScroll]),
+                            builder: (_, __) {
+                              final pos = _pager.positions.length == 1 && _pager.position.haveDimensions
+                                  ? (_pager.page ?? tab.toDouble())
+                                  : tab.toDouble();
+                              final lo = pos.floor().clamp(0, _scrollProgress.length - 1);
+                              final hi = pos.ceil().clamp(0, _scrollProgress.length - 1);
+                              final frac = (pos - lo).clamp(0.0, 1.0);
+                              final headerProgress =
+                                  _scrollProgress[lo] + (_scrollProgress[hi] - _scrollProgress[lo]) * frac;
+                              final titleIdx = _scrollProgress[lo] >= _scrollProgress[hi] ? lo : hi;
+                              return GlassAppHeader(
+                                title: 'singboard',
+                                scrolledTitle: titleIdx != 3 && headerProgress > 0.01
+                                    ? _titles[titleIdx]
+                                    : null,
+                                scrollProgress: headerProgress,
+                                showStatusPill: true,
+                                statusPillOpacity: pos.clamp(0.0, 1.0),
+                                connected: running,
+                                busy: busy,
+                                statusText: statusText,
+                                onStatusTap: onStatusTap,
+                              );
                             },
-                            itemBuilder: (_, i) => _page(i),
                           ),
+                          Expanded(
+                            child: AnimatedBuilder(
+                              animation: _pageFade,
+                              builder: (_, child) {
+                                final t = _pageFade.value;
+                                final curved = const Cubic(0.16, 1.0, 0.3, 1.0).transform(t);
+                                final opacity = Curves.easeOut.transform(
+                                  (t / 0.65).clamp(0.0, 1.0).toDouble(),
+                                );
+                                final dx = _tabDir * 28.0 * (1.0 - curved);
+                                final scale = 0.985 + 0.015 * curved;
+                                return Opacity(
+                                  opacity: opacity,
+                                  child: Transform.translate(
+                                    offset: Offset(dx, 0),
+                                    child: Transform.scale(scale: scale, child: child),
+                                  ),
+                                );
+                              },
+                              child: GlassScrollScope(
+                                listenable: _glassMotion,
+                                child: NotificationListener<ScrollNotification>(
+                                  onNotification: (event) {
+                                    if (event.depth != 0) return false;
+                                    if (event is ScrollStartNotification &&
+                                        event.dragDetails != null) {
+                                      _userSwiping = true;
+                                      _pendingTab = null;
+                                    } else if (event is ScrollUpdateNotification &&
+                                        _userSwiping &&
+                                        _pager.positions.length == 1) {
+                                      _swipeProgress.value = _pager.page;
+                                    } else if (event is ScrollEndNotification &&
+                                        _userSwiping) {
+                                      _userSwiping = false;
+                                      _swipeProgress.value = null;
+                                      final settled =
+                                          _pendingTab ??
+                                          (_pager.positions.length == 1 &&
+                                                  _pager.position.haveDimensions
+                                              ? (_pager.page?.round() ?? tab)
+                                              : tab);
+                                      _pendingTab = null;
+                                      if (settled != tab) {
+                                        if (settled != 0) hoveredTopology = null;
+                                        setState(() => tab = settled);
+                                      }
+                                    }
+                                    return false;
+                                  },
+                                  child: PageView.builder(
+                                    controller: _pager,
+                                    allowImplicitScrolling: true,
+                                    itemCount: _titles.length,
+                                    physics: preferences['pageSwipe'] == true
+                                        ? const _GentlePageScrollPhysics(
+                                            parent: BouncingScrollPhysics(),
+                                          )
+                                        : const NeverScrollableScrollPhysics(),
+                                    onPageChanged: (i) {
+                                      if (_targetPage != null) return;
+                                      if (_userSwiping) {
+                                        _pendingTab = i;
+                                      } else if (tab != i) {
+                                        if (i != 0) hoveredTopology = null;
+                                        setState(() => tab = i);
+                                      }
+                                    },
+                                    itemBuilder: (_, i) => _page(i),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: _KeyboardAwareBottomNav(
+                        child: GlassBottomNav(
+                          index: tab,
+                          onChanged: _selectTab,
+                          pageProgress: _swipeProgress,
+                          items: const [
+                            GlassBottomNavItem('home', '概览'),
+                            GlassBottomNavItem('proxies', '代理'),
+                            GlassBottomNavItem('connections', '连接'),
+                            GlassBottomNavItem('logs', '日志'),
+                            GlassBottomNavItem('rules', '规则'),
+                            GlassBottomNavItem('settings', '设置'),
+                          ],
                         ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-              bottomNavigationBar: MediaQuery.viewInsetsOf(context).bottom > 0 ? null : GlassBottomNav(
-                index: tab, onChanged: _selectTab, pageProgress: _swipeProgress,
-                items: const [
-                  GlassBottomNavItem('home', '概览'), GlassBottomNavItem('proxies', '代理'),
-                  GlassBottomNavItem('connections', '连接'), GlassBottomNavItem('logs', '日志'),
-                  GlassBottomNavItem('rules', '规则'), GlassBottomNavItem('settings', '设置'),
-                ],
+                  ],
+                ),
               ),
             ),
             if (showSetupWizard)
@@ -3023,6 +3088,55 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                 },
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _KeyboardAwareBottomNav extends StatefulWidget {
+  final Widget child;
+  const _KeyboardAwareBottomNav({required this.child});
+
+  @override
+  State<_KeyboardAwareBottomNav> createState() =>
+      _KeyboardAwareBottomNavState();
+}
+
+class _KeyboardAwareBottomNavState extends State<_KeyboardAwareBottomNav> {
+  bool _offstage = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final hidden = MediaQuery.viewInsetsOf(context).bottom > 0;
+    if (!hidden && _offstage) _offstage = false;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final duration = reduceMotion
+        ? Duration.zero
+        : Duration(milliseconds: hidden ? 160 : 240);
+    final curve = hidden ? Curves.easeInCubic : Curves.easeOutCubic;
+    return Material(
+      type: MaterialType.transparency,
+      child: Offstage(
+        offstage: hidden && _offstage,
+        child: IgnorePointer(
+          ignoring: hidden,
+          child: ExcludeSemantics(
+            excluding: hidden,
+            child: AnimatedSlide(
+              offset: hidden ? const Offset(0, 1.4) : Offset.zero,
+              duration: duration,
+              curve: curve,
+              onEnd: () {
+                if (mounted &&
+                    MediaQuery.viewInsetsOf(context).bottom > 0 &&
+                    !_offstage) {
+                  setState(() => _offstage = true);
+                }
+              },
+              child: widget.child,
+            ),
+          ),
         ),
       ),
     );
@@ -3335,6 +3449,7 @@ class _FlowPainter extends CustomPainter {
         canvas,
         Offset(rect.right + 5, rect.center.dy - label.height / 2),
       );
+      label.dispose();
     }
   }
 

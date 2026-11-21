@@ -2,31 +2,78 @@ package io.github.Yuu518.singboard
 
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
+import android.graphics.Color
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
 import android.provider.OpenableColumns
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
 import android.util.AtomicFile
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.nio.charset.CharacterCodingException
 import java.security.MessageDigest
 import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private var picker: MethodChannel.Result? = null
+    private var channel: MethodChannel? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        @Suppress("DEPRECATION")
+        run {
+            window.statusBarColor = Color.TRANSPARENT
+            window.navigationBarColor = Color.TRANSPARENT
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
+        worker.execute { cleanupStaleFiles(null) }
+    }
+
+    private fun cleanupStaleFiles(keepUpdateDir: File?) {
+        runCatching {
+            val updates = File(filesDir, "updates")
+            updates.listFiles()?.forEach { child ->
+                if (keepUpdateDir != null && child.canonicalFile == keepUpdateDir.canonicalFile) return@forEach
+                child.deleteRecursively()
+            }
+            val backups = filesDir.listFiles { file ->
+                file.isFile && file.name.startsWith("document-") && file.name.endsWith(".bak")
+            }?.sortedByDescending { it.lastModified() } ?: emptyList()
+            val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+            backups.forEachIndexed { index, file ->
+                if (index >= 5 || file.lastModified() < cutoff) {
+                    file.delete()
+                }
+            }
+        }
+    }
 
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
-        MethodChannel(engine.dartExecutor.binaryMessenger, "singboard/config").setMethodCallHandler { call, result ->
+        val methodChannel = MethodChannel(engine.dartExecutor.binaryMessenger, "singboard/config")
+        channel = methodChannel
+        methodChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "directory" -> result.success(filesDir.absolutePath)
                 "dnsServers" -> {
                     val manager = getSystemService(android.net.ConnectivityManager::class.java)
-                    result.success(manager.getLinkProperties(manager.activeNetwork)?.dnsServers?.mapNotNull { it.hostAddress } ?: emptyList<String>())
+                    val servers = manager.getLinkProperties(manager.activeNetwork)?.dnsServers
+                        ?.filter { !it.isLinkLocalAddress }
+                        ?.mapNotNull { it.hostAddress?.substringBefore('%') }
+                        ?: emptyList()
+                    result.success(servers)
                 }
                 "version" -> result.success(packageManager.getPackageInfo(packageName, 0).versionName)
                 "installedApk" -> result.success(applicationInfo.sourceDir)
@@ -104,6 +151,36 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun signingCertificates(info: PackageInfo): Set<String> {
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val signingInfo = info.signingInfo
+            if (signingInfo == null) {
+                emptyArray()
+            } else if (signingInfo.hasMultipleSigners()) {
+                signingInfo.apkContentsSigners ?: emptyArray()
+            } else {
+                signingInfo.signingCertificateHistory ?: signingInfo.apkContentsSigners ?: emptyArray()
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            info.signatures ?: emptyArray()
+        }
+        return signatures.map { sig ->
+            MessageDigest.getInstance("SHA-256")
+                .digest(sig.toByteArray())
+                .joinToString("") { "%02x".format(it) }
+        }.toSet()
+    }
+
+    private fun versionCodeOf(info: PackageInfo): Long {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            info.versionCode.toLong()
+        }
+    }
+
     private fun installUpdate(call: MethodCall, result: MethodChannel.Result) {
         val path = call.argument<String>("path")
         worker.execute {
@@ -120,11 +197,31 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 require(sha.digest().joinToString("") { "%02x".format(it) } == apk.parentFile?.name) { "安装包在下载后发生变化" }
-                val archive = packageManager.getPackageArchiveInfo(apk.path, android.content.pm.PackageManager.GET_SIGNATURES)
-                val current = packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNATURES)
-                require(archive != null && archive.packageName == packageName && archive.versionCode >= current.versionCode) { "安装包与当前应用或版本不匹配" }
-                require(!current.signatures.isNullOrEmpty() && archive.signatures?.toSet() == current.signatures?.toSet()) { "安装包签名与已安装版本不一致" }
+                val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    PackageManager.GET_SIGNING_CERTIFICATES
+                } else {
+                    @Suppress("DEPRECATION")
+                    PackageManager.GET_SIGNATURES
+                }
+                val archive = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    packageManager.getPackageArchiveInfo(apk.path, PackageManager.PackageInfoFlags.of(flags.toLong()))
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageManager.getPackageArchiveInfo(apk.path, flags)
+                }
+                val current = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(flags.toLong()))
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageManager.getPackageInfo(packageName, flags)
+                }
+                require(archive != null && archive.packageName == packageName && versionCodeOf(archive) >= versionCodeOf(current)) { "安装包与当前应用或版本不匹配" }
+                val currentCerts = signingCertificates(current)
+                val archiveCerts = signingCertificates(archive)
+                require(currentCerts.isNotEmpty() && archiveCerts == currentCerts) { "安装包签名与已安装版本不一致" }
+                cleanupStaleFiles(apk.parentFile)
                 runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
                     try {
                         if (packageManager.canRequestPackageInstalls()) {
                             val uri = FileProvider.getUriForFile(this, "$packageName.updates", apk)
@@ -136,7 +233,11 @@ class MainActivity : FlutterActivity() {
                         }
                     } catch (e: Exception) { result.error("update", e.localizedMessage, null) }
                 }
-            } catch (e: Exception) { runOnUiThread { result.error("update", e.localizedMessage, null) } }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) result.error("update", e.localizedMessage, null)
+                }
+            }
         }
     }
 
@@ -153,11 +254,21 @@ class MainActivity : FlutterActivity() {
         worker.execute {
             try {
                 val value = operation()
-                runOnUiThread { result.success(value) }
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) result.success(value)
+                }
             } catch (e: SecurityException) {
-                runOnUiThread { result.error("document", "文件提供方拒绝访问，请确认文档可写并用系统文件选择器重新打开", null) }
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) result.error("document", "文件提供方拒绝访问，请确认文档可写并用系统文件选择器重新打开", null)
+                }
+            } catch (e: CharacterCodingException) {
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) result.error("document", "所选文件不是有效的 UTF-8 文本", null)
+                }
             } catch (e: Exception) {
-                runOnUiThread { result.error("document", e.localizedMessage ?: "文件操作失败", null) }
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) result.error("document", e.localizedMessage ?: "文件操作失败", null)
+                }
             }
         }
     }
@@ -215,7 +326,15 @@ class MainActivity : FlutterActivity() {
         return mapOf("path" to label, "text" to if (call.method == "backup") backup.openRead().bufferedReader().use { it.readText() } else read(uri), "backup" to backup.baseFile.exists())
     }
 
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        channel?.setMethodCallHandler(null)
+        channel = null
+        picker = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
     override fun onDestroy() {
+        picker = null
         worker.shutdown()
         super.onDestroy()
     }

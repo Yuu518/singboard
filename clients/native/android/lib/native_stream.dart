@@ -20,10 +20,11 @@ final _drain = _library
       Pointer<Utf8> Function(Pointer<Void>),
       Pointer<Utf8> Function(Pointer<Void>)
     >('sb_stream_drain');
-final _close = _library
-    .lookupFunction<Void Function(Pointer<Void>), void Function(Pointer<Void>)>(
-      'sb_stream_close',
-    );
+final _closePointer = _library.lookup<NativeFunction<Void Function(Pointer<Void>)>>(
+  'sb_stream_close',
+);
+final _close = _closePointer.asFunction<void Function(Pointer<Void>)>();
+final _streamFinalizer = NativeFinalizer(_closePointer);
 final _free = _library
     .lookupFunction<Void Function(Pointer<Utf8>), void Function(Pointer<Utf8>)>(
       'sb_string_free',
@@ -69,7 +70,7 @@ String _takeString(Pointer<Utf8> pointer) {
   }
 }
 
-class NativeStream {
+class NativeStream implements Finalizable {
   Pointer<Void> _handle = nullptr;
 
   NativeStream.connections(String endpoint, String secret) {
@@ -80,6 +81,7 @@ class NativeStream {
       ),
     );
     if (_handle == nullptr) throw const FormatException('端点地址无效');
+    _streamFinalizer.attach(this, _handle, detach: this);
   }
 
   NativeStream.logs(String endpoint, String secret, String level) {
@@ -91,6 +93,7 @@ class NativeStream {
       ),
     );
     if (_handle == nullptr) throw const FormatException('端点地址无效');
+    _streamFinalizer.attach(this, _handle, detach: this);
   }
 
   NativeStream(String endpoint, String secret, {required bool traffic}) {
@@ -102,14 +105,29 @@ class NativeStream {
       ),
     );
     if (_handle == nullptr) throw const FormatException('端点地址无效');
+    _streamFinalizer.attach(this, _handle, detach: this);
   }
 
-  Map<String, dynamic> drain() =>
-      jsonDecode(_takeString(_drain(_handle))) as Map<String, dynamic>;
+  Map<String, dynamic> drain() {
+    if (_handle == nullptr) {
+      return const {
+        'status': '未连接',
+        'failures': 0,
+        'has_frame': false,
+        'logs': <dynamic>[],
+        'traffic': <dynamic>[],
+        'dropped': 0,
+      };
+    }
+    return jsonDecode(_takeString(_drain(_handle))) as Map<String, dynamic>;
+  }
 
   void close() {
-    _close(_handle);
+    if (_handle == nullptr) return;
+    _streamFinalizer.detach(this);
+    final handle = _handle;
     _handle = nullptr;
+    _close(handle);
   }
 }
 

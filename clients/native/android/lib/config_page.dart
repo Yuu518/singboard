@@ -608,7 +608,8 @@ class ConfigEditor extends StatefulWidget {
 }
 
 class _ConfigEditorState extends State<ConfigEditor> {
-  late String saved, reference;
+  late String saved, reference, _normalizedReference, _lastText;
+  late bool _isDirty;
   late final TextEditingController input;
   bool busy = false, hasBackup = false, leaving = false;
   String message = '';
@@ -619,25 +620,40 @@ class _ConfigEditorState extends State<ConfigEditor> {
   String get full => prefix + input.text + suffix;
   String get content {
     final value = full;
-    if (normalize(reference) == value) return reference;
+    if (_normalizedReference == value) return reference;
     return (reference.startsWith('\uFEFF') ? '\uFEFF' : '') +
         (reference.contains('\r\n') ? value.replaceAll('\n', '\r\n') : value);
   }
 
-  bool get dirty => content != saved;
+  bool get dirty => _isDirty;
+
+  void _syncReference(String next) {
+    reference = next;
+    _normalizedReference = normalize(next);
+    _recomputeDirty();
+  }
+
+  void _recomputeDirty() {
+    _lastText = input.text;
+    _isDirty = content != saved;
+  }
 
   @override
   void initState() {
     super.initState();
     saved = widget.document['text'];
     reference = widget.draft ?? saved;
+    _normalizedReference = normalize(reference);
     hasBackup = widget.document['backup'] == true;
-    input = TextEditingController(text: normalize(reference))
-      ..addListener(changed);
+    input = TextEditingController(text: _normalizedReference);
+    _recomputeDirty();
+    input.addListener(changed);
     if (widget.draft != null) message = '已载入订阅，保存前会使用服务核心校验';
   }
 
   void changed() {
+    if (input.text == _lastText) return;
+    _recomputeDirty();
     if (mounted) setState(() {});
   }
 
@@ -700,9 +716,9 @@ class _ConfigEditorState extends State<ConfigEditor> {
       );
       final last = right < 0 ? text.length : right;
       final lines = text.substring(left, last).split('\n');
-      final remove = lines
-          .where((v) => v.trim().isNotEmpty)
-          .every((v) => v.trimLeft().startsWith('//'));
+      final nonEmpty = lines.where((v) => v.trim().isNotEmpty).toList();
+      final remove = nonEmpty.isNotEmpty &&
+          nonEmpty.every((v) => v.trimLeft().startsWith('//'));
       final changed = lines
           .map(
             (v) => remove
@@ -752,9 +768,10 @@ class _ConfigEditorState extends State<ConfigEditor> {
                 args,
               ) as Map;
         if (!mounted) return;
-        reference = previous!['text'] as String;
         prefix = suffix = module = '';
-        input.text = normalize(reference);
+        _syncReference(previous!['text'] as String);
+        input.text = _normalizedReference;
+        _recomputeDirty();
         message = '已载入上一版，保存后生效';
       } else if (op == 'validate') {
         message = await configRequest(
@@ -777,7 +794,7 @@ class _ConfigEditorState extends State<ConfigEditor> {
           );
         }
         saved = submitted;
-        reference = saved;
+        _syncReference(saved);
         hasBackup = hasBackup || previous != saved;
       }
     } catch (e) {

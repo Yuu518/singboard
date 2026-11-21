@@ -363,13 +363,13 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
       await configRequest(await configDirectory(), 'connection_geo', {'ip': ip})
           as Item?;
 
-  void _showDetail(Item row, String target) {
+  void _showDetail(Item row, String target, {required bool isLive}) {
     final m = row['metadata'] as Item? ?? {};
     final ip = m['destinationIP']?.toString() ?? '';
     var geo = ip.isEmpty ? null : _geo(ip);
     final c = SingboardColors.of(context);
     final start = DateTime.tryParse(row['start']?.toString() ?? '')?.toLocal();
-    final open = !closed;
+    final open = !closed && isLive;
     String address(dynamic host, dynamic port) {
       final h = host?.toString() ?? '';
       if (port == null || port.toString().isEmpty) return h.isEmpty ? '—' : h;
@@ -888,10 +888,10 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
           },
           child: ListView.builder(
             padding: EdgeInsets.fromLTRB(
-              panelGutter(context),
+              panelGutter(context) + MediaQuery.viewPaddingOf(context).left,
               0,
-              panelGutter(context),
-              108,
+              panelGutter(context) + MediaQuery.viewPaddingOf(context).right,
+              120 + MediaQuery.paddingOf(context).bottom,
             ),
             itemCount: rows.isEmpty ? 2 : rows.length + 1,
             itemBuilder: (_, index) {
@@ -959,7 +959,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                 opacity: isLive ? 1 : .5,
                 duration: const Duration(milliseconds: 180),
                 child: GestureDetector(
-                  onTap: () => _showDetail(row, target),
+                  onTap: () => _showDetail(row, target, isLive: isLive),
                   child: GlassCard(
                     padding: EdgeInsets.zero,
                     child: Column(

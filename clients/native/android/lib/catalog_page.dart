@@ -858,116 +858,127 @@ class _CatalogPageState extends State<CatalogPage> {
               child: LayoutBuilder(
                 builder: (_, constraints) {
                   final cols = ((constraints.maxWidth + 8) / 136).floor().clamp(1, 1000);
-                  final tileW = (constraints.maxWidth - 8 * (cols - 1)) / cols;
-                  return Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final node in nodes)
-                        Builder(
-                          builder: (_) {
-                            final nName = node['name'].toString();
-                            final selected = nName == now;
-                            final delay = _delayOf(node);
-                            final testing = testingNodes.contains(nName);
-                            final showLat = (delay != null && delay > 0) ||
-                                (node['kind']?.toString().toLowerCase() != 'direct');
-                            final (latBg, latFg) = _latencyBadge(delay, c);
-                            final isV6 = ipv6Enabled && v6Nodes.contains(nName);
-                            return GestureDetector(
-                              key: selected ? selectedTiles.putIfAbsent(gName, GlobalKey.new) : null,
-                              onTap: selectable && !selected
-                                  ? () => selectNode(group, nName)
-                                  : null,
-                              child: Container(
-                                width: tileW,
-                                height: 76,
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: selected
-                                      ? c.primarySoft
-                                      : (c.dark
-                                          ? const Color(0x14FFFFFF)
-                                          : const Color(0x38FFFFFF)),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: selected
-                                        ? c.selectionBorder
-                                        : c.hairline,
-                                    width: selected ? 1 : 0.5,
+                  var selectedKeyAssigned = false;
+                  Widget buildTile(Item node) {
+                    final nName = node['name'].toString();
+                    final selected = nName == now;
+                    final assignKey = selected && !selectedKeyAssigned;
+                    if (assignKey) selectedKeyAssigned = true;
+                    final delay = _delayOf(node);
+                    final testing = testingNodes.contains(nName);
+                    final showLat = (delay != null && delay > 0) ||
+                        (node['kind']?.toString().toLowerCase() != 'direct');
+                    final (latBg, latFg) = _latencyBadge(delay, c);
+                    final isV6 = ipv6Enabled && v6Nodes.contains(nName);
+                    return GestureDetector(
+                      key: assignKey ? selectedTiles.putIfAbsent(gName, GlobalKey.new) : null,
+                      onTap: selectable && !selected
+                          ? () => selectNode(group, nName)
+                          : null,
+                      child: Container(
+                        height: 76,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? c.primarySoft
+                              : (c.dark
+                                  ? const Color(0x14FFFFFF)
+                                  : const Color(0x38FFFFFF)),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: selected
+                                ? c.selectionBorder
+                                : c.hairline,
+                            width: selected ? 1 : 0.5,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                nName,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  height: 1.2,
+                                  fontWeight: selected
+                                      ? FontWeight.w600
+                                      : FontWeight.w400,
+                                  color: selected ? c.selectionInk : c.ink,
+                                ),
+                              ),
+                            ),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    _formatType(node, isV6),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: selected
+                                          ? c.selectionInk
+                                          : c.muted,
+                                    ),
                                   ),
                                 ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Expanded(
+                                if (showLat)
+                                  GestureDetector(
+                                    onTap: testing
+                                        ? null
+                                        : () => testNode(
+                                              group['test_url']?.toString() ?? '',
+                                              nName,
+                                            ),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 7,
+                                        vertical: 1.5,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: latBg,
+                                        borderRadius: BorderRadius.circular(999),
+                                      ),
                                       child: Text(
-                                        nName,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
+                                        testing ? '…' : _formatLatency(delay),
                                         style: TextStyle(
-                                          fontSize: 14,
-                                          height: 1.2,
-                                          fontWeight: selected
-                                              ? FontWeight.w600
-                                              : FontWeight.w400,
-                                          color: selected ? c.selectionInk : c.ink,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                          color: latFg,
+                                          fontFeatures: const [
+                                            FontFeature.tabularFigures(),
+                                          ],
                                         ),
                                       ),
                                     ),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            _formatType(node, isV6),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: selected
-                                                  ? c.selectionInk
-                                                  : c.muted,
-                                            ),
-                                          ),
-                                        ),
-                                        if (showLat)
-                                          GestureDetector(
-                                            onTap: testing
-                                                ? null
-                                                : () => testNode(
-                                                      group['test_url']?.toString() ?? '',
-                                                      nName,
-                                                    ),
-                                            child: Container(
-                                              padding: const EdgeInsets.symmetric(
-                                                horizontal: 7,
-                                                vertical: 1.5,
-                                              ),
-                                              decoration: BoxDecoration(
-                                                color: latBg,
-                                                borderRadius: BorderRadius.circular(999),
-                                              ),
-                                              child: Text(
-                                                testing ? '…' : _formatLatency(delay),
-                                                style: TextStyle(
-                                                  fontSize: 12,
-                                                  fontWeight: FontWeight.w500,
-                                                  color: latFg,
-                                                  fontFeatures: const [
-                                                    FontFeature.tabularFigures(),
-                                                  ],
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
+                                  ),
+                              ],
+                            ),
+                          ],
                         ),
+                      ),
+                    );
+                  }
+                  return Column(
+                    children: [
+                      for (var row = 0; row < nodes.length; row += cols) ...[
+                        if (row > 0) const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            for (var col = 0; col < cols; col++) ...[
+                              if (col > 0) const SizedBox(width: 8),
+                              Expanded(
+                                child: row + col < nodes.length
+                                    ? buildTile(nodes[row + col])
+                                    : const SizedBox.shrink(),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ],
                     ],
                   );
                 },
@@ -1096,75 +1107,83 @@ class _CatalogPageState extends State<CatalogPage> {
               child: LayoutBuilder(
                 builder: (_, constraints) {
                   final cols = ((constraints.maxWidth + 8) / 136).floor().clamp(1, 1000);
-                  final tileW = (constraints.maxWidth - 8 * (cols - 1)) / cols;
-                  return Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final node in nodes)
-                        Builder(
-                          builder: (_) {
-                            final nName = node['name'].toString();
-                            final delay = _delayOf(node);
-                            final testing = testingNodes.contains(nName);
-                            final (latBg, latFg) = _latencyBadge(delay, c);
-                            return Container(
-                              width: tileW,
-                              height: 76,
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: c.dark
-                                    ? const Color(0x14FFFFFF)
-                                    : const Color(0x38FFFFFF),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: c.hairline, width: 0.5),
+                  Widget buildTile(Item node) {
+                    final nName = node['name'].toString();
+                    final delay = _delayOf(node);
+                    final testing = testingNodes.contains(nName);
+                    final (latBg, latFg) = _latencyBadge(delay, c);
+                    return Container(
+                      height: 76,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: c.dark
+                            ? const Color(0x14FFFFFF)
+                            : const Color(0x38FFFFFF),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: c.hairline, width: 0.5),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              nName,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 14, height: 1.2, color: c.ink),
+                            ),
+                          ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  _formatType(node, false),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontSize: 12, color: c.muted),
+                                ),
                               ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      nName,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(fontSize: 14, height: 1.2, color: c.ink),
+                              GestureDetector(
+                                onTap: testing ? null : () => testNode(testUrl, nName),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1.5),
+                                  decoration: BoxDecoration(
+                                    color: latBg,
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Text(
+                                    testing ? '…' : _formatLatency(delay),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: latFg,
+                                      fontFeatures: const [FontFeature.tabularFigures()],
                                     ),
                                   ),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          _formatType(node, false),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(fontSize: 12, color: c.muted),
-                                        ),
-                                      ),
-                                      GestureDetector(
-                                        onTap: testing ? null : () => testNode(testUrl, nName),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1.5),
-                                          decoration: BoxDecoration(
-                                            color: latBg,
-                                            borderRadius: BorderRadius.circular(999),
-                                          ),
-                                          child: Text(
-                                            testing ? '…' : _formatLatency(delay),
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: latFg,
-                                              fontFeatures: const [FontFeature.tabularFigures()],
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                ),
                               ),
-                            );
-                          },
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  return Column(
+                    children: [
+                      for (var row = 0; row < nodes.length; row += cols) ...[
+                        if (row > 0) const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            for (var col = 0; col < cols; col++) ...[
+                              if (col > 0) const SizedBox(width: 8),
+                              Expanded(
+                                child: row + col < nodes.length
+                                    ? buildTile(nodes[row + col])
+                                    : const SizedBox.shrink(),
+                              ),
+                            ],
+                          ],
                         ),
+                      ],
                     ],
                   );
                 },
@@ -1614,8 +1633,15 @@ class _CatalogPageState extends State<CatalogPage> {
     );
 
     final hasPlaceholder = error.isNotEmpty || shown.isEmpty;
+    final viewPad = MediaQuery.viewPaddingOf(context);
+    final bottomPad = MediaQuery.paddingOf(context).bottom;
     return ListView.builder(
-      padding: EdgeInsets.fromLTRB(panelGutter(context), 0, panelGutter(context), 108),
+      padding: EdgeInsets.fromLTRB(
+        panelGutter(context) + viewPad.left,
+        0,
+        panelGutter(context) + viewPad.right,
+        120 + bottomPad,
+      ),
       itemCount: hasPlaceholder ? 2 : shown.length + 1,
       itemBuilder: (_, index) {
         if (index == 0) return header;
@@ -1954,7 +1980,7 @@ class _RuleDetailState extends State<_RuleDetail> {
                           borderRadius: BorderRadius.circular(7),
                           onTap: () {
                             Clipboard.setData(ClipboardData(text: value));
-                            showGlassToast(context, '已复制 $value');
+                            showGlassToast(context, '已复制 $value', error: false);
                           },
                           child: Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),

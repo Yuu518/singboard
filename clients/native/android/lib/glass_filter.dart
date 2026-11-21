@@ -28,6 +28,7 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
   Size? _builtScreen;
   bool _blurBusy = false;
   bool _blurDirty = false;
+  Timer? _blurTimer;
   bool _currentDark = false;
   Size _currentScreen = Size.zero;
 
@@ -58,6 +59,8 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
 
   @override
   void dispose() {
+    _blurTimer?.cancel();
+    _blurTimer = null;
     _revision++;
     _disposeLater(_sourceImage);
     _disposeLater(_blurredImage);
@@ -88,8 +91,17 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
     }
   }
 
-  void _scheduleBlur() {
+  void _scheduleBlur({bool immediate = false}) {
     if (_sourceImage == null || _currentScreen.isEmpty) return;
+    if (!immediate && _blurredImage != null) {
+      _blurTimer?.cancel();
+      _blurTimer = Timer(const Duration(milliseconds: 48), () {
+        if (mounted) _scheduleBlur(immediate: true);
+      });
+      return;
+    }
+    _blurTimer?.cancel();
+    _blurTimer = null;
     if (_blurBusy) {
       _blurDirty = true;
       return;

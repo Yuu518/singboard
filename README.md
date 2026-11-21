@@ -266,7 +266,7 @@ Android APKs are built only when all four `ANDROID_*` secrets are set. Without t
   - `remote-configs\`, downloaded remote config profiles
   - `updates\`, staged panel updates (cleaned up after apply)
 - **Windows protected service runtime**: `%ProgramFiles%\singboard-service\`
-- **Android package name**: `io.github.yuu518.singboard_native` (Android 8.0+ / API 26+)
+- **Android package name**: `io.github.Yuu518.singboard` (Android 8.0+ / API 26+)
   - App-private storage (`filesDir`) stores `native-settings.json`, `wallpaper.png`, remote subscriptions, and staged `updates/` APKs
 
 ## Notes

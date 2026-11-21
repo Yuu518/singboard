@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
@@ -477,19 +478,58 @@ class _SettingsPageState extends State<SettingsPage> {
     Map<String, String> values,
   ) async {
     if (_busy.contains(group)) return false;
+    Timer? progress;
     setState(() {
       _busy.add(group);
       _messages[group] = '正在处理…';
     });
     try {
+      final dir = await configDirectory();
       final servers = action == 'dns' && values['resolver'] == 'system'
           ? await _channel.invokeListMethod<String>('dnsServers')
           : null;
-      final reply = await configRequest(await configDirectory(), 'tool', {
+      final args = <String, dynamic>{
         'action': action,
         'values': values,
         'servers': servers ?? <String>[],
-      });
+      };
+      var reply = await configRequest(dir, 'tool', args) as Map;
+      if (!mounted) return false;
+      if (reply['ticket'] case final String ticket) {
+        final confirmed = await showGlassDialog<bool>(
+          context: context,
+          builder: (ctx) => GlassConfirmDialog(
+            title: const Text('更新 sing-box 核心'),
+            content: Text(reply['text'] as String? ?? '确认下载并更新核心？'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('确认更新'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true || !mounted) {
+          if (mounted) setState(() => _messages[group] = '已取消核心更新');
+          return false;
+        }
+        progress = Timer.periodic(const Duration(milliseconds: 500), (_) async {
+          try {
+            final text = await configRequest(dir, 'core_progress');
+            if (mounted && _busy.contains(group) && text is String && text.isNotEmpty) {
+              setState(() => _messages[group] = text);
+            }
+          } catch (_) {}
+        });
+        reply = await configRequest(dir, 'tool', {
+          ...args,
+          'ticket': ticket,
+        }) as Map;
+      }
       if (reply['refresh'] == true) await widget.onReload();
       final text = reply['text'] as String;
       if (mounted) {
@@ -503,6 +543,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) setState(() => _messages[group] = e.toString());
       return false;
     } finally {
+      progress?.cancel();
       if (mounted) setState(() => _busy.remove(group));
     }
   }
@@ -1196,89 +1237,99 @@ class _SettingsPageState extends State<SettingsPage> {
           children: [
             Text('域名', style: TextStyle(fontSize: 12, color: c.muted)),
             const SizedBox(height: 6),
-            Row(
-              children: [
-                Expanded(
-                  child: _glassInput(
-                    'domain',
-                    'www.google.com',
-                    mono: true,
-                    onSubmitted: busy ? null : _lookup,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                _routeBtn(
-                  '查询',
-                  busy ? null : _lookup,
-                  loading: busy,
-                  height: 36,
-                ),
-              ],
-            ),
-            if (_showDnsHistory && _dnsHistory.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: c.fill,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Column(
-                  children: [
-                    for (var i = 0; i < _dnsHistory.length; i++) ...[
-                      if (i > 0)
-                        Divider(
-                          height: 0.5,
-                          thickness: 0.5,
-                          indent: 12,
-                          endIndent: 12,
-                          color: c.hairline,
+            TapRegion(
+              onTapOutside: (_) {
+                if (_showDnsHistory) setState(() => _showDnsHistory = false);
+              },
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _glassInput(
+                          'domain',
+                          'www.google.com',
+                          mono: true,
+                          onSubmitted: busy ? null : _lookup,
                         ),
-                      Builder(
-                        builder: (_) {
-                          final item = _dnsHistory[i];
-                          return Row(
-                            children: [
-                              Expanded(
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(10),
-                                  onTap: () => setState(() {
-                                    _input('domain').text = item;
-                                    _showDnsHistory = false;
-                                  }),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 9,
-                                    ),
-                                    child: Text(
-                                      item,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontFamily: 'monospace',
-                                        fontSize: 13,
-                                        color: c.ink,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              _iconBtn(
-                                'trash',
-                                '删除这条查询记录',
-                                () => _removeDns(item),
-                                danger: true,
-                              ),
-                              const SizedBox(width: 4),
-                            ],
-                          );
-                        },
+                      ),
+                      const SizedBox(width: 8),
+                      _routeBtn(
+                        '查询',
+                        busy ? null : _lookup,
+                        loading: busy,
+                        height: 36,
                       ),
                     ],
+                  ),
+                  if (_showDnsHistory && _dnsHistory.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: c.fill,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Column(
+                        children: [
+                          for (var i = 0; i < _dnsHistory.length; i++) ...[
+                            if (i > 0)
+                              Divider(
+                                height: 0.5,
+                                thickness: 0.5,
+                                indent: 12,
+                                endIndent: 12,
+                                color: c.hairline,
+                              ),
+                            Builder(
+                              builder: (_) {
+                                final item = _dnsHistory[i];
+                                return Row(
+                                  children: [
+                                    Expanded(
+                                      child: InkWell(
+                                        borderRadius: BorderRadius.circular(10),
+                                        onTap: () => setState(() {
+                                          _input('domain').text = item;
+                                          _showDnsHistory = false;
+                                        }),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 12,
+                                            vertical: 9,
+                                          ),
+                                          child: Text(
+                                            item,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontFamily: 'monospace',
+                                              fontSize: 13,
+                                              color: c.ink,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    _iconBtn(
+                                      'trash',
+                                      '删除这条查询记录',
+                                      () => _removeDns(item),
+                                      danger: true,
+                                    ),
+                                    const SizedBox(width: 4),
+                                  ],
+                                );
+                              },
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                   ],
-                ),
+                ],
               ),
-            ],
+            ),
             const SizedBox(height: 12),
             Row(
               children: [
@@ -1439,7 +1490,9 @@ class _SettingsPageState extends State<SettingsPage> {
                       Text(
                         answer['source'] == 'custom'
                             ? "指定 DNS · ${answer['server']}"
-                            : '本机当前 DNS',
+                            : answer['source'] == 'fallback'
+                                ? "回退公共 DNS · ${answer['server']}"
+                                : '本机当前 DNS',
                         style: TextStyle(fontSize: 11, color: c.muted),
                       ),
                     ],
@@ -1512,15 +1565,31 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
 
+    final canInstallCore =
+        widget.preferences['nativeRootEnabled'] == true &&
+        (values['core'] ?? '').trim().isNotEmpty;
+
     return _card([
       SettingsRow(
         title: 'sing-box 核心',
         subtitle:
             _messages['coreUpdate'] ?? (version.isEmpty ? '尚未检查上游版本' : version),
         inline: true,
-        trailing: _settingsBtn(
-          busy ? '检查中' : '检查核心更新',
-          busy ? null : () => _run('coreUpdate', 'core_check', values),
+        trailing: Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          alignment: WrapAlignment.end,
+          children: [
+            _settingsBtn(
+              busy ? '处理中' : '检查更新',
+              busy ? null : () => _run('coreUpdate', 'core_check', values),
+            ),
+            if (canInstallCore)
+              _routeBtn(
+                '更新核心',
+                busy ? null : () => _run('coreUpdate', 'core_prepare', values),
+              ),
+          ],
         ),
       ),
       SettingsRow(
@@ -1672,12 +1741,14 @@ class _SettingsPageState extends State<SettingsPage> {
     final dotColor = isRunning ? c.success : c.error;
     final haloColor = isRunning ? c.successSoft : c.dangerSoft;
 
+    final viewPad = MediaQuery.viewPaddingOf(context);
+    final bottomPad = MediaQuery.paddingOf(context).bottom;
     return ListView(
       padding: EdgeInsets.fromLTRB(
-        panelGutter(context),
+        panelGutter(context) + viewPad.left,
         0,
-        panelGutter(context),
-        112,
+        panelGutter(context) + viewPad.right,
+        120 + bottomPad,
       ),
       children: [
         Center(
