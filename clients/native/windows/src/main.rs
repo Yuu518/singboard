@@ -126,7 +126,7 @@ fn close_window(window: &Window, cx: &mut App) {
     if maintenance::preferences()
         .ok()
         .and_then(|p| p.close_to_tray)
-        .unwrap_or(true)
+        .unwrap_or(false)
     {
         visibility(window, false)
     } else {
@@ -273,7 +273,7 @@ fn run() -> Result<(), String> {
     let mut workspace = Workspace::new(&base, &secret, &prefs, initial_connect, !hidden)?;
     workspace.page = start;
     workspace.custom_wallpaper = wallpaper.custom;
-    workspace.glass_tint = prefs.glass_tint.unwrap_or(1.);
+    workspace.glass_tint = prefs.glass_tint.unwrap_or(0.5);
     if !hidden {
         workspace.prewarm(start);
         wallpaper.prewarm_material(workspace.glass_tint, size(px(1100.), px(720.)));
@@ -476,7 +476,7 @@ fn run() -> Result<(), String> {
                                             ) {
                                                 let page = state.page;
                                                 new.custom_wallpaper = state.custom_wallpaper;
-                                                new.glass_tint = prefs.glass_tint.unwrap_or(1.);
+                                                new.glass_tint = prefs.glass_tint.unwrap_or(0.5);
                                                 new.inherit_view(state);
                                                 *state = new;
                                                 state.open(page, cx);
@@ -493,7 +493,7 @@ fn run() -> Result<(), String> {
                                         cx.global_mut::<theme::Appearance>().mode = appearance.mode;
                                         theme::Appearance::apply(window, panel.wallpaper.custom, cx);
                                     }
-                                    let tint_val = prefs.glass_tint.unwrap_or(1.);
+                                    let tint_val = prefs.glass_tint.unwrap_or(0.5);
                                     panel.workspace.update(cx, |state, cx| {
                                         state.glass_tint = tint_val;
                                         cx.notify();

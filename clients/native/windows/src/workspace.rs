@@ -465,7 +465,7 @@ impl Workspace {
         log_list.set_follow_mode(FollowMode::Tail);
         Ok(Self {
             custom_wallpaper: false,
-            glass_tint: prefs.glass_tint.unwrap_or(1.),
+            glass_tint: prefs.glass_tint.unwrap_or(0.5),
             traffic_status: initial_status,
             traffic_failures: 0,
             conn_failures: 0,

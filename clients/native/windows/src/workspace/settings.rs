@@ -754,7 +754,7 @@ impl Workspace {
         let prefs = crate::maintenance::preferences().unwrap_or_default();
         let current_theme = cx.global::<crate::theme::Appearance>().mode;
         let auto_launch = singboard_stream::settings::get_auto_launch();
-        let close_to_tray = prefs.close_to_tray.unwrap_or(true);
+        let close_to_tray = prefs.close_to_tray.unwrap_or(false);
         let vp = window.viewport_size();
         let width = (f32::from(vp.width) - 256.).min(760.);
         let narrow = width <= 560.;

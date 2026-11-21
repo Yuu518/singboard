@@ -15,7 +15,7 @@ import 'setup_wizard.dart';
 import 'tools_page.dart';
 
 final _theme = ValueNotifier(ThemeMode.system);
-final _glassTint = ValueNotifier<double>(1);
+final _glassTint = ValueNotifier<double>(0.5);
 final _wallpaper = ValueNotifier<String?>(null);
 final _wallpaperRev = ValueNotifier<int>(0);
 const _platformChannel = MethodChannel('singboard/config');
@@ -444,7 +444,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
         _ => ThemeMode.system,
       };
       final tint = prefs['glassTint'];
-      _glassTint.value = tint is num ? tint.toDouble().clamp(0.0, 1.0) : 1;
+      _glassTint.value = tint is num ? tint.toDouble().clamp(0.0, 1.0) : 0.5;
       final startPage = prefs['startPage'] as String? ?? '/home';
       final start = const ['/home', '/proxies', '/connections', '/logs', '/rules', '/settings']
           .indexOf(startPage == '/overview' ? '/home' : startPage);

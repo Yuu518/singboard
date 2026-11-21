@@ -240,7 +240,7 @@ pub fn forms(p: &Settings) -> Vec<Form> {
         prefs.push(toggle(
             "tray",
             "关闭到托盘",
-            p.close_to_tray.unwrap_or(true),
+            p.close_to_tray.unwrap_or(false),
         ));
         prefs.push(toggle(
             "autolaunch",

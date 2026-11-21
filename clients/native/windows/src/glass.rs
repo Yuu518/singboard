@@ -672,7 +672,7 @@ pub fn float_shadows(dark: bool) -> Vec<BoxShadow> {
 }
 
 pub fn current_tint(cx: &App) -> f32 {
-    cx.try_global::<CardBackdrop>().map_or(1., |b| b.tint)
+    cx.try_global::<CardBackdrop>().map_or(0.5, |b| b.tint)
 }
 
 pub fn wallpaper_thumb(cx: &App) -> Option<Arc<RenderImage>> {

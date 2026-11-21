@@ -162,7 +162,7 @@ class GlassScope extends InheritedWidget {
   static GlassScope of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<GlassScope>() ??
       const GlassScope(
-        tint: 1,
+        tint: 0.5,
         wallpaperPath: null,
         wallpaperRevision: 0,
         child: SizedBox.shrink(),
