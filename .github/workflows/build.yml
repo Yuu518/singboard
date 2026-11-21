@@ -103,15 +103,21 @@ jobs:
         shell: pwsh
         run: |
           $pfxPath = Join-Path $env:RUNNER_TEMP "code-sign.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_B64))
-          $password = ConvertTo-SecureString $env:WINDOWS_CERT_PASSWORD -AsPlainText -Force
-          $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
-          Remove-Item $pfxPath
+          try {
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_B64))
+            $password = ConvertTo-SecureString $env:WINDOWS_CERT_PASSWORD -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          } finally {
+            Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
+          }
 
           $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new("Root", "LocalMachine")
           $rootStore.Open("ReadWrite")
-          $rootStore.Add($cert)
-          $rootStore.Close()
+          try {
+            $rootStore.Add($cert)
+          } finally {
+            $rootStore.Close()
+          }
 
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
             Where-Object { $_.FullName -match '\\x64\\' } |
@@ -169,6 +175,13 @@ jobs:
           path: release/singboard-windows-x64.exe
           if-no-files-found: error
           retention-days: 1
+
+      - name: Remove code signing certificate
+        if: always() && env.CERT_THUMBPRINT != ''
+        shell: pwsh
+        run: |
+          Remove-Item -Path "Cert:\CurrentUser\My\$env:CERT_THUMBPRINT" -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "Cert:\LocalMachine\Root\$env:CERT_THUMBPRINT" -Force -ErrorAction SilentlyContinue
 
   build-android:
     name: Build Android ${{ matrix.abi }}

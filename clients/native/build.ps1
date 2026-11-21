@@ -12,6 +12,19 @@ if ($LASTEXITCODE) {
     $exclude = git -C $project rev-parse --path-format=absolute --git-path info/exclude
     Add-Content -LiteralPath $exclude -Value "`n.build-deps/"
 }
+$savedEnv = @{}
+$managedVars = @(
+    'CARGO_HOME','CARGO_TARGET_DIR','PUB_CACHE','GRADLE_USER_HOME','ANDROID_USER_HOME',
+    'XDG_CACHE_HOME','XDG_CONFIG_HOME','FLUTTER_SUPPRESS_ANALYTICS','DART_SUPPRESS_ANALYTICS',
+    'TEMP','TMP','SINGBOARD_RELEASE_VERSION','SINGBOARD_SERVICE_HOST',
+    'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER','CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS',
+    'CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER','CC_aarch64_linux_android','AR_aarch64_linux_android',
+    'CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER','CC_armv7_linux_androideabi','AR_armv7_linux_androideabi'
+)
+foreach ($var in $managedVars) {
+    $savedEnv[$var] = [Environment]::GetEnvironmentVariable($var, 'Process')
+}
+try {
 $env:CARGO_HOME = "$cache/cargo"
 $env:CARGO_TARGET_DIR = "$cache/target"
 $env:PUB_CACHE = "$cache/pub"
@@ -48,6 +61,7 @@ if ($Platform -eq 'Windows') {
         $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $lld
         $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-Ctarget-feature=+crt-static -Clinker-flavor=lld-link'
     } else {
+        Remove-Item Env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER -ErrorAction SilentlyContinue
         $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-Ctarget-feature=+crt-static'
     }
     Invoke-Tool cargo @('build','--locked','--profile','windows-release','--target',$target,'--manifest-path',$manifest,'-p','singboard-service')
@@ -57,12 +71,12 @@ if ($Platform -eq 'Windows') {
     Invoke-Tool cargo @('build','--locked','--profile','windows-release','--target',$target,'--manifest-path',$manifest,'-p','singboard-gpui')
     $binary = "$env:CARGO_TARGET_DIR/$target/windows-release/singboard.exe"
     if ($ReleaseAssets) {
-        Copy-Item -LiteralPath $binary -Destination "$outDir/singboard-windows-x64.exe"
+        Copy-Item -LiteralPath $binary -Destination "$outDir/singboard-windows-x64.exe" -Force
         return
     }
     foreach ($name in @('singboard.exe','singboard-preview.exe','singboard-windows-x64.exe')) {
         try {
-            Copy-Item -LiteralPath $binary -Destination "$outDir/$name"
+            Copy-Item -LiteralPath $binary -Destination "$outDir/$name" -Force
             Write-Output "已生成 $outDir/$name"
             return
         } catch [System.IO.IOException] {
@@ -80,25 +94,34 @@ if ($env:SINGBOARD_ANDROID_KEYSTORE) {
     }
     $signer = (Resolve-Path -LiteralPath "$env:ANDROID_HOME/build-tools/36.0.0/apksigner.bat").Path
 }
+$ndk = $env:ANDROID_NDK_HOME
+if (!$ndk) { $ndk = "$env:ANDROID_HOME/ndk/28.2.13676358" }
+$ndkVersion = Split-Path -Leaf $ndk
 $stage = "$cache/android-app"
 if (!(Test-Path "$stage/android/gradlew.bat")) {
     Invoke-Tool flutter @('create','--no-pub','--empty','--platforms=android','--org','io.github.yuu518','--project-name','singboard_native',$stage)
 }
-Copy-Item -LiteralPath "$PSScriptRoot/android/pubspec.yaml" -Destination $stage
+Copy-Item -LiteralPath "$PSScriptRoot/android/pubspec.yaml" -Destination $stage -Force
 if (Test-Path "$PSScriptRoot/android/pubspec.lock") {
-    Copy-Item -LiteralPath "$PSScriptRoot/android/pubspec.lock" -Destination $stage
+    Copy-Item -LiteralPath "$PSScriptRoot/android/pubspec.lock" -Destination $stage -Force
 }
-Copy-Item -Path "$PSScriptRoot/android/lib/*.dart" -Destination "$stage/lib"
+if (Test-Path "$stage/lib") {
+    Remove-Item -Path "$stage/lib/*.dart" -Force -ErrorAction SilentlyContinue
+}
+Copy-Item -Path "$PSScriptRoot/android/lib/*.dart" -Destination "$stage/lib" -Force
+if (Test-Path "$stage/assets") {
+    Remove-Item -LiteralPath "$stage/assets" -Recurse -Force
+}
 Copy-Item -LiteralPath "$PSScriptRoot/android/assets" -Destination $stage -Recurse -Force
-Copy-Item -LiteralPath "$PSScriptRoot/android/AndroidManifest.xml" -Destination "$stage/android/app/src/main"
+Copy-Item -LiteralPath "$PSScriptRoot/android/AndroidManifest.xml" -Destination "$stage/android/app/src/main" -Force
 $null = New-Item -ItemType Directory -Force "$stage/android/app/src/main/res/xml"
-Copy-Item -LiteralPath "$PSScriptRoot/android/update_paths.xml" -Destination "$stage/android/app/src/main/res/xml"
+Copy-Item -LiteralPath "$PSScriptRoot/android/update_paths.xml" -Destination "$stage/android/app/src/main/res/xml" -Force
 if (Test-Path "$stage/android/app/src/main/kotlin") {
     Remove-Item -LiteralPath "$stage/android/app/src/main/kotlin" -Recurse -Force
 }
 $kotlinDir = "$stage/android/app/src/main/kotlin/io/github/Yuu518/singboard"
 $null = New-Item -ItemType Directory -Force $kotlinDir
-Copy-Item -LiteralPath "$PSScriptRoot/android/MainActivity.kt" -Destination "$kotlinDir/MainActivity.kt"
+Copy-Item -LiteralPath "$PSScriptRoot/android/MainActivity.kt" -Destination "$kotlinDir/MainActivity.kt" -Force
 if (Test-Path "$stage/android/app/src/main/res/mipmap-anydpi-v26") {
     Remove-Item -LiteralPath "$stage/android/app/src/main/res/mipmap-anydpi-v26" -Recurse -Force
 }
@@ -108,9 +131,8 @@ $gradleText = (Get-Content -LiteralPath $gradleApp -Raw)
 $gradleText = $gradleText -replace 'namespace = "[^"]+"','namespace = "io.github.Yuu518.singboard"'
 $gradleText = $gradleText -replace 'applicationId = "[^"]+"','applicationId = "io.github.Yuu518.singboard"'
 $gradleText = $gradleText.Replace('minSdk = flutter.minSdkVersion','minSdk = 26')
+$gradleText = $gradleText -replace 'ndkVersion = (flutter\.ndkVersion|"[^"]+")',"ndkVersion = `"$ndkVersion`""
 [IO.File]::WriteAllText($gradleApp,$gradleText)
-$ndk = $env:ANDROID_NDK_HOME
-if (!$ndk) { $ndk = "$env:ANDROID_HOME/ndk/28.2.13676358" }
 $bin = "$ndk/toolchains/llvm/prebuilt/windows-x86_64/bin"
 
 foreach ($arch in @(
@@ -125,7 +147,7 @@ foreach ($arch in @(
     Invoke-Tool cargo @('build','--locked','--release','--manifest-path',$manifest,'-p','singboard-stream','--target',$arch.target)
     $jni = "$stage/android/app/src/main/jniLibs/$($arch.abi)"
     $null = New-Item -ItemType Directory -Force $jni
-    Copy-Item -LiteralPath "$env:CARGO_TARGET_DIR/$($arch.target)/release/libsingboard_stream.so" -Destination $jni
+    Copy-Item -LiteralPath "$env:CARGO_TARGET_DIR/$($arch.target)/release/libsingboard_stream.so" -Destination $jni -Force
 }
 
 Push-Location $stage
@@ -141,8 +163,17 @@ try {
             Invoke-Tool $signer @('verify',$signed)
             $apk = $signed
         }
-        Copy-Item -LiteralPath $apk -Destination "$outDir/singboard-$abi.apk"
+        Copy-Item -LiteralPath $apk -Destination "$outDir/singboard-$abi.apk" -Force
     }
 } finally {
     Pop-Location
+}
+} finally {
+    foreach ($var in $managedVars) {
+        if ($null -eq $savedEnv[$var]) {
+            Remove-Item "Env:$var" -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable($var, $savedEnv[$var], 'Process')
+        }
+    }
 }
