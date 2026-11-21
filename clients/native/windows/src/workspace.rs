@@ -1990,7 +1990,7 @@ fn popover_card(palette: crate::theme::Palette, tint: f32) -> Div {
         .bg(palette.popover(tint))
         .border_1()
         .border_color(palette.rim())
-        .shadow(crate::glass::float_shadows(palette.0))
+        .shadow(crate::glass::modal_shadows(palette.0))
         .child(crate::glass::card_layer(
             palette.popover(tint),
             px(21.),

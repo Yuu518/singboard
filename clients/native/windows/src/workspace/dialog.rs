@@ -2,7 +2,9 @@ use super::*;
 use gpui_component::FocusTrapElement;
 use std::time::{Duration, Instant};
 
-const TRANSITION: Duration = Duration::from_millis(220);
+const ENTER_TRANSITION: Duration = Duration::from_millis(200);
+const EXIT_TRANSITION: Duration = Duration::from_millis(145);
+const EXIT_CLEANUP: Duration = Duration::from_millis(170);
 
 pub(super) enum LeavingDialog {
     Settings(settings::SettingsDialog),
@@ -14,6 +16,19 @@ pub(super) enum LeavingDialog {
 }
 
 impl Workspace {
+    pub(crate) fn has_modal(&self) -> bool {
+        if self.settings_layout.panel_update.is_some() {
+            return true;
+        }
+        match self.page {
+            Page::Connections => self.detail.is_some() || self.confirm.is_some(),
+            Page::Rules => self.rule_browser.detail.is_some(),
+            Page::Config => self.config_dialog.is_some(),
+            Page::Settings => self.settings_layout.dialog.is_some(),
+            _ => false,
+        }
+    }
+
     pub(crate) fn page_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let visible = match self.page {
             Page::Connections => self.detail.is_some() || self.confirm.is_some(),
@@ -61,7 +76,7 @@ impl Workspace {
             let now = Instant::now();
             self.leaving_dialog = Some((now, content));
             cx.spawn(async move |weak, cx| {
-                cx.background_executor().timer(TRANSITION).await;
+                cx.background_executor().timer(EXIT_CLEANUP).await;
                 let _ = weak.update(cx, |this, cx| {
                     if this.leaving_dialog.as_ref().is_some_and(|(start, _)| *start == now) {
                         this.leaving_dialog = None;
@@ -103,6 +118,10 @@ pub(super) fn keyboard_action(button: Stateful<Div>, action: Action, cx: &Contex
         }))
 }
 
+pub(super) fn scrim_color(_dark: bool) -> Rgba {
+    rgba(0x00000000)
+}
+
 pub(super) fn surface(
     id: &'static str,
     scrim: Stateful<Div>,
@@ -112,26 +131,47 @@ pub(super) fn surface(
     cx: &App,
 ) -> AnyElement {
     let scrim = scrim.occlude();
+    let card = card.w(px(width)).max_w_full();
     if cx.reduce_motion() {
         return scrim.child(card).into_any_element();
     }
-    let card = card.with_animation(
-        (id, usize::from(leaving)),
-        Animation::new(TRANSITION).with_easing(pop_easing),
-        move |card, t| {
-            let scale = 0.94 + 0.06 * if leaving { 1. - t } else { t };
-            card.w(px(width * scale)).max_w_full().p(px(20. * scale))
-        },
-    );
-    scrim.child(card)
+    let duration = if leaving {
+        EXIT_TRANSITION
+    } else {
+        ENTER_TRANSITION
+    };
+    let card = if leaving {
+        card.with_animation(
+            (id, 1usize),
+            Animation::new(duration),
+            move |card, t| {
+                let eased = 1. - (1. - t) * (1. - t);
+                let fade = (t / 0.82).min(1.);
+                let opacity = (1. - fade) * (1. - fade);
+                card.relative().top(px(8. * eased)).opacity(opacity)
+            },
+        )
+    } else {
+        card.with_animation(
+            (id, 0usize),
+            Animation::new(duration).with_easing(pop_easing),
+            move |card, t| card.relative().top(px(10. * (1. - t))),
+        )
+    };
+    scrim
+        .child(card)
         .when(leaving, |s| s.child(div().absolute().inset_0().occlude()))
         .with_animation(
             (id, usize::from(leaving) + 2),
-            Animation::new(TRANSITION),
+            Animation::new(duration),
             move |scrim, t| {
-                let elapsed = (t * 220. / 180.).min(1.);
-                let opacity = elapsed * elapsed * (3. - 2. * elapsed);
-                scrim.opacity(if leaving { 1. - opacity } else { opacity })
+                let opacity = if leaving {
+                    1. - t * t * (3. - 2. * t)
+                } else {
+                    let p = (t * 200. / 160.).min(1.);
+                    1. - (1. - p) * (1. - p)
+                };
+                scrim.opacity(opacity)
             },
         )
         .into_any_element()

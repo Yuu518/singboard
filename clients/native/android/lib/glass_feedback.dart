@@ -103,7 +103,6 @@ Future<T?> showGlassDialog<T>({
 }) {
   final navigator = Navigator.of(context, rootNavigator: true);
   final themes = InheritedTheme.capture(from: context, to: navigator.context);
-  final dark = SingboardColors.of(context).dark;
   final reduceMotion = MediaQuery.disableAnimationsOf(context);
   CurvedAnimation? fade, zoom;
   final route = RawDialogRoute<T>(
@@ -132,14 +131,10 @@ Future<T?> showGlassDialog<T>({
               child: ClipRect(
                 child: BackdropFilter(
                   filter: ui.ImageFilter.blur(
-                    sigmaX: opacity * 3,
-                    sigmaY: opacity * 3,
+                    sigmaX: opacity * 8,
+                    sigmaY: opacity * 8,
                   ),
-                  child: ColoredBox(
-                    color: (dark ? Colors.black : Colors.white).withValues(
-                      alpha: opacity * (dark ? .35 : .22),
-                    ),
-                  ),
+                  child: const SizedBox.expand(),
                 ),
               ),
             ),

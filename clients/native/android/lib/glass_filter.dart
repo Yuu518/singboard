@@ -28,7 +28,6 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
   Size? _builtScreen;
   bool _blurBusy = false;
   bool _blurDirty = false;
-  Timer? _blurTimer;
   bool _currentDark = false;
   Size _currentScreen = Size.zero;
 
@@ -59,8 +58,6 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
 
   @override
   void dispose() {
-    _blurTimer?.cancel();
-    _blurTimer = null;
     _revision++;
     _disposeLater(_sourceImage);
     _disposeLater(_blurredImage);
@@ -85,23 +82,14 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
         (_currentScreen.height - _builtScreen!.height).abs() > 8;
     if (_currentDark != _builtDark ||
         _builtTint == null ||
-        (t - _builtTint!).abs() > 0.005 ||
+        (t - _builtTint!).abs() > 0.002 ||
         sizeChanged) {
       _scheduleBlur();
     }
   }
 
-  void _scheduleBlur({bool immediate = false}) {
+  void _scheduleBlur() {
     if (_sourceImage == null || _currentScreen.isEmpty) return;
-    if (!immediate && _blurredImage != null) {
-      _blurTimer?.cancel();
-      _blurTimer = Timer(const Duration(milliseconds: 48), () {
-        if (mounted) _scheduleBlur(immediate: true);
-      });
-      return;
-    }
-    _blurTimer?.cancel();
-    _blurTimer = null;
     if (_blurBusy) {
       _blurDirty = true;
       return;
@@ -121,13 +109,22 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
         final rev = _revision;
         if (source == null || screen.isEmpty) break;
         _blurDirty = false;
-        final w = source.width;
-        final h = source.height;
+        final srcW = source.width;
+        final srcH = source.height;
+        final screenSigma = _glassBlurSigma(t);
+        final maxSide = screenSigma <= 3.5
+            ? 1080.0
+            : screenSigma <= 10.0
+            ? 640.0
+            : 420.0;
+        final longest = math.max(srcW, srcH);
+        final down = longest > maxSide ? maxSide / longest : 1.0;
+        final w = math.max(1, (srcW * down).round());
+        final h = math.max(1, (srcH * down).round());
         final coverScale = math
             .max(screen.width / w, screen.height / h)
             .clamp(0.01, 100.0);
-        final screenSigma = 3.0 + 14.0 * t;
-        final sigma = (screenSigma / coverScale).clamp(0.5, 32.0);
+        final sigma = (screenSigma / coverScale).clamp(0.4, 28.0);
         final saturation = 1.5 + 0.3 * t;
         final r = 0.2126 * (1 - saturation);
         final g = 0.7152 * (1 - saturation);
@@ -163,14 +160,16 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
         );
         final colors = SingboardColors(dark);
         final rect = Offset.zero & Size(w.toDouble(), h.toDouble());
+        final srcRect = Offset.zero & Size(srcW.toDouble(), srcH.toDouble());
         final recorder = ui.PictureRecorder();
         final canvas = ui.Canvas(recorder, rect);
         canvas.drawRect(rect, Paint()..color = colors.page);
         canvas.saveLayer(rect, Paint()..imageFilter = filter);
         canvas.drawRect(rect, Paint()..color = colors.page);
-        canvas.drawImage(
+        canvas.drawImageRect(
           source,
-          Offset.zero,
+          srcRect,
+          rect,
           Paint()..filterQuality = FilterQuality.medium,
         );
         canvas.drawRect(rect, Paint()..color = colors.backdropVeil);
@@ -239,7 +238,7 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
       final srcW = descriptor.width;
       final srcH = descriptor.height;
       final longest = math.max(srcW, srcH);
-      final scale = longest > 720 ? 720.0 / longest : 1.0;
+      final scale = longest > 1080 ? 1080.0 / longest : 1.0;
       sourceCodec = await descriptor.instantiateCodec(
         targetWidth: math.max(1, (srcW * scale).round()),
         targetHeight: math.max(1, (srcH * scale).round()),
@@ -309,14 +308,26 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
   }
 }
 
+double _glassLensStrength(double tint) =>
+    math.pow((1.0 - tint.clamp(0.0, 1.0)), 1.35).toDouble();
+
+double _glassBlurSigma(double tint) {
+  final t = tint.clamp(0.0, 1.0);
+  return 1.2 + 7.8 * t + 16.0 * t * t;
+}
+
 class _WallpaperGlass extends StatelessWidget {
   final ui.Image image;
   final double radius;
+  final double tint;
+  final bool refract;
   final Widget child;
 
   const _WallpaperGlass({
     required this.image,
     required this.radius,
+    required this.tint,
+    this.refract = true,
     required this.child,
   });
 
@@ -328,6 +339,8 @@ class _WallpaperGlass extends StatelessWidget {
     return _BlurredWallpaperBox(
       image: image,
       radius: radius,
+      tint: tint,
+      refract: refract,
       screenSize: screenSize,
       verticalScroll: vertical,
       horizontalScroll: horizontal,
@@ -339,6 +352,8 @@ class _WallpaperGlass extends StatelessWidget {
 class _BlurredWallpaperBox extends SingleChildRenderObjectWidget {
   final ui.Image image;
   final double radius;
+  final double tint;
+  final bool refract;
   final Size screenSize;
   final Listenable? verticalScroll;
   final Listenable? horizontalScroll;
@@ -346,6 +361,8 @@ class _BlurredWallpaperBox extends SingleChildRenderObjectWidget {
   const _BlurredWallpaperBox({
     required this.image,
     required this.radius,
+    required this.tint,
+    required this.refract,
     required this.screenSize,
     required this.verticalScroll,
     required this.horizontalScroll,
@@ -357,6 +374,8 @@ class _BlurredWallpaperBox extends SingleChildRenderObjectWidget {
       _RenderBlurredWallpaper(
         image: image,
         radius: radius,
+        tint: tint,
+        refract: refract,
         screenSize: screenSize,
         verticalScroll: verticalScroll,
         horizontalScroll: horizontalScroll,
@@ -370,6 +389,8 @@ class _BlurredWallpaperBox extends SingleChildRenderObjectWidget {
     renderObject
       ..image = image
       ..radius = radius
+      ..tint = tint
+      ..refract = refract
       ..screenSize = screenSize
       ..verticalScroll = verticalScroll
       ..horizontalScroll = horizontalScroll;
@@ -377,17 +398,29 @@ class _BlurredWallpaperBox extends SingleChildRenderObjectWidget {
 }
 
 class _RenderBlurredWallpaper extends RenderProxyBox {
+  static Future<ui.FragmentProgram>? _programFuture;
+  static ui.FragmentProgram? _cachedProgram;
+  static bool _loadFailed = false;
+
   _RenderBlurredWallpaper({
     required ui.Image image,
     required double radius,
+    required double tint,
+    required bool refract,
     required Size screenSize,
     required Listenable? verticalScroll,
     required Listenable? horizontalScroll,
   }) : _image = image,
        _radius = radius,
+       _tint = tint,
+       _refract = refract,
        _screenSize = screenSize,
        _verticalScroll = verticalScroll,
        _horizontalScroll = horizontalScroll;
+
+  ui.FragmentShader? _shader;
+  bool _disposed = false;
+  bool _loadingShader = false;
 
   ui.Image _image;
   set image(ui.Image value) {
@@ -400,6 +433,20 @@ class _RenderBlurredWallpaper extends RenderProxyBox {
   set radius(double value) {
     if (_radius == value) return;
     _radius = value;
+    markNeedsPaint();
+  }
+
+  double _tint;
+  set tint(double value) {
+    if ((_tint - value).abs() < 0.001) return;
+    _tint = value;
+    markNeedsPaint();
+  }
+
+  bool _refract;
+  set refract(bool value) {
+    if (_refract == value) return;
+    _refract = value;
     markNeedsPaint();
   }
 
@@ -426,6 +473,36 @@ class _RenderBlurredWallpaper extends RenderProxyBox {
     if (attached) _horizontalScroll?.addListener(markNeedsPaint);
   }
 
+  ui.FragmentShader? _obtainShader() {
+    if (_disposed || _loadFailed) return null;
+    if (_shader != null) return _shader;
+    final program = _cachedProgram;
+    if (program != null) {
+      _shader = program.fragmentShader();
+      return _shader;
+    }
+    if (!_loadingShader) {
+      _loadingShader = true;
+      (_programFuture ??= ui.FragmentProgram.fromAsset(
+        'assets/glass_wallpaper.frag',
+      )).then(
+        (prog) {
+          _cachedProgram = prog;
+          _loadingShader = false;
+          if (!_disposed && attached) {
+            _shader ??= prog.fragmentShader();
+            markNeedsPaint();
+          }
+        },
+        onError: (Object _) {
+          _loadFailed = true;
+          _loadingShader = false;
+        },
+      );
+    }
+    return null;
+  }
+
   @override
   void attach(PipelineOwner owner) {
     super.attach(owner);
@@ -438,6 +515,14 @@ class _RenderBlurredWallpaper extends RenderProxyBox {
     _verticalScroll?.removeListener(markNeedsPaint);
     _horizontalScroll?.removeListener(markNeedsPaint);
     super.detach();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _shader?.dispose();
+    _shader = null;
+    super.dispose();
   }
 
   @override
@@ -458,30 +543,66 @@ class _RenderBlurredWallpaper extends RenderProxyBox {
       final drawH = imgH * scale;
       final coverLeft = (_screenSize.width - drawW) / 2;
       final coverTop = (_screenSize.height - drawH) / 2;
-      final dst = Rect.fromLTWH(
-        offset.dx + coverLeft - global.dx,
-        offset.dy + coverTop - global.dy,
-        drawW,
-        drawH,
-      );
       final clampedRadius = math.min(
         _radius,
         math.min(size.width, size.height) * 0.5,
       );
-      final rrect = RRect.fromRectAndRadius(
-        offset & size,
-        Radius.circular(clampedRadius),
-      );
+      final lens = _refract ? _glassLensStrength(_tint) : 0.0;
+      final useShader =
+          lens > 0.02 &&
+          size.width > 48 &&
+          size.height > 48 &&
+          clampedRadius >= 6;
+      final shader = useShader ? _obtainShader() : null;
       final canvas = context.canvas;
-      canvas.save();
-      canvas.clipRRect(rrect);
-      canvas.drawImageRect(
-        _image,
-        Rect.fromLTWH(0, 0, imgW, imgH),
-        dst,
-        Paint()..filterQuality = FilterQuality.low,
-      );
-      canvas.restore();
+      if (shader != null) {
+        final rim = math.min(
+          clampedRadius,
+          math.min(18.0, math.min(size.width, size.height) * 0.24),
+        );
+        final amount = math.min(rim * 0.36 * lens, 7.0 * lens);
+        final spread = 0.03 * lens;
+        shader
+          ..setFloat(0, size.width)
+          ..setFloat(1, size.height)
+          ..setFloat(2, coverLeft - global.dx)
+          ..setFloat(3, coverTop - global.dy)
+          ..setFloat(4, drawW)
+          ..setFloat(5, drawH)
+          ..setFloat(6, clampedRadius)
+          ..setFloat(7, rim)
+          ..setFloat(8, amount)
+          ..setFloat(9, spread)
+          ..setImageSampler(0, _image, filterQuality: FilterQuality.low);
+        final localRRect = RRect.fromRectAndRadius(
+          Offset.zero & size,
+          Radius.circular(clampedRadius),
+        );
+        canvas.save();
+        canvas.translate(offset.dx, offset.dy);
+        canvas.drawRRect(localRRect, Paint()..shader = shader);
+        canvas.restore();
+      } else {
+        final dst = Rect.fromLTWH(
+          offset.dx + coverLeft - global.dx,
+          offset.dy + coverTop - global.dy,
+          drawW,
+          drawH,
+        );
+        final rrect = RRect.fromRectAndRadius(
+          offset & size,
+          Radius.circular(clampedRadius),
+        );
+        canvas.save();
+        canvas.clipRRect(rrect);
+        canvas.drawImageRect(
+          _image,
+          Rect.fromLTWH(0, 0, imgW, imgH),
+          dst,
+          Paint()..filterQuality = FilterQuality.low,
+        );
+        canvas.restore();
+      }
     }
     super.paint(context, offset);
   }
@@ -532,10 +653,14 @@ class _GlassFilterState extends State<_GlassFilter> {
   @override
   Widget build(BuildContext context) {
     final tint = GlassScope.of(context).tint;
+    final lensStrength = _glassLensStrength(tint);
+    final effectiveAmount = widget.blur > 0
+        ? math.min(widget.amount * lensStrength, widget.rim * 0.24)
+        : widget.amount;
     final needsLens =
         widget.lens &&
-        tint < .5 &&
-        widget.amount > 0 &&
+        (widget.blur == 0 || lensStrength > 0.02) &&
+        effectiveAmount > 0.05 &&
         ui.ImageFilter.isShaderFilterSupported;
     if (widget.blur <= 0 && !needsLens) return widget.child;
     ui.FragmentShader? shader;
@@ -582,8 +707,8 @@ class _GlassFilterState extends State<_GlassFilter> {
         ..setFloat(2, MediaQuery.devicePixelRatioOf(context))
         ..setFloat(3, widget.radius)
         ..setFloat(4, widget.rim)
-        ..setFloat(5, widget.amount)
-        ..setFloat(6, widget.spread)
+        ..setFloat(5, effectiveAmount)
+        ..setFloat(6, widget.spread * (widget.blur > 0 ? lensStrength : 1.0))
         ..setFloat(7, widget.depth);
       filter = ui.ImageFilter.compose(
         outer: ui.ImageFilter.shader(shader),

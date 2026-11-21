@@ -301,13 +301,16 @@ impl Palette {
         if !translucent {
             return self.card(false);
         }
-        self.glass(0.30 + 0.32 * tint.clamp(0., 1.))
+        let t = tint.clamp(0., 1.);
+        self.glass(0.12 + 0.24 * t + 0.38 * t * t)
     }
     pub fn floating(self, tint: f32) -> Rgba {
-        self.glass(0.14 + 0.46 * tint.clamp(0., 1.))
+        let t = tint.clamp(0., 1.);
+        self.glass(0.08 + 0.22 * t + 0.40 * t * t)
     }
     pub fn popover(self, tint: f32) -> Rgba {
-        self.glass(0.42 + 0.30 * tint.clamp(0., 1.))
+        let t = tint.clamp(0., 1.);
+        self.glass(0.26 + 0.22 * t + 0.32 * t * t)
     }
     fn glass(self, alpha: f32) -> Rgba {
         let alpha = (alpha * 255.).round() as u32;

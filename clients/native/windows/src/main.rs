@@ -32,6 +32,8 @@ use workspace::{Page, Workspace};
 struct Overview {
     title_opacity: f32,
     title_tick: std::time::Instant,
+    modal_fade: f32,
+    modal_tick: std::time::Instant,
     workspace: Entity<Workspace>,
     wizard: Entity<setup_wizard::SetupWizard>,
     brand: Arc<gpui::Image>,
@@ -90,6 +92,31 @@ impl Render for Overview {
             cx.drop_image(old, Some(window));
         }
         self.update_card_backdrop(window, cx);
+        let modal_open = !self.wizard.read(cx).visible && self.workspace.read(cx).has_modal();
+        let modal_target = if modal_open { 1. } else { 0. };
+        let dt = self.modal_tick.elapsed().as_secs_f32().min(0.05);
+        self.modal_tick = std::time::Instant::now();
+        if cx.reduce_motion() {
+            self.modal_fade = modal_target;
+        } else if (modal_target - self.modal_fade).abs() > 0.002 {
+            let step = dt / if modal_open { 0.18 } else { 0.14 };
+            self.modal_fade = if modal_open {
+                (self.modal_fade + step).min(1.)
+            } else {
+                (self.modal_fade - step).max(0.)
+            };
+            if (modal_target - self.modal_fade).abs() > 0.002 {
+                window.request_animation_frame();
+            } else {
+                self.modal_fade = modal_target;
+            }
+        } else {
+            self.modal_fade = modal_target;
+        }
+        let modal_eased = self.modal_fade * self.modal_fade * (3. - 2. * self.modal_fade);
+        let blurred_bg = (modal_eased > 0.002)
+            .then(|| glass::backdrop_image(cx))
+            .flatten();
         div()
             .relative()
             .size_full()
@@ -98,16 +125,33 @@ impl Render for Overview {
             .text_color(palette.ink())
             .bg(palette.page())
             .child(image_layer(self.background.clone(), ObjectFit::Cover))
+            .when_some(blurred_bg, |root, image| {
+                root.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .size_full()
+                        .opacity(modal_eased * 0.92)
+                        .child(image_layer(image, ObjectFit::Cover)),
+                )
+            })
             .child(
                 div()
                     .absolute()
-                    .left(px(216.))
-                    .right_0()
-                    .top_0()
-                    .bottom_0()
-                    .child(self.workspace.clone()),
+                    .inset_0()
+                    .size_full()
+                    .when(modal_eased > 0.002, |el| el.opacity(1. - 0.40 * modal_eased))
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(216.))
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .child(self.workspace.clone()),
+                    )
+                    .child(self.navigation(window, cx)),
             )
-            .child(self.navigation(window, cx))
             .children(self.workspace.update(cx, |state, cx| state.page_overlay(window, cx)))
             .child(self.wizard.clone())
             .when(!self.wizard.read(cx).visible, |root| {
@@ -361,6 +405,8 @@ fn run() -> Result<(), String> {
                             Overview {
                                 title_opacity: 0.,
                                 title_tick: std::time::Instant::now(),
+                                modal_fade: 0.,
+                                modal_tick: std::time::Instant::now(),
                                 workspace: workspace.clone(),
                                 wizard,
                                 brand: Arc::new(gpui::Image::from_bytes(

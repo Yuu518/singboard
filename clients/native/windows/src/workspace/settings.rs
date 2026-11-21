@@ -1,7 +1,6 @@
 use super::*;
 use crate::theme::Palette;
 use gpui_component::input::InputState;
-use gpui_component::slider::{Slider, SliderEvent, SliderState};
 use singboard_stream::{settings::Settings, tools::Values};
 use std::collections::{HashMap, HashSet};
 
@@ -85,7 +84,9 @@ pub(super) struct SettingsLayout {
     pub(super) dns_server: String,
     pub(super) dns_history_open: bool,
     pub(super) dns_view: Option<DnsView>,
-    pub(super) tint: Option<Entity<SliderState>>,
+    pub(super) tint_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
+    pub(super) tint_drag: Option<Pixels>,
+    pub(super) tint_focus: Option<FocusHandle>,
     pub(super) results: HashMap<&'static str, String>,
     pub(super) pending: HashSet<&'static str>,
     pub(super) service_action: Option<&'static str>,
@@ -641,11 +642,7 @@ impl Workspace {
                 .absolute()
                 .inset_0()
                 .size_full()
-                .bg(if p.0 {
-                    rgba(0x00000059)
-                } else {
-                    rgba(0xffffff38)
-                })
+                .bg(dialog::scrim_color(p.0))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -668,13 +665,11 @@ const START_PAGES: [(&str, &str); 7] = [
 ];
 
 fn snap_tint(value: f32) -> f32 {
-    let n = (value.clamp(0., 1.) * 100.).round();
-    for tick in [0., 50., 100.] {
-        if (n - tick).abs() <= 4. {
-            return tick / 100.;
-        }
+    let clamped = value.clamp(0., 1.);
+    if (clamped - 0.5).abs() <= 0.012 {
+        return 0.5;
     }
-    n / 100.
+    (clamped * 200.).round() / 200.
 }
 
 fn glass_tint_label(tint: f32) -> &'static str {
@@ -1173,33 +1168,15 @@ impl Workspace {
             .iter()
             .position(|(p, _)| *p == prefs.start_page)
             .unwrap_or(0);
-        let slider = self.settings_layout.tint.get_or_insert_with(|| {
-            let slider = cx.new(|_| {
-                SliderState::new()
-                    .min(0.)
-                    .max(1.)
-                    .step(0.01)
-                    .default_value(tint)
-            });
-            cx.subscribe(&slider, |this, _, event: &SliderEvent, cx| {
-                match event {
-                    SliderEvent::Change(value) => this.glass_tint = snap_tint(value.start()),
-                    SliderEvent::Release(value) => {
-                        let result = crate::service::data_dir()
-                            .and_then(|d| Settings::set_glass_tint(&d, snap_tint(value.start())));
-                        if let Err(e) = result {
-                            this.message(e,true,cx);
-                        }
-                    }
-                }
-                cx.notify();
-            })
-            .detach();
-            slider
-        });
-        if (slider.read(cx).value().start() - tint).abs() > 0.001 {
-            slider.update(cx, |s, cx| s.set_value(tint, window, cx));
-        }
+        let tint_focus = self
+            .settings_layout
+            .tint_focus
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone();
+        let tint_bounds = self.settings_layout.tint_bounds.clone();
+        let tint_dragging = self.settings_layout.tint_drag.is_some();
+        let move_ws = cx.entity().downgrade();
+        let up_ws = cx.entity().downgrade();
 
         let personalization_subpanel = div()
             .mx_4()
@@ -1243,37 +1220,134 @@ impl Workspace {
                             .flex()
                             .items_center().gap(px(12.))
                             .child(svg().path("glass-clear").size(px(22.)).flex_none().text_color(palette.muted()))
-                            .child(div().relative().flex_1().min_w_0().h(px(36.)).child(canvas(|_,_,_| (), move |area, _, window, _| {
-                                let range = (area.size.width - px(40.)).max(px(0.));
-                                let left = area.origin.x + px(20.);
-                                let center = area.origin.y + area.size.height*0.5;
-                                let x = left + range * tint;
-                                let track = |start,end,color| quad(Bounds::new(point(start,center-px(2.)),size(end-start,px(4.))), px(2.), color, px(0.), color, BorderStyle::default());
-                                window.paint_quad(track(area.origin.x, area.origin.x+area.size.width, palette.fill_strong()));
-                                window.paint_quad(track(area.origin.x, x, palette.primary_fill()));
-                                for tick in [0.,0.5,1.] {
-                                    if (tint - tick).abs() >= 0.1 {
-                                        window.paint_quad(quad(Bounds::new(point(left+range*tick-px(2.),center+px(9.)),size(px(4.),px(4.))), px(2.), palette.muted().opacity(0.45), px(0.), transparent_black(), BorderStyle::default()));
-                                    }
-                                }
-                                window.paint_quad(quad(Bounds::new(point(x-px(20.),center-px(13.)),size(px(40.),px(26.))),px(13.),rgb(0xffffff),px(0.5),rgba(0x00000018),BorderStyle::default()));
-                            }).size_full())
-                            .child(div().absolute().inset_0().size_full().flex().justify_center().flex_col().opacity(0.)
-                                .capture_key_down(cx.listener(|v,event: &KeyDownEvent,window,cx| {
-                                    let value = match event.keystroke.key.as_str() {
-                                        "left" | "down" => v.glass_tint - 0.05, "right" | "up" => v.glass_tint + 0.05,
-                                        "pageup" => v.glass_tint + 0.25, "pagedown" => v.glass_tint - 0.25, "home" => 0., "end" => 1., _ => return,
-                                    };
-                                    let value = snap_tint(value);
-                                    v.glass_tint = value;
-                                    if let Err(error) = crate::service::data_dir().and_then(|dir| Settings::set_glass_tint(&dir,value)) {
-                                        v.message(error,true,cx);
-                                    }
-                                    window.prevent_default();
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }))
-                                .child(Slider::new(slider).accessibility_label(format!("玻璃效果 {}，{}%", glass_tint_label(tint), (100.*tint).round())))))
+                            .child(
+                                div()
+                                    .id("glass-tint-slider")
+                                    .relative()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h(px(36.))
+                                    .cursor_pointer()
+                                    .track_focus(&tint_focus)
+                                    .role(Role::Slider)
+                                    .aria_label(format!(
+                                        "玻璃效果 {}，{}%",
+                                        glass_tint_label(tint),
+                                        (100. * tint).round()
+                                    ))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(move |v, event: &MouseDownEvent, window, cx| {
+                                        let area = v.settings_layout.tint_bounds.get();
+                                        let left = area.origin.x + px(20.);
+                                        let range = (area.size.width - px(40.)).max(px(1.));
+                                        let thumb_x = left + range * v.glass_tint;
+                                        if (event.position.x - thumb_x).abs() <= px(20.) {
+                                            v.settings_layout.tint_drag = Some(event.position.x - thumb_x);
+                                        } else {
+                                            v.settings_layout.tint_drag = Some(px(0.));
+                                            v.glass_tint = snap_tint(f32::from(event.position.x - left) / f32::from(range));
+                                        }
+                                        if let Some(focus) = v.settings_layout.tint_focus.clone() {
+                                            window.focus(&focus, cx);
+                                        }
+                                        cx.stop_propagation();
+                                        cx.notify();
+                                    }))
+                                    .capture_key_down(cx.listener(|v, event: &KeyDownEvent, window, cx| {
+                                        let value = match event.keystroke.key.as_str() {
+                                            "left" | "down" => v.glass_tint - 0.05,
+                                            "right" | "up" => v.glass_tint + 0.05,
+                                            "pageup" => v.glass_tint + 0.25,
+                                            "pagedown" => v.glass_tint - 0.25,
+                                            "home" => 0.,
+                                            "end" => 1.,
+                                            _ => return,
+                                        };
+                                        let value = snap_tint(value);
+                                        v.glass_tint = value;
+                                        if let Err(error) = crate::service::data_dir().and_then(|dir| Settings::set_glass_tint(&dir, value)) {
+                                            v.message(error, true, cx);
+                                        }
+                                        window.prevent_default();
+                                        cx.stop_propagation();
+                                        cx.notify();
+                                    }))
+                                    .child(canvas(|_, _, _| (), move |area, _, window, _| {
+                                        tint_bounds.set(area);
+                                        let range = (area.size.width - px(40.)).max(px(0.));
+                                        let left = area.origin.x + px(20.);
+                                        let center = area.origin.y + area.size.height * 0.5;
+                                        let x = left + range * tint;
+                                        let track = |start, end, color| quad(Bounds::new(point(start, center - px(2.)), size(end - start, px(4.))), px(2.), color, px(0.), color, BorderStyle::default());
+                                        window.paint_quad(track(area.origin.x, area.origin.x + area.size.width, palette.fill_strong()));
+                                        window.paint_quad(track(area.origin.x, x, palette.primary_fill()));
+                                        for tick in [0., 0.5, 1.] {
+                                            if (tint - tick).abs() >= 0.055 {
+                                                window.paint_quad(quad(Bounds::new(point(left + range * tick - px(1.75), center + px(9.)), size(px(3.5), px(3.5))), px(1.75), palette.muted().opacity(0.42), px(0.), transparent_black(), BorderStyle::default()));
+                                            }
+                                        }
+                                        let (tw, th, tr) = if tint_dragging { (px(44.), px(28.), px(14.)) } else { (px(40.), px(26.), px(13.)) };
+                                        let thumb = Bounds::new(point(x - tw * 0.5, center - th * 0.5), size(tw, th));
+                                        window.paint_drop_shadows(
+                                            thumb,
+                                            tr.into(),
+                                            &[BoxShadow {
+                                                color: hsla(0., 0., 0., if palette.0 { 0.36 } else if tint_dragging { 0.14 } else { 0.18 }),
+                                                offset: point(px(0.), px(2.)),
+                                                blur_radius: px(if tint_dragging { 8. } else { 6. }),
+                                                spread_radius: px(-1.),
+                                                inset: false,
+                                            }],
+                                        );
+                                        if tint_dragging {
+                                            window.paint_quad(quad(thumb, tr, rgba(0xffffff38), px(1.2), rgba(0xffffffd8), BorderStyle::Solid));
+                                            window.paint_quad(quad(thumb, tr, transparent_black(), px(0.6), rgba(0x00000022), BorderStyle::Solid));
+                                        } else {
+                                            window.paint_quad(quad(thumb, tr, rgb(0xffffff), px(0.5), rgba(0x00000018), BorderStyle::Solid));
+                                        }
+                                        if tint_dragging {
+                                            let move_ws = move_ws.clone();
+                                            window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                                                if phase != DispatchPhase::Bubble {
+                                                    return;
+                                                }
+                                                let _ = move_ws.update(cx, |v, cx| {
+                                                    let Some(grab) = v.settings_layout.tint_drag else {
+                                                        return;
+                                                    };
+                                                    if event.pressed_button != Some(MouseButton::Left) {
+                                                        v.settings_layout.tint_drag = None;
+                                                        let value = v.glass_tint;
+                                                        if let Err(error) = crate::service::data_dir().and_then(|dir| Settings::set_glass_tint(&dir, value)) {
+                                                            v.message(error, true, cx);
+                                                        }
+                                                        cx.notify();
+                                                        return;
+                                                    }
+                                                    let range = (area.size.width - px(40.)).max(px(1.));
+                                                    let left = area.origin.x + px(20.);
+                                                    v.glass_tint = snap_tint(f32::from(event.position.x - grab - left) / f32::from(range));
+                                                    cx.stop_propagation();
+                                                    cx.notify();
+                                                });
+                                            });
+                                            let up_ws = up_ws.clone();
+                                            window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                                                if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                                                    return;
+                                                }
+                                                let _ = up_ws.update(cx, |v, cx| {
+                                                    if v.settings_layout.tint_drag.take().is_some() {
+                                                        let value = v.glass_tint;
+                                                        if let Err(error) = crate::service::data_dir().and_then(|dir| Settings::set_glass_tint(&dir, value)) {
+                                                            v.message(error, true, cx);
+                                                        }
+                                                        cx.notify();
+                                                    }
+                                                });
+                                            });
+                                        }
+                                    }).size_full()),
+                            )
                             .child(svg().path("glass-tinted").size(px(22.)).flex_none().text_color(palette.muted())),
                     ),
             )
