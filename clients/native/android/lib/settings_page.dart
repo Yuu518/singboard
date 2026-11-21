@@ -524,23 +524,52 @@ class _SettingsPageState extends State<SettingsPage> {
     ),
   );
 
-  Widget _fold(String key, String title, String summary) => SettingsRow(
-    title: title,
-    subtitle: summary,
-    inline: true,
-    trailing: AnimatedRotation(
-      turns: _open.contains(key) ? 0.5 : 0,
-      duration: const Duration(milliseconds: 180),
-      child: PanelIcon(
-        'chevron-down',
-        size: 16,
-        color: SingboardColors.of(context).muted,
+  Widget _fold(String key, String title, String summary) {
+    final duration = Duration(
+      milliseconds: MediaQuery.disableAnimationsOf(context) ? 0 : 220,
+    );
+    return SettingsRow(
+      title: title,
+      subtitle: summary,
+      inline: true,
+      trailing: AnimatedRotation(
+        turns: _open.contains(key) ? 0.5 : 0,
+        duration: duration,
+        curve: const Cubic(0.2, 0.8, 0.2, 1.0),
+        child: PanelIcon(
+          'chevron-down',
+          size: 16,
+          color: SingboardColors.of(context).muted,
+        ),
       ),
-    ),
-    onTap: () => setState(() {
-      if (!_open.remove(key)) _open.add(key);
-    }),
-  );
+      onTap: () => setState(() {
+        if (!_open.remove(key)) _open.add(key);
+      }),
+    );
+  }
+
+  Widget _foldSection(String key, String title, String summary, Widget body) {
+    final open = _open.contains(key);
+    final duration = Duration(
+      milliseconds: MediaQuery.disableAnimationsOf(context) ? 0 : 220,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _fold(key, title, summary),
+        ClipRect(
+          child: AnimatedSize(
+            alignment: Alignment.topCenter,
+            duration: duration,
+            curve: const Cubic(0.2, 0.8, 0.2, 1.0),
+            child: open
+                ? body
+                : const SizedBox(width: double.infinity, height: 0),
+          ),
+        ),
+      ],
+    );
+  }
 
   void _editApi(bool add, Map<String, dynamic> api) {
     if (_newApi == add) {
@@ -980,12 +1009,10 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         ),
       ),
-      _fold(
+      _foldSection(
         'groups',
         '代理组专用地址',
         groups.isEmpty ? '暂未配置' : '已配置 ${groups.length} 个代理组',
-      ),
-      if (_open.contains('groups'))
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
           child: Column(
@@ -1063,6 +1090,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ),
+      ),
       SettingsRow(
         title: 'IPv6 连通性测试',
         subtitle: '测速时额外检查节点的 IPv6 可用性。',
@@ -1860,12 +1888,10 @@ class _SettingsPageState extends State<SettingsPage> {
                           : (v) => _savePreference(pageSwipe: v),
                     ),
                   ),
-                  _fold(
+                  _foldSection(
                     'appearance',
                     '个性化',
                     '${_tintLabel(_tint)} · ${hasWallpaper ? '已设置背景' : '默认背景'}',
-                  ),
-                  if (_open.contains('appearance'))
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
                       child: Container(
@@ -1969,6 +1995,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         ),
                       ),
                     ),
+                  ),
                 ]),
                 const SettingsSectionHeader('更新'),
                 if (root) ...[_coreUpdate(version), const SizedBox(height: 10)],
@@ -2017,84 +2044,40 @@ class _SettingsSelect extends StatefulWidget {
 
 class _SettingsSelectState extends State<_SettingsSelect> {
   bool open = false;
+
   Future<void> _choose() async {
     if (open || widget.changed == null || widget.options.isEmpty) return;
     final anchor = context.findRenderObject() as RenderBox;
-    final overlay =
-        Navigator.of(
-              context,
-              rootNavigator: true,
-            ).overlay!.context.findRenderObject()
-            as RenderBox;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final overlay = navigator.overlay!.context.findRenderObject() as RenderBox;
     final origin = anchor.localToGlobal(Offset.zero, ancestor: overlay);
-    final c = SingboardColors.of(context);
-    final room = MediaQuery.viewPaddingOf(context);
-    final height = math.min(
-      math.min(220.0, overlay.size.height * .42),
-      widget.options.length * 36.0 + 8,
-    );
-    final below =
-        overlay.size.height - room.bottom - origin.dy - anchor.size.height - 4;
-    final above = below < height && origin.dy - room.top > below;
-    final y = above
-        ? origin.dy - 4 - height
-        : origin.dy + anchor.size.height + 4;
-    final width = math.min(anchor.size.width, overlay.size.width - 16);
+    final anchorRect = origin & anchor.size;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
     setState(() => open = true);
     try {
-      final selected = await showMenu<String>(
-        context: context,
-        useRootNavigator: true,
-        requestFocus: true,
-        position: RelativeRect.fromRect(
-          Rect.fromLTWH(origin.dx, y, width, 0),
-          Offset.zero & overlay.size,
+      final selected = await navigator.push<String>(
+        _SelectMenuRoute(
+          anchorRect: anchorRect,
+          overlaySize: overlay.size,
+          options: widget.options,
+          selected: widget.value,
+          mono: widget.mono,
+          reduceMotion: reduceMotion,
+          onDismissStart: () {
+            if (mounted && open) setState(() => open = false);
+          },
         ),
-        constraints: BoxConstraints(
-          minWidth: width,
-          maxWidth: width,
-          maxHeight: height,
-        ),
-        menuPadding: const EdgeInsets.all(4),
-        color: c.surface.withValues(alpha: .96),
-        surfaceTintColor: Colors.transparent,
-        clipBehavior: Clip.antiAlias,
-        shape: RoundedRectangleBorder(
-          side: BorderSide(color: c.hairline, width: .5),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        popUpAnimationStyle: const AnimationStyle(
-          duration: Duration(milliseconds: 150),
-          reverseDuration: Duration(milliseconds: 100),
-        ),
-        items: [
-          for (final entry in widget.options.entries)
-            PopupMenuItem<String>(
-              value: entry.key,
-              height: 36,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Text(
-                entry.value,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontSize: 14,
-                  color: c.ink,
-                  fontFamily: widget.mono ? 'monospace' : null,
-                ),
-              ),
-            ),
-        ],
       );
       if (mounted && selected != null) widget.changed?.call(selected);
     } finally {
-      if (mounted) setState(() => open = false);
+      if (mounted && open) setState(() => open = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final c = SingboardColors.of(context);
+    final reduce = MediaQuery.disableAnimationsOf(context);
     return Semantics(
       label: widget.hint,
       button: true,
@@ -2104,11 +2087,13 @@ class _SettingsSelectState extends State<_SettingsSelect> {
         child: InkWell(
           onTap: widget.changed == null ? null : _choose,
           borderRadius: BorderRadius.circular(10),
-          child: Container(
+          child: AnimatedContainer(
+            duration: Duration(milliseconds: reduce ? 0 : 180),
+            curve: Curves.easeOutCubic,
             height: 32,
             padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
-              color: c.fill,
+              color: open ? c.fillStrong : c.fill,
               borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
@@ -2128,7 +2113,8 @@ class _SettingsSelectState extends State<_SettingsSelect> {
                 const SizedBox(width: 8),
                 AnimatedRotation(
                   turns: open ? 0.5 : 0,
-                  duration: const Duration(milliseconds: 150),
+                  duration: Duration(milliseconds: reduce ? 0 : 210),
+                  curve: const Cubic(0.16, 1.0, 0.3, 1.0),
                   child: PanelIcon('select-arrow', size: 12, color: c.muted),
                 ),
               ],
@@ -2136,6 +2122,231 @@ class _SettingsSelectState extends State<_SettingsSelect> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SelectMenuRoute extends PopupRoute<String> {
+  _SelectMenuRoute({
+    required this.anchorRect,
+    required this.overlaySize,
+    required this.options,
+    required this.selected,
+    required this.mono,
+    required this.reduceMotion,
+    required this.onDismissStart,
+  });
+
+  final Rect anchorRect;
+  final Size overlaySize;
+  final Map<String, String> options;
+  final String selected;
+  final bool mono;
+  final bool reduceMotion;
+  final VoidCallback onDismissStart;
+
+  @override
+  Color? get barrierColor => null;
+
+  @override
+  bool get barrierDismissible => true;
+
+  @override
+  String? get barrierLabel => '关闭下拉菜单';
+
+  @override
+  Duration get transitionDuration =>
+      reduceMotion ? Duration.zero : const Duration(milliseconds: 210);
+
+  @override
+  Duration get reverseTransitionDuration =>
+      reduceMotion ? Duration.zero : const Duration(milliseconds: 140);
+
+  @override
+  bool didPop(String? result) {
+    onDismissStart();
+    return super.didPop(result);
+  }
+
+  ({
+    double left,
+    double width,
+    double? top,
+    double? bottom,
+    double maxHeight,
+    bool above,
+  }) _layout(BuildContext context) {
+    final pad = MediaQuery.viewPaddingOf(context);
+    final width = math.min(anchorRect.width, overlaySize.width - 16.0);
+    final left = anchorRect.left
+        .clamp(8.0, math.max(8.0, overlaySize.width - width - 8.0))
+        .toDouble();
+    final maxAllowed = math.min(240.0, overlaySize.height * 0.42);
+    final desired = math.min(maxAllowed, options.length * 36.0 + 10.0);
+    final spaceBelow =
+        overlaySize.height - pad.bottom - 8.0 - anchorRect.bottom - 6.0;
+    final spaceAbove = anchorRect.top - 6.0 - pad.top - 8.0;
+    final above = spaceBelow < desired && spaceAbove > spaceBelow;
+    final maxHeight = math.max(
+      48.0,
+      math.min(maxAllowed, above ? spaceAbove : spaceBelow),
+    );
+    return (
+      left: left,
+      width: width,
+      top: above ? null : anchorRect.bottom + 6.0,
+      bottom: above ? overlaySize.height - anchorRect.top + 6.0 : null,
+      maxHeight: maxHeight,
+      above: above,
+    );
+  }
+
+  @override
+  Widget buildPage(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+  ) {
+    final c = SingboardColors.of(context);
+    final layout = _layout(context);
+    final baseStyle = Theme.of(context).textTheme.bodyMedium ?? const TextStyle();
+    return RepaintBoundary(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: layout.maxHeight),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: c.surface.withValues(alpha: c.dark ? 0.94 : 0.97),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: c.hairline, width: 0.6),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: c.dark ? 0.38 : 0.12),
+                blurRadius: 22,
+                offset: const Offset(0, 8),
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: c.dark ? 0.20 : 0.05),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(13.5),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(5),
+              child: Material(
+                type: MaterialType.transparency,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final entry in options.entries)
+                      _buildOption(context, c, baseStyle, entry),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOption(
+    BuildContext context,
+    SingboardColors c,
+    TextStyle baseStyle,
+    MapEntry<String, String> entry,
+  ) {
+    final active = entry.key == selected;
+    return Ink(
+      decoration: active
+          ? BoxDecoration(
+              color: c.primarySoft,
+              borderRadius: BorderRadius.circular(9),
+            )
+          : null,
+      child: InkWell(
+        onTap: () => Navigator.of(context).pop(entry.key),
+        borderRadius: BorderRadius.circular(9),
+        child: SizedBox(
+          height: 36,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    entry.value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: baseStyle.copyWith(
+                      fontSize: 14,
+                      fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                      color: active ? c.selectionInk : c.ink,
+                      fontFamily: mono ? 'monospace' : null,
+                    ),
+                  ),
+                ),
+                if (active) ...[
+                  const SizedBox(width: 8),
+                  PanelIcon('check', size: 14, color: c.selectionInk),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget buildTransitions(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    final layout = _layout(context);
+    final align = layout.above ? Alignment.bottomCenter : Alignment.topCenter;
+    final shift = layout.above ? 6.0 : -6.0;
+    return Stack(
+      children: [
+        Positioned(
+          left: layout.left,
+          top: layout.top,
+          bottom: layout.bottom,
+          width: layout.width,
+          child: AnimatedBuilder(
+            animation: animation,
+            child: child,
+            builder: (context, child) {
+              final t = animation.value;
+              final closing = animation.status == AnimationStatus.reverse;
+              final curved = closing
+                  ? Curves.easeInCubic.transform(t)
+                  : const Cubic(0.16, 1.0, 0.3, 1.0).transform(t);
+              final opacity = closing
+                  ? Curves.easeOut.transform(t)
+                  : Curves.easeOut.transform((t / 0.6).clamp(0.0, 1.0).toDouble());
+              final scale = 0.94 + 0.06 * curved;
+              final dy = shift * (1.0 - curved);
+              return Opacity(
+                opacity: opacity,
+                child: Transform.translate(
+                  offset: Offset(0, dy),
+                  child: Transform.scale(
+                    scale: scale,
+                    alignment: align,
+                    child: child,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }
