@@ -1926,6 +1926,155 @@ fn pill_switch(
         .child(div().size(px(18.)).rounded_full().bg(rgb(0xffffff)).shadow_sm())
 }
 
+#[derive(IntoElement)]
+pub(super) struct DropdownBox {
+    id: &'static str,
+    anchor: Anchor,
+    palette: crate::theme::Palette,
+    width: Option<Pixels>,
+    min_width: Option<Pixels>,
+    full_width: bool,
+    padding_x: Pixels,
+    gap: Pixels,
+    label: SharedString,
+    items: Vec<(SharedString, bool, std::rc::Rc<dyn Fn(&mut Window, &mut App)>)>,
+}
+
+impl DropdownBox {
+    pub(super) fn new(
+        id: &'static str,
+        label: impl Into<SharedString>,
+        palette: crate::theme::Palette,
+    ) -> Self {
+        Self {
+            id,
+            anchor: Anchor::TopLeft,
+            palette,
+            width: None,
+            min_width: None,
+            full_width: true,
+            padding_x: px(12.),
+            gap: px(0.),
+            label: label.into(),
+            items: Vec::new(),
+        }
+    }
+
+    pub(super) fn anchor(mut self, anchor: Anchor) -> Self {
+        self.anchor = anchor;
+        self
+    }
+
+    pub(super) fn width(mut self, width: Pixels) -> Self {
+        self.width = Some(width);
+        self.full_width = false;
+        self
+    }
+
+    pub(super) fn min_width(mut self, min_width: Pixels) -> Self {
+        self.min_width = Some(min_width);
+        self.full_width = false;
+        self
+    }
+
+    pub(super) fn padding_x(mut self, padding_x: Pixels) -> Self {
+        self.padding_x = padding_x;
+        self
+    }
+
+    pub(super) fn gap(mut self, gap: Pixels) -> Self {
+        self.gap = gap;
+        self
+    }
+
+    pub(super) fn item(
+        mut self,
+        label: impl Into<SharedString>,
+        checked: bool,
+        on_pick: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.items
+            .push((label.into(), checked, std::rc::Rc::new(on_pick)));
+        self
+    }
+}
+
+impl RenderOnce for DropdownBox {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        use gpui_component::{
+            ElementExt as _,
+            button::{Button, ButtonVariants as _},
+            menu::{DropdownMenu as _, PopupMenuItem},
+        };
+
+        let width_state = window.use_keyed_state(
+            (ElementId::from(self.id), "dropdown-width"),
+            cx,
+            |_, _| std::rc::Rc::new(std::cell::Cell::new(px(0.))),
+        );
+        let width_cell = width_state.read(cx).clone();
+        let measure_cell = width_cell.clone();
+        let items = self.items;
+        let anchor = self.anchor;
+
+        div()
+            .relative()
+            .overflow_hidden()
+            .when_some(self.width, |d, w| d.w(w))
+            .when(self.full_width, |d| d.w_full())
+            .when_some(self.min_width, |d, w| d.min_w(w))
+            .h(px(32.))
+            .rounded(px(10.))
+            .bg(self.palette.fill())
+            .border_1()
+            .border_color(self.palette.control_rim())
+            .on_prepaint(move |bounds, _, _| {
+                measure_cell.set(bounds.size.width);
+            })
+            .child(crate::glass::control_layer(self.palette, px(9.), false))
+            .child(
+                Button::new(self.id)
+                    .ghost()
+                    .w_full()
+                    .h(px(32.))
+                    .px(self.padding_x)
+                    .rounded(px(10.))
+                    .text_color(self.palette.ink())
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(self.gap)
+                            .child(div().min_w_0().truncate().text_sm().child(self.label))
+                            .child(
+                                svg()
+                                    .path("select-caret")
+                                    .size(px(15.))
+                                    .text_color(self.palette.muted()),
+                            ),
+                    )
+                    .dropdown_menu_with_anchor(anchor, move |mut menu, window, _| {
+                        let trigger_w = width_cell.get();
+                        if trigger_w > px(0.) {
+                            let default_max = rems(31.25).to_pixels(window.rem_size());
+                            menu = menu.min_w(trigger_w).max_w(trigger_w.max(default_max));
+                        }
+                        for (label, checked, on_pick) in &items {
+                            let on_pick = on_pick.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(label.clone())
+                                    .checked(*checked)
+                                    .on_click(move |_, window, cx| on_pick(window, cx)),
+                            );
+                        }
+                        menu
+                    }),
+            )
+    }
+}
+
 fn format_ip_row(data: Option<&Value>, busy: bool, revealed: bool) -> (String, String, bool) {
     let Some(row) = data else {
         return (

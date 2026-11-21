@@ -1,11 +1,7 @@
 use super::*;
 use crate::theme::Palette;
+use gpui_component::input::InputState;
 use gpui_component::slider::{Slider, SliderEvent, SliderState};
-use gpui_component::{
-    button::{Button, ButtonVariants},
-    input::InputState,
-    menu::{DropdownMenu, PopupMenuItem},
-};
 use singboard_stream::{settings::Settings, tools::Values};
 use std::collections::{HashMap, HashSet};
 
@@ -285,55 +281,16 @@ pub(super) fn picker(
     let view = cx.weak_entity();
     let change = std::rc::Rc::new(change);
     let palette = Palette::get(cx);
-    div()
-        .relative()
-        .overflow_hidden()
-        .w_full()
-        .h(px(32.))
-        .rounded(px(10.))
-        .bg(palette.fill())
-        .border_1()
-        .border_color(palette.control_rim())
-        .child(crate::glass::control_layer(palette, px(9.), false))
-        .child(
-            Button::new(id)
-                .ghost()
-                .w_full()
-                .h(px(32.))
-                .px(px(12.))
-                .rounded(px(10.))
-                .text_color(palette.ink())
-                .child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(div().min_w_0().truncate().text_sm().child(label))
-                        .child(
-                            svg()
-                                .path("select-caret")
-                                .size(px(15.))
-                                .text_color(palette.muted()),
-                        ),
-                )
-                .dropdown_menu(move |mut menu, _, _| {
-                    for (val, label) in &options {
-                        let val = val.clone();
-                        let change = change.clone();
-                        let view = view.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(label.clone())
-                                .checked(val == selected)
-                                .on_click(move |_, _, cx| {
-                                    let _ = view.update(cx, |v, cx| change(v, val.clone(), cx));
-                                }),
-                        );
-                    }
-                    menu
-                }),
-        )
-        .into_any_element()
+    let mut dropdown = DropdownBox::new(id, label, palette);
+    for (val, label) in options {
+        let checked = val == selected;
+        let change = change.clone();
+        let view = view.clone();
+        dropdown = dropdown.item(label, checked, move |_, cx| {
+            let _ = view.update(cx, |v, cx| change(v, val.clone(), cx));
+        });
+    }
+    dropdown.into_any_element()
 }
 
 mod forms;

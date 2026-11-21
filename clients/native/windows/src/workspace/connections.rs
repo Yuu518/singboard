@@ -1,9 +1,5 @@
 use super::*;
-use gpui_component::{
-    button::{Button, ButtonVariants},
-    menu::{DropdownMenu, PopupMenuItem},
-    scroll::ScrollableElement,
-};
+use gpui_component::scroll::ScrollableElement;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -472,55 +468,20 @@ impl Workspace {
         let selected = self.connection_sort();
         let history = self.history;
         let weak = cx.weak_entity();
-        let picker = div()
-            .relative()
-            .overflow_hidden()
-            .w(px(102.))
-            .h(px(32.))
-            .rounded(px(10.))
-            .bg(palette.fill())
-            .border_1()
-            .border_color(palette.control_rim())
-            .child(crate::glass::control_layer(palette, px(9.), false))
-            .child(
-                Button::new("conn-sort")
-                    .ghost()
-                    .w(px(102.))
-                    .h(px(32.))
-                    .px(px(10.))
-                    .rounded(px(10.))
-                    .text_color(palette.ink())
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_1()
-                            .child(div().min_w_0().truncate().text_sm().child(SORTS[selected].1))
-                            .child(
-                                svg()
-                                    .path("select-caret")
-                                    .size(px(15.))
-                                    .text_color(palette.muted()),
-                            ),
-                    )
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for (i, (_, label)) in SORTS.iter().enumerate() {
-                            if history && matches!(i, 2 | 3) {
-                                continue;
-                            }
-                            let target = weak.clone();
-                            menu = menu.item(PopupMenuItem::new(*label).checked(i == selected).on_click(
-                                move |_, _, cx| {
-                                    let _ = target
-                                        .update(cx, |this, cx| this.apply(Action::ConnectionSort(i), cx));
-                                },
-                            ));
-                        }
-                        menu
-                    }),
-            );
+        let mut picker = DropdownBox::new("conn-sort", SORTS[selected].1, palette)
+            .anchor(Anchor::TopRight)
+            .width(px(102.))
+            .padding_x(px(10.))
+            .gap(px(4.));
+        for (i, (_, label)) in SORTS.iter().enumerate() {
+            if history && matches!(i, 2 | 3) {
+                continue;
+            }
+            let target = weak.clone();
+            picker = picker.item(*label, i == selected, move |_, cx| {
+                let _ = target.update(cx, |this, cx| this.apply(Action::ConnectionSort(i), cx));
+            });
+        }
         let toolbar = div()
             .w_full()
             .flex()

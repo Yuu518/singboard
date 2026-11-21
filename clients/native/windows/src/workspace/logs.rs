@@ -1,9 +1,5 @@
 use super::*;
-use gpui_component::{
-    button::{Button, ButtonVariants},
-    menu::{DropdownMenu, PopupMenuItem},
-    scroll::ScrollableElement,
-};
+use gpui_component::scroll::ScrollableElement;
 
 fn format_num(n: usize) -> String {
     let s = n.to_string();
@@ -141,58 +137,25 @@ impl Workspace {
         let selected_level = self.log_level;
         let core_lvl = self.core_level.clone();
         let view_weak = cx.weak_entity();
-        let level_picker = div()
-            .relative()
-            .overflow_hidden()
-            .h(px(32.))
-            .min_w(px(138.))
-            .rounded(px(10.))
-            .bg(palette.fill())
-            .border_1()
-            .border_color(palette.control_rim())
-            .child(crate::glass::control_layer(palette, px(9.), false))
-            .child(
-                Button::new("logs-level")
-                    .ghost()
-                    .w_full()
-                    .h(px(32.))
-                    .px(px(12.))
-                    .rounded(px(10.))
-                    .text_color(palette.ink())
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_2()
-                            .child(div().min_w_0().truncate().text_sm().child(level_label))
-                            .child(
-                                svg()
-                                    .path("select-caret")
-                                    .size(px(15.))
-                                    .text_color(palette.muted()),
-                            ),
-                    )
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for (idx, name) in LEVELS.iter().enumerate() {
-                            let label = if idx == 0 {
-                                format!("跟随核心（{core_lvl}）")
-                            } else {
-                                (*name).to_owned()
-                            };
-                            let view = view_weak.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(label)
-                                    .checked(idx == selected_level)
-                                    .on_click(move |_, _, cx| {
-                                        let _ = view.update(cx, |v, cx| v.set_log_level(idx, cx));
-                                    }),
-                            );
-                        }
-                        menu
-                    }),
-            );
+        let mut level_picker = DropdownBox::new("logs-level", level_label, palette)
+            .anchor(if narrow {
+                Anchor::TopRight
+            } else {
+                Anchor::TopLeft
+            })
+            .min_width(px(138.))
+            .gap(px(8.));
+        for (idx, name) in LEVELS.iter().enumerate() {
+            let label = if idx == 0 {
+                format!("跟随核心（{core_lvl}）")
+            } else {
+                (*name).to_owned()
+            };
+            let view = view_weak.clone();
+            level_picker = level_picker.item(label, idx == selected_level, move |_, cx| {
+                let _ = view.update(cx, |v, cx| v.set_log_level(idx, cx));
+            });
+        }
 
         let cleared_lines = count_lines(self.cleared.iter());
         let show_cleared = cleared_lines > 0
