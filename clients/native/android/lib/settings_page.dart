@@ -82,7 +82,6 @@ class _SettingsPageState extends State<SettingsPage> {
   final _busy = <String>{};
   final _messages = <String, String>{};
   String _record = 'A', _resolver = 'system', _version = '';
-  late bool _geo = widget.preferences['dnsGeoEnabled'] == true;
   late List<String> _dnsHistory = List<String>.from(
     widget.preferences['dnsHistory'] ?? [],
   );
@@ -173,14 +172,19 @@ class _SettingsPageState extends State<SettingsPage> {
     bool secret = false,
     bool mono = false,
     VoidCallback? onCommit,
+    VoidCallback? onSubmitted,
   }) {
     final c = SingboardColors.of(context);
     final node = onCommit == null ? null : _focusNode(key, onCommit);
     return TextField(
       controller: _input(key, initial),
       focusNode: node,
-      textInputAction: onCommit == null ? null : TextInputAction.done,
-      onSubmitted: onCommit == null ? null : (_) => onCommit(),
+      textInputAction: onSubmitted != null
+          ? TextInputAction.search
+          : (onCommit == null ? null : TextInputAction.done),
+      onSubmitted: onSubmitted != null
+          ? (_) => onSubmitted()
+          : (onCommit == null ? null : (_) => onCommit()),
       onTapOutside: node == null
           ? null
           : (_) {
@@ -191,6 +195,7 @@ class _SettingsPageState extends State<SettingsPage> {
           : null,
       obscureText: secret,
       autocorrect: false,
+      textAlignVertical: TextAlignVertical.center,
       style: TextStyle(
         fontSize: 14,
         color: c.ink,
@@ -200,11 +205,12 @@ class _SettingsPageState extends State<SettingsPage> {
         hintText: hint,
         hintStyle: TextStyle(fontSize: 14, color: c.muted),
         isDense: true,
+        constraints: const BoxConstraints.tightFor(height: 36),
         filled: true,
         fillColor: c.fill,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 12,
-          vertical: 10,
+          vertical: 8,
         ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
@@ -221,14 +227,23 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _routeBtn(String label, VoidCallback? onTap, {bool loading = false}) {
+  Widget _routeBtn(
+    String label,
+    VoidCallback? onTap, {
+    bool loading = false,
+    double? height,
+  }) {
     final c = SingboardColors.of(context);
     final disabled = onTap == null;
     final fg = disabled ? c.muted.withValues(alpha: 0.55) : Colors.white;
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        height: height,
+        padding: EdgeInsets.symmetric(
+          horizontal: height == null ? 12 : 14,
+          vertical: height == null ? 7 : 0,
+        ),
         decoration: BoxDecoration(
           color: disabled ? c.fill : c.primary,
           borderRadius: BorderRadius.circular(10),
@@ -347,6 +362,7 @@ class _SettingsPageState extends State<SettingsPage> {
     Map<String, String> options,
     ValueChanged<String>? changed, {
     bool mono = false,
+    double height = 32,
   }) {
     return _SettingsSelect(
       hint: hint,
@@ -354,6 +370,7 @@ class _SettingsPageState extends State<SettingsPage> {
       options: options,
       changed: changed,
       mono: mono,
+      height: height,
     );
   }
 
@@ -890,6 +907,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           {'http': 'http', 'https': 'https'},
                           (s) => setState(() => _protocol = s),
                           mono: true,
+                          height: 36,
                         ),
                       ],
                     ),
@@ -1132,7 +1150,7 @@ class _SettingsPageState extends State<SettingsPage> {
           'record': _record,
           'server': system ? null : server,
           'servers': servers ?? <String>[],
-          'geo': _geo,
+          'geo': true,
         },
       );
       if (mounted)
@@ -1176,25 +1194,96 @@ class _SettingsPageState extends State<SettingsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Text('域名', style: TextStyle(fontSize: 12, color: c.muted)),
+            const SizedBox(height: 6),
             Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '域名',
-                        style: TextStyle(fontSize: 12, color: c.muted),
-                      ),
-                      const SizedBox(height: 6),
-                      _glassInput('domain', 'www.google.com', mono: true),
-                    ],
+                  child: _glassInput(
+                    'domain',
+                    'www.google.com',
+                    mono: true,
+                    onSubmitted: busy ? null : _lookup,
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
+                _routeBtn(
+                  '查询',
+                  busy ? null : _lookup,
+                  loading: busy,
+                  height: 36,
+                ),
+              ],
+            ),
+            if (_showDnsHistory && _dnsHistory.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: c.fill,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  children: [
+                    for (var i = 0; i < _dnsHistory.length; i++) ...[
+                      if (i > 0)
+                        Divider(
+                          height: 0.5,
+                          thickness: 0.5,
+                          indent: 12,
+                          endIndent: 12,
+                          color: c.hairline,
+                        ),
+                      Builder(
+                        builder: (_) {
+                          final item = _dnsHistory[i];
+                          return Row(
+                            children: [
+                              Expanded(
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(10),
+                                  onTap: () => setState(() {
+                                    _input('domain').text = item;
+                                    _showDnsHistory = false;
+                                  }),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 9,
+                                    ),
+                                    child: Text(
+                                      item,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontFamily: 'monospace',
+                                        fontSize: 13,
+                                        color: c.ink,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              _iconBtn(
+                                'trash',
+                                '删除这条查询记录',
+                                () => _removeDns(item),
+                                danger: true,
+                              ),
+                              const SizedBox(width: 4),
+                            ],
+                          );
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
                 SizedBox(
-                  width: 86,
+                  width: 96,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -1211,73 +1300,52 @@ class _SettingsPageState extends State<SettingsPage> {
                         },
                         (v) => setState(() => _record = v),
                         mono: true,
+                        height: 36,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '解析器',
+                        style: TextStyle(fontSize: 12, color: c.muted),
+                      ),
+                      const SizedBox(height: 6),
+                      _glassSelect(
+                        '解析器',
+                        _resolver,
+                        {
+                          'system': '本机 DNS',
+                          '8.8.8.8': 'Google (8.8.8.8)',
+                          '1.1.1.1': 'Cloudflare (1.1.1.1)',
+                          '223.5.5.5': 'AliDNS (223.5.5.5)',
+                          '119.29.29.29': 'DNSPod (119.29.29.29)',
+                          'custom': '自定义',
+                        },
+                        (v) => setState(() => _resolver = v),
+                        mono: true,
+                        height: 36,
                       ),
                     ],
                   ),
                 ),
               ],
             ),
-            if (_showDnsHistory)
-              for (final item in _dnsHistory)
-                Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        onTap: () => setState(() {
-                          _input('domain').text = item;
-                          _showDnsHistory = false;
-                        }),
-                        child: Padding(
-                          padding: const EdgeInsets.all(8),
-                          child: Text(
-                            item,
-                            style: TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                              color: c.ink,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '删除这条查询记录',
-                      onPressed: () => _removeDns(item),
-                      icon: PanelIcon('trash', size: 14, color: c.dangerInk),
-                    ),
-                  ],
-                ),
-            const SizedBox(height: 10),
-            Text('解析器', style: TextStyle(fontSize: 12, color: c.muted)),
-            const SizedBox(height: 6),
-            _glassSelect(
-              '解析器',
-              _resolver,
-              {
-                'system': '本机 DNS',
-                '8.8.8.8': 'Google (8.8.8.8)',
-                '1.1.1.1': 'Cloudflare (1.1.1.1)',
-                '223.5.5.5': 'AliDNS (223.5.5.5)',
-                '119.29.29.29': 'DNSPod (119.29.29.29)',
-                'custom': '自定义',
-              },
-              (v) => setState(() => _resolver = v),
-              mono: true,
-            ),
             if (_resolver == 'custom') ...[
-              const SizedBox(height: 8),
-              _glassInput('server', 'IP 或 IP:端口', mono: true),
-            ],
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: Center(
-                child: _settingsBtn(
-                  busy ? '查询中…' : '查询',
-                  busy ? null : _lookup,
-                ),
+              const SizedBox(height: 12),
+              Text('自定义解析器', style: TextStyle(fontSize: 12, color: c.muted)),
+              const SizedBox(height: 6),
+              _glassInput(
+                'server',
+                'IP 或 IP:端口',
+                mono: true,
+                onSubmitted: busy ? null : _lookup,
               ),
-            ),
+            ],
             if (_messages.containsKey('dns')) _note('dns'),
             if (answer != null) ...[
               const SizedBox(height: 12),
@@ -1296,7 +1364,13 @@ class _SettingsPageState extends State<SettingsPage> {
                           '无记录',
                           style: TextStyle(fontSize: 12, color: c.muted),
                         ),
-                      for (final record in records) ...[
+                      for (var i = 0; i < records.length; i++) ...[
+                        if (i > 0)
+                          Divider(
+                            height: 16,
+                            thickness: 0.5,
+                            color: c.hairline,
+                          ),
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -1310,7 +1384,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: Text(
-                                record['record_type'] ?? '',
+                                records[i]['record_type'] ?? '',
                                 style: TextStyle(
                                   fontSize: 11,
                                   color: c.primary,
@@ -1323,22 +1397,22 @@ class _SettingsPageState extends State<SettingsPage> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   SelectableText(
-                                    record['name'] ?? '',
+                                    records[i]['name'] ?? '',
                                     style: TextStyle(
                                       color: c.ink,
                                       fontSize: 12,
                                     ),
                                   ),
                                   Text(
-                                    "TTL ${record['ttl']}",
+                                    "TTL ${records[i]['ttl']}",
                                     style: TextStyle(
                                       color: c.muted,
                                       fontSize: 11,
                                     ),
                                   ),
-                                  if ((record['geo'] ?? '').isNotEmpty)
+                                  if ((records[i]['geo'] ?? '').isNotEmpty)
                                     Text(
-                                      record['geo'],
+                                      records[i]['geo'],
                                       style: TextStyle(
                                         color: c.muted,
                                         fontSize: 11,
@@ -1350,7 +1424,7 @@ class _SettingsPageState extends State<SettingsPage> {
                             const SizedBox(width: 6),
                             Flexible(
                               child: SelectableText(
-                                record['value'] ?? '',
+                                records[i]['value'] ?? '',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: c.ink,
@@ -1360,8 +1434,8 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                           ],
                         ),
-                        Divider(color: c.hairline),
                       ],
+                      Divider(height: 16, thickness: 0.5, color: c.hairline),
                       Text(
                         answer['source'] == 'custom'
                             ? "指定 DNS · ${answer['server']}"
@@ -1374,24 +1448,6 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ],
           ],
-        ),
-      ),
-      SettingsRow(
-        title: '显示 IP 归属地',
-        subtitle: '开启后会把查询到的 IP 发送给 api.ip.sb 查询归属地。',
-        inline: true,
-        trailing: GlassToggle(
-          value: _geo,
-          onChanged: (v) async {
-            try {
-              await configRequest(await configDirectory(), 'set_dns_geo', {
-                'enabled': v,
-              });
-              if (mounted) setState(() => _geo = v);
-            } catch (e) {
-              if (mounted) setState(() => _messages['dns'] = e.toString());
-            }
-          },
         ),
       ),
     ]);
@@ -2033,11 +2089,13 @@ class _SettingsSelect extends StatefulWidget {
     required this.options,
     required this.changed,
     required this.mono,
+    this.height = 32,
   });
   final String hint, value;
   final Map<String, String> options;
   final ValueChanged<String>? changed;
   final bool mono;
+  final double height;
   @override
   State<_SettingsSelect> createState() => _SettingsSelectState();
 }
@@ -2090,7 +2148,7 @@ class _SettingsSelectState extends State<_SettingsSelect> {
           child: AnimatedContainer(
             duration: Duration(milliseconds: reduce ? 0 : 180),
             curve: Curves.easeOutCubic,
-            height: 32,
+            height: widget.height,
             padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
               color: open ? c.fillStrong : c.fill,

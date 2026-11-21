@@ -1297,7 +1297,6 @@ impl Workspace {
                     .child(glass_input("dns-custom-input", &server, true, p)),
             );
         }
-        let geo = prefs.dns_geo_enabled;
         let busy = self.settings_layout.pending.contains("dns");
         let rec_submit = record.clone();
         let res_submit = resolver.clone();
@@ -1310,7 +1309,7 @@ impl Workspace {
                         rec_submit.clone(),
                         res_submit.clone(),
                         vals.get("server").cloned().unwrap_or_default(),
-                        geo,
+                        true,
                         cx,
                     );
                 }))
@@ -1461,23 +1460,7 @@ impl Workspace {
             root = root.child(box_el);
         }
 
-        root.child(divider(p)).child(setting_row(
-            "显示 IP 归属地",
-            "开启后会把查询到的 IP 发送给 api.ip.sb 查询归属地。",
-            pill_switch("lookup-geo", geo, p)
-                .on_click(cx.listener(move |v, _, _, cx| {
-                    v.edit_preferences(
-                        |s| {
-                            s.dns_geo_enabled = !geo;
-                            Ok(())
-                        },
-                        cx,
-                    );
-                }))
-                .into_any_element(),
-            false,
-            p,
-        ))
+        root
     }
 
     pub(super) fn update_settings(
