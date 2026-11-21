@@ -6322,7 +6322,7 @@ dependencies = [
 
 [[package]]
 name = "singboard-gpui"
-version = "5.0.2"
+version = "5.0.3"
 dependencies = [
  "anyhow",
  "embed-resource",
@@ -6362,7 +6362,7 @@ dependencies = [
 
 [[package]]
 name = "singboard-stream"
-version = "5.0.2"
+version = "5.0.3"
 dependencies = [
  "base64 0.22.1",
  "chrono",
