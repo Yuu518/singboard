@@ -468,7 +468,11 @@ class _SettingsPageState extends State<SettingsPage> {
       });
       if (mounted) setState(() => _boot = value['text'] == 'on');
     } catch (e) {
-      if (mounted) setState(() => _messages['root'] = e.toString());
+      if (mounted) {
+        setState(
+          () => _messages['root'] = e is StateError ? e.message : e.toString(),
+        );
+      }
     }
   }
 
@@ -533,14 +537,15 @@ class _SettingsPageState extends State<SettingsPage> {
       if (reply['refresh'] == true) await widget.onReload();
       final text = reply['text'] as String;
       if (mounted) {
-        setState(
-          () => _messages[group] =
-              action == 'core_check' ? '可用版本 $text' : text,
-        );
+        setState(() => _messages[group] = text);
       }
       return true;
     } catch (e) {
-      if (mounted) setState(() => _messages[group] = e.toString());
+      if (mounted) {
+        setState(
+          () => _messages[group] = e is StateError ? e.message : e.toString(),
+        );
+      }
       return false;
     } finally {
       progress?.cancel();
@@ -1506,7 +1511,7 @@ class _SettingsPageState extends State<SettingsPage> {
     ]);
   }
 
-  Map<String, String> _updateValues() {
+  Map<String, String> _updateValues([String installed = '']) {
     final p = widget.preferences;
     String selected(String key, String fallback) =>
         (p[key] as String? ?? '').isEmpty ? fallback : p[key] as String;
@@ -1517,12 +1522,13 @@ class _SettingsPageState extends State<SettingsPage> {
       'mirror': p['coreUpdateMirror'] as String? ?? '',
       'token': p['githubToken'] as String? ?? '',
       'core': p['singboxPath'] as String? ?? '',
+      'installed': installed,
     };
   }
 
   Widget _coreUpdate(String version) {
     final c = SingboardColors.of(context);
-    final values = _updateValues();
+    final values = _updateValues(version);
     final busy = _busy.contains('coreUpdate');
     Future<bool> save(String key, String value) =>
         _run('coreUpdate', 'update_preferences', {...values, key: value});
@@ -1638,7 +1644,11 @@ class _SettingsPageState extends State<SettingsPage> {
         }
       }
     } catch (e) {
-      if (mounted) setState(() => _messages['panel'] = e.toString());
+      if (mounted) {
+        setState(
+          () => _messages['panel'] = e is StateError ? e.message : e.toString(),
+        );
+      }
     } finally {
       if (mounted) setState(() => _busy.remove('panel'));
     }

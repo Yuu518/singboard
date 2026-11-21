@@ -500,10 +500,11 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       }
       if (initial && prefs['panelAutoCheckUpdate'] != false) {
         unawaited(
-          configRequest(dir, 'check_update')
+          checkPanelUpdate(dir)
               .then((info) async {
-                if (mounted && info['available'] == true) {
-                  await showPanelUpdate(context, Map<String, dynamic>.from(info));
+                if (mounted &&
+                    (info['available'] == true || info['reinstall'] == true)) {
+                  await showPanelUpdate(context, info);
                 }
               })
               .catchError((Object _) {}),

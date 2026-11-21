@@ -217,13 +217,43 @@ pub struct Check {
 }
 
 fn client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .https_only(true)
         .user_agent("Singboard-Native")
         .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(180))
-        .build()
-        .map_err(|e| e.to_string())
+        .timeout(Duration::from_secs(180));
+    #[cfg(windows)]
+    let builder = match crate::commands::network::get_system_proxy()
+        .and_then(|url| reqwest::Proxy::all(&url).ok())
+    {
+        Some(proxy) => builder.proxy(proxy),
+        None => builder.no_proxy(),
+    };
+    builder.build().map_err(|e| e.to_string())
+}
+
+fn describe_request_error(err: reqwest::Error) -> String {
+    use std::error::Error as _;
+    let mut detail = String::new();
+    let mut current = err.source();
+    while let Some(cause) = current {
+        detail = cause.to_string();
+        current = cause.source();
+    }
+    let prefix = if err.is_timeout() {
+        "请求超时"
+    } else if err.is_connect() {
+        "连接失败"
+    } else if err.is_builder() {
+        "请求构造失败"
+    } else {
+        "网络请求失败"
+    };
+    if detail.is_empty() {
+        format!("请求 GitHub API 失败: {prefix} ({})", err.without_url())
+    } else {
+        format!("请求 GitHub API 失败: {prefix} ({detail})")
+    }
 }
 
 fn select(release: Release, os: &str, arch: &str, current: &str) -> Result<Check, String> {
@@ -270,20 +300,53 @@ fn select(release: Release, os: &str, arch: &str, current: &str) -> Result<Check
 }
 
 pub async fn check(token: &str) -> Result<Check, String> {
-    let request = client()?.get(format!(
-        "https://api.github.com/repos/{REPO}/releases/latest"
-    ));
-    let request = if token.is_empty() {
-        request
-    } else {
-        request.bearer_auth(token)
+    let token = token.trim();
+    if !token.is_empty() && (!token.is_ascii() || token.chars().any(char::is_control)) {
+        return Err("GitHub Token 包含无效字符，请重新填写".into());
+    }
+    let http = client()?;
+    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+    let mut attempt = 0u8;
+    let r = loop {
+        let request = http
+            .get(&url)
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28");
+        let request = if token.is_empty() {
+            request
+        } else {
+            request.bearer_auth(token)
+        };
+        match request.send().await {
+            Ok(resp) => break resp,
+            Err(e)
+                if attempt == 0
+                    && !e.is_builder()
+                    && (e.is_connect() || e.is_timeout() || e.is_request()) =>
+            {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Err(e) => return Err(describe_request_error(e)),
+        }
     };
-    let r = request
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?;
+    let status = r.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("GitHub Token 无效或已过期 (401)".into());
+    }
+    if status == reqwest::StatusCode::FORBIDDEN {
+        let body = r.text().await.unwrap_or_default();
+        if body.contains("rate limit") {
+            return Err("GitHub API 限流，请稍后再试".into());
+        }
+        return Err("GitHub API 拒绝访问 (403)".into());
+    }
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err("仓库不存在或没有发布版本".into());
+    }
+    if !status.is_success() {
+        return Err(format!("GitHub API 返回错误: {status}"));
+    }
     select(
         r.json().await.map_err(|e| e.to_string())?,
         std::env::consts::OS,
@@ -327,6 +390,7 @@ pub async fn download_with_progress(
     mirror: &str,
     progress: impl Fn(u64) + Sync,
 ) -> Result<(PathBuf, String), String> {
+    let token = token.trim();
     let info = check(token).await?;
     if info.digest.is_empty()
         || (!info.available && info.version != CURRENT)

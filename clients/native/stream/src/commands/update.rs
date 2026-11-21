@@ -151,23 +151,60 @@ pub(crate) fn github_token(token: Option<&str>) -> Option<&str> {
     token.map(str::trim).filter(|token| !token.is_empty())
 }
 
+fn describe_github_error(err: reqwest::Error) -> String {
+    use std::error::Error as _;
+    let mut detail = String::new();
+    let mut current = err.source();
+    while let Some(cause) = current {
+        detail = cause.to_string();
+        current = cause.source();
+    }
+    let prefix = if err.is_timeout() {
+        "请求超时"
+    } else if err.is_connect() {
+        "连接失败"
+    } else if err.is_builder() {
+        "请求构造失败"
+    } else {
+        "网络请求失败"
+    };
+    if detail.is_empty() {
+        format!("请求 GitHub API 失败: {prefix} ({})", err.without_url())
+    } else {
+        format!("请求 GitHub API 失败: {prefix} ({detail})")
+    }
+}
+
 pub(crate) async fn github_get_with_token(
     url: &str,
     token: Option<&str>,
 ) -> Result<reqwest::Response, String> {
+    let token = github_token(token);
+    if let Some(tok) = token
+        && (!tok.is_ascii() || tok.chars().any(char::is_control))
+    {
+        return Err("GitHub Token 包含无效字符，请重新填写".into());
+    }
     let client = super::network::build_client(Some(Duration::from_secs(30)))
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-    let mut request = client
-        .get(url)
-        .header("User-Agent", "singboard")
-        .header("Accept", "application/vnd.github+json");
-    if let Some(token) = github_token(token).filter(|_| url.starts_with(GITHUB_API)) {
-        request = request.bearer_auth(token);
-    }
-    let resp = request
-        .send()
-        .await
-        .map_err(|e| format!("请求 GitHub API 失败: {}", e))?;
+    let mut attempt = 0u8;
+    let resp = loop {
+        let mut request = client
+            .get(url)
+            .header("User-Agent", "singboard")
+            .header("Accept", "application/vnd.github+json");
+        if let Some(token) = token.filter(|_| url.starts_with(GITHUB_API)) {
+            request = request.bearer_auth(token);
+        }
+        match request.send().await {
+            Ok(resp) => break resp,
+            Err(e) if attempt == 0 && !e.is_builder() && (e.is_connect() || e.is_timeout() || e.is_request()) => {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Err(e) => return Err(describe_github_error(e)),
+        }
+    };
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
@@ -222,8 +259,9 @@ fn pick_asset(release: &GhRelease, suffixes: &[String]) -> Result<CoreUpdateInfo
 
 fn newest_release(releases: Vec<GhRelease>) -> Option<GhRelease> {
     releases.into_iter().filter(|r| !r.draft).rev().max_by_key(|r| {
+        let parsed = parse_core_version(&r.tag_name);
         (
-            parse_version(&r.tag_name),
+            parsed.as_ref().map(|v| (v.base, v.stage)),
             !r.prerelease,
             r.published_at.clone().unwrap_or_default(),
         )
@@ -382,6 +420,89 @@ async fn fetch_to_file(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CoreVersion {
+    base: (u64, u64, u64),
+    stage: (u8, u64),
+    fork: String,
+}
+
+pub(crate) fn normalize_core_version(text: &str) -> &str {
+    let line = text.lines().next().unwrap_or("").trim();
+    let stripped = line
+        .strip_prefix("sing-box version ")
+        .or_else(|| line.strip_prefix("Sing-Box version "))
+        .unwrap_or(line)
+        .trim();
+    stripped.trim_start_matches(['v', 'V'])
+}
+
+fn parse_core_version(text: &str) -> Option<CoreVersion> {
+    let norm = normalize_core_version(text);
+    let (base_part, suffix) = match norm.split_once('-') {
+        Some((b, s)) => (b, Some(s)),
+        None => (norm, None),
+    };
+    let mut parts = base_part.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = match parts.next() {
+        Some(p) => p.parse().ok()?,
+        None => 0,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    let Some(suffix) = suffix else {
+        return Some(CoreVersion {
+            base: (major, minor, patch),
+            stage: (4, 0),
+            fork: String::new(),
+        });
+    };
+    let lower = suffix.to_ascii_lowercase();
+    let parse_stage = |prefix: &str, rank: u8| -> Option<((u8, u64), String)> {
+        let rest = lower.strip_prefix(prefix)?;
+        let rest = rest.strip_prefix('.').unwrap_or(rest);
+        let digits_len = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
+        if digits_len == 0 && !rest.is_empty() && !rest.starts_with('-') {
+            return None;
+        }
+        let num = if digits_len > 0 {
+            rest[..digits_len].parse().ok()?
+        } else {
+            0
+        };
+        let tail = rest[digits_len..].trim_start_matches(['-', '.']);
+        Some(((rank, num), tail.to_string()))
+    };
+    let (stage, fork) = parse_stage("alpha", 1)
+        .or_else(|| parse_stage("beta", 2))
+        .or_else(|| parse_stage("rc", 3))
+        .unwrap_or(((4, 0), lower));
+    Some(CoreVersion {
+        base: (major, minor, patch),
+        stage,
+        fork,
+    })
+}
+
+pub(crate) fn is_core_up_to_date(latest: &str, installed: &str) -> bool {
+    let latest_norm = normalize_core_version(latest);
+    let installed_norm = normalize_core_version(installed);
+    if latest_norm.is_empty() || installed_norm.is_empty() {
+        return false;
+    }
+    if latest_norm.eq_ignore_ascii_case(installed_norm) {
+        return true;
+    }
+    match (parse_core_version(latest_norm), parse_core_version(installed_norm)) {
+        (Some(l), Some(i)) if l.fork == i.fork => (i.base, i.stage) >= (l.base, l.stage),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
     let text = text.trim().trim_start_matches(['v', 'V']);
     let mut parts = text.split('.');
@@ -673,5 +794,54 @@ mod tests {
         assert!(is_newer("nightly", "3.2.4"));
         assert!(!is_newer("nightly", "nightly"));
         assert!(!is_newer("vnightly", "nightly"));
+    }
+
+    #[test]
+    fn core_version_comparison_handles_prereleases_and_forks() {
+        assert!(is_core_up_to_date(
+            "v1.15.0-alpha.13-Yuu",
+            "sing-box version 1.15.0-alpha.13-Yuu"
+        ));
+        assert!(is_core_up_to_date(
+            "v1.15.0-alpha.13-Yuu",
+            "1.15.0-alpha.13-Yuu"
+        ));
+        assert!(is_core_up_to_date(
+            "v1.15.0-alpha.9-Yuu",
+            "1.15.0-alpha.13-Yuu"
+        ));
+        assert!(!is_core_up_to_date(
+            "v1.15.0-alpha.13-Yuu",
+            "1.15.0-alpha.9-Yuu"
+        ));
+        assert!(!is_core_up_to_date(
+            "v1.15.0-beta.1-Yuu",
+            "1.15.0-alpha.13-Yuu"
+        ));
+        assert!(!is_core_up_to_date(
+            "v1.15.0-Yuu",
+            "1.15.0-rc.2-Yuu"
+        ));
+        assert!(!is_core_up_to_date(
+            "v1.15.0-alpha.13-Yuu",
+            "1.15.0-alpha.13"
+        ));
+        assert!(!is_core_up_to_date(
+            "v1.15.0-alpha.13",
+            "1.15.0-alpha.13-Yuu"
+        ));
+        assert!(!is_core_up_to_date("v1.15.0-alpha.13-Yuu", ""));
+    }
+
+    #[test]
+    fn testing_channel_orders_numeric_prerelease_versions_over_publish_time() {
+        let releases = vec![
+            release("v1.15.0-alpha.9-Yuu", true, false, "2026-10-25T00:00:00Z"),
+            release("v1.15.0-alpha.13-Yuu", true, false, "2026-10-24T00:00:00Z"),
+        ];
+        assert_eq!(
+            newest_release(releases).unwrap().tag_name,
+            "v1.15.0-alpha.13-Yuu"
+        );
     }
 }

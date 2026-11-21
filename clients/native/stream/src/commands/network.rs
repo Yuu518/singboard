@@ -86,11 +86,13 @@ pub fn build_client(timeout: Option<Duration>) -> Result<reqwest::Client, reqwes
         builder = builder.timeout(t);
     }
 
-    match get_system_proxy().and_then(|url| reqwest::Proxy::all(&url).ok()) {
+    #[cfg(windows)]
+    let builder = match get_system_proxy().and_then(|url| reqwest::Proxy::all(&url).ok()) {
         Some(proxy) => builder.proxy(proxy),
         None => builder.no_proxy(),
-    }
-    .build()
+    };
+
+    builder.build()
 }
 
 pub fn build_direct_client(timeout: Option<Duration>) -> Result<reqwest::Client, reqwest::Error> {

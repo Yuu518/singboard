@@ -31,6 +31,40 @@ pub fn progress() -> String {
         })
         .unwrap_or_else(|| "正在准备核心更新…".into())
 }
+async fn detect_installed_version(dir: &Path, target: &Path, fallback: &str) -> Option<String> {
+    #[cfg(windows)]
+    let probed = {
+        let _ = dir;
+        if target.is_file() {
+            update::platform::probe_core_version(target).await.ok()
+        } else {
+            None
+        }
+    };
+    #[cfg(target_os = "android")]
+    let probed = if !target.as_os_str().is_empty()
+        && Settings::load(dir)
+            .ok()
+            .is_some_and(|prefs| prefs.native_root_enabled)
+    {
+        crate::root::set_enabled(true);
+        update::platform::probe_core_version(target).await.ok()
+    } else {
+        None
+    };
+    #[cfg(not(any(windows, target_os = "android")))]
+    let probed: Option<String> = {
+        let _ = (dir, target);
+        None
+    };
+    probed
+        .filter(|v| !update::normalize_core_version(v).is_empty())
+        .or_else(|| {
+            let fallback = fallback.trim();
+            (!fallback.is_empty()).then(|| fallback.to_owned())
+        })
+}
+
 pub async fn run(
     dir: &Path,
     action: &str,
@@ -57,11 +91,22 @@ pub async fn run(
         info.version,
         info.asset_size as f64 / 1048576.
     );
+    let target = PathBuf::from(get("core").trim());
+    let installed = detect_installed_version(dir, &target, get("installed")).await;
+    let up_to_date = installed
+        .as_deref()
+        .is_some_and(|cur| update::is_core_up_to_date(&info.version, cur));
     if action == "core_check" {
-        return Ok(Reply::text(summary));
+        return Ok(Reply::text(if up_to_date {
+            format!("已是最新版本（{}）", info.version)
+        } else {
+            format!("可更新至 {summary}")
+        }));
+    }
+    if ticket.is_none() && up_to_date {
+        return Ok(Reply::text(format!("已是最新版本（{}）", info.version)));
     }
     update::core_asset_hash(&info.asset_digest)?;
-    let target = PathBuf::from(get("core").trim());
     if !target.is_absolute()
         || target.file_name().is_none()
         || get("core").chars().any(char::is_control)

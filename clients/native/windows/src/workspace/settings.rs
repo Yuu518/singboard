@@ -542,6 +542,8 @@ impl Workspace {
         card = card
             .child(div().text_xs().text_color(p.muted()).child(if ready {
                 "更新包已通过 SHA-256 校验。重启面板即可完成安装，代理服务不受影响。"
+            } else if panel.info.reinstall {
+                "版本相同，但本地文件和官方发布的文件不同。重新安装会关闭面板并自动重新打开，代理服务不受影响。"
             } else {
                 "更新会关闭面板并自动重新打开，代理服务不受影响。"
             }))

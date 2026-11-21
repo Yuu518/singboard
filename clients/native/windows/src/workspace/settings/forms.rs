@@ -1569,6 +1569,10 @@ impl Workspace {
         values.extend([
             ("core".into(), prefs.singbox_path.clone()),
             ("token".into(), prefs.github_token.clone()),
+            (
+                "installed".into(),
+                self.summary["version"].as_str().unwrap_or("").to_owned(),
+            ),
         ]);
         let core_busy = self.settings_layout.pending.contains("core-update");
         let core_status = if core_busy {
@@ -1717,7 +1721,7 @@ impl Workspace {
                     p,
                 )
                 .when(!panel_busy, |b| {
-                    b.on_click(cx.listener(|v, _, _, cx| v.check_panel_update(true, cx)))
+                    b.on_click(cx.listener(|v, _, _, cx| v.check_panel_update(cx)))
                 }),
             );
 

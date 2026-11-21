@@ -449,10 +449,10 @@ impl Workspace {
     }
 
     pub fn check_update(&mut self, cx: &mut Context<Self>) {
-        self.check_panel_update(false, cx);
+        self.check_panel_update(cx);
     }
 
-    fn check_panel_update(&mut self, manual: bool, cx: &mut Context<Self>) {
+    fn check_panel_update(&mut self, cx: &mut Context<Self>) {
         if self.settings_layout.panel_update.is_some()
             || !self.settings_layout.pending.insert("panel-update")
         {
@@ -462,9 +462,7 @@ impl Workspace {
             let prefs = crate::maintenance::preferences()?;
             let mut info = singboard_stream::update::check(&prefs.github_token).await?;
             info.mirror = prefs.core_update_mirror;
-            if manual {
-                info.compare_executable(&std::env::current_exe().map_err(|e| e.to_string())?)?;
-            }
+            info.compare_executable(&std::env::current_exe().map_err(|e| e.to_string())?)?;
             Ok::<_, String>(info)
         });
         cx.spawn(async move |weak, cx| {

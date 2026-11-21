@@ -29,6 +29,21 @@ pub(super) fn asset_suffixes() -> Result<Vec<String>, String> {
         .collect())
 }
 
+pub(crate) async fn probe_core_version(target: &Path) -> Result<String, String> {
+    let target = target.to_string_lossy();
+    let target = target.trim();
+    if target.is_empty() {
+        return Err("核心路径为空".into());
+    }
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        root::run_async(format!("{} version", quote(target))),
+    )
+    .await
+    .map_err(|_| "核心版本检测超时".to_string())??;
+    Ok(output.lines().next().unwrap_or("").trim().to_string())
+}
+
 fn staging_dir(app: &super::UpdateContext) -> Result<PathBuf, String> {
     Ok(app.directory.join("core-update"))
 }

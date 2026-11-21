@@ -96,7 +96,7 @@ fn extract_core_files(
 }
 
 
-async fn probe_core_version(exe: &Path) -> Result<String, String> {
+pub(crate) async fn probe_core_version(exe: &Path) -> Result<String, String> {
     let output = tokio::time::timeout(
         Duration::from_secs(15),
         tokio::process::Command::new(exe)
