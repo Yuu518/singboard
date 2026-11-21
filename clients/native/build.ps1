@@ -42,9 +42,18 @@ $buildNumber = 10000 * [int]$Matches[1] + 100 * [int]$Matches[2] + [int]$Matches
 $env:SINGBOARD_RELEASE_VERSION = $ReleaseVersion
 if ($Platform -eq 'Windows') {
     $target = 'x86_64-pc-windows-msvc'
-    $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-Ctarget-feature=+crt-static'
-    Invoke-Tool cargo @('build','--locked','--release','--target',$target,'--manifest-path',$manifest,'-p','singboard-service','--target-dir',"$cache/host")
-    $env:SINGBOARD_SERVICE_HOST = "$cache/host/$target/release/singboard-service.exe"
+    $sysroot = (rustc --print sysroot).Trim()
+    $lld = Join-Path $sysroot "lib\rustlib\$target\bin\rust-lld.exe"
+    if (Test-Path -LiteralPath $lld) {
+        $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $lld
+        $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-Ctarget-feature=+crt-static -Clinker-flavor=lld-link'
+    } else {
+        $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-Ctarget-feature=+crt-static'
+    }
+    Invoke-Tool cargo @('build','--locked','--profile','windows-release','--target',$target,'--manifest-path',$manifest,'-p','singboard-service')
+    $hostExe = "$cache/singboard-service.exe"
+    Copy-Item -LiteralPath "$env:CARGO_TARGET_DIR/$target/windows-release/singboard-service.exe" -Destination $hostExe -Force
+    $env:SINGBOARD_SERVICE_HOST = $hostExe
     Invoke-Tool cargo @('build','--locked','--profile','windows-release','--target',$target,'--manifest-path',$manifest,'-p','singboard-gpui')
     $binary = "$env:CARGO_TARGET_DIR/$target/windows-release/singboard.exe"
     if ($ReleaseAssets) {

@@ -42,7 +42,6 @@ jobs:
     env:
       WINDOWS_CERT_PFX_B64: ${{ secrets.WINDOWS_CERT_PFX_B64 }}
       WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -Ctarget-feature=+crt-static
 
     steps:
       - name: Checkout
@@ -51,10 +50,31 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Exclude build paths from Windows Defender
+        shell: pwsh
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup", $env:RUNNER_TEMP
+          } catch {
+            Write-Warning "Failed to configure Windows Defender exclusions: $_"
+          }
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+
+      - name: Configure Rust linker
+        shell: pwsh
+        run: |
+          $sysroot = (rustc --print sysroot).Trim()
+          $lld = Join-Path $sysroot "lib\rustlib\x86_64-pc-windows-msvc\bin\rust-lld.exe"
+          if (Test-Path -LiteralPath $lld) {
+            "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$lld" >> $env:GITHUB_ENV
+            "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-Ctarget-feature=+crt-static -Clinker-flavor=lld-link" >> $env:GITHUB_ENV
+          } else {
+            "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-Ctarget-feature=+crt-static" >> $env:GITHUB_ENV
+          }
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2.9.2
@@ -105,18 +125,20 @@ jobs:
       - name: Build service host
         shell: pwsh
         run: |
-          cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path clients/native/Cargo.toml -p singboard-service
+          cargo build --locked --profile windows-release --target x86_64-pc-windows-msvc --manifest-path clients/native/Cargo.toml -p singboard-service
           if ($LASTEXITCODE -ne 0) { throw "building singboard-service.exe failed" }
+          $hostExe = Join-Path $env:RUNNER_TEMP "singboard-service.exe"
+          Copy-Item -LiteralPath clients/native/target/x86_64-pc-windows-msvc/windows-release/singboard-service.exe -Destination $hostExe -Force
           if ($env:CERT_THUMBPRINT) {
-            & $env:SIGNTOOL sign /sha1 $env:CERT_THUMBPRINT /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com clients/native/target/x86_64-pc-windows-msvc/release/singboard-service.exe
+            & $env:SIGNTOOL sign /sha1 $env:CERT_THUMBPRINT /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com $hostExe
             if ($LASTEXITCODE -ne 0) { throw "signing singboard-service.exe failed" }
           }
+          "SINGBOARD_SERVICE_HOST=$hostExe" >> $env:GITHUB_ENV
 
       - name: Build Windows app
         shell: pwsh
         run: |
           $env:SINGBOARD_RELEASE_VERSION = $env:APP_VERSION
-          $env:SINGBOARD_SERVICE_HOST = (Resolve-Path clients/native/target/x86_64-pc-windows-msvc/release/singboard-service.exe).Path
           cargo build --locked --profile windows-release --target x86_64-pc-windows-msvc --manifest-path clients/native/Cargo.toml -p singboard-gpui
           if ($LASTEXITCODE -ne 0) { throw "building singboard.exe failed" }
           New-Item -ItemType Directory -Force release | Out-Null
@@ -126,7 +148,7 @@ jobs:
         if: env.CERT_THUMBPRINT != ''
         shell: pwsh
         run: |
-          $serviceHost = Get-Item clients/native/target/x86_64-pc-windows-msvc/release/singboard-service.exe
+          $serviceHost = Get-Item $env:SINGBOARD_SERVICE_HOST
           & $env:SIGNTOOL verify /pa $serviceHost.FullName
           if ($LASTEXITCODE -ne 0) { throw "singboard-service.exe lost its signature during the build" }
           $hostHash = (Get-FileHash $serviceHost.FullName -Algorithm SHA256).Hash
