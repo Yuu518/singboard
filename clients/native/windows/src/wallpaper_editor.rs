@@ -280,6 +280,22 @@ struct WallpaperEditor {
     busy: bool,
 }
 
+fn stage_frame(area: Bounds<Pixels>, w: u32, h: u32) -> Bounds<Pixels> {
+    let w = w.max(1) as f32;
+    let h = h.max(1) as f32;
+    let scale = ((f32::from(area.size.width) - 28.).max(1.) / w)
+        .min((f32::from(area.size.height) - 28.).max(1.) / h);
+    let width = px(w * scale);
+    let height = px(h * scale);
+    Bounds::new(
+        point(
+            area.origin.x + (area.size.width - width) * 0.5,
+            area.origin.y + (area.size.height - height) * 0.5,
+        ),
+        size(width, height),
+    )
+}
+
 impl WallpaperEditor {
     fn rotate(&mut self, clockwise: bool) {
         let tf = &mut self.transform;
@@ -331,32 +347,29 @@ impl WallpaperEditor {
         let handles = &HANDLES[..if locked { 4 } else { 8 }];
         let bounds = std::rc::Rc::new(std::cell::Cell::new(None::<Bounds<Pixels>>));
         let painted = bounds.clone();
-        let down = bounds.clone();
+        let move_entity = cx.entity().downgrade();
+        let up_entity = cx.entity().downgrade();
         div()
             .id("wallpaper-crop")
             .relative()
             .size_full()
-            .p(px(14.))
             .track_focus(&self.focus)
-            .child(img(preview).size_full().object_fit(ObjectFit::Contain))
             .child(
                 canvas(
                     move |area, _, _| {
-                        let scale = ((f32::from(area.size.width) - 28.).max(1.) / w as f32)
-                            .min((f32::from(area.size.height) - 28.).max(1.) / h as f32);
-                        let width = px(w as f32 * scale);
-                        let height = px(h as f32 * scale);
-                        let frame = Bounds::new(
-                            point(
-                                area.origin.x + (area.size.width - width) * 0.5,
-                                area.origin.y + (area.size.height - height) * 0.5,
-                            ),
-                            size(width, height),
-                        );
+                        let frame = stage_frame(area, w, h);
                         painted.set(Some(frame));
                         frame
                     },
                     move |_, frame, window, _| {
+                        let _ = window.paint_image(
+                            frame,
+                            frame,
+                            Corners::all(px(0.)),
+                            preview,
+                            0,
+                            false,
+                        );
                         let frame_w = frame.size.width;
                         let frame_h = frame.size.height;
                         let x = frame.origin.x + frame_w * crop.left;
@@ -407,10 +420,42 @@ impl WallpaperEditor {
                                 BorderStyle::default(),
                             ));
                         }
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                            if phase != DispatchPhase::Bubble {
+                                return;
+                            }
+                            let _ = move_entity.update(cx, |editor, cx| {
+                                let Some((start, handle, origin)) = editor.drag else {
+                                    return;
+                                };
+                                if event.pressed_button != Some(MouseButton::Left) {
+                                    editor.drag = None;
+                                    return;
+                                }
+                                let width = f32::from(frame.size.width).max(1.);
+                                let height = f32::from(frame.size.height).max(1.);
+                                editor.transform.crop = Some(start.drag(
+                                    handle,
+                                    f32::from(event.position.x - origin.x) / width,
+                                    f32::from(event.position.y - origin.y) / height,
+                                    64. / w as f32,
+                                    64. / h as f32,
+                                    locked,
+                                ));
+                                cx.stop_propagation();
+                                cx.notify();
+                            });
+                        });
+                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                            if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                                return;
+                            }
+                            let _ = up_entity.update(cx, |editor, _| {
+                                editor.drag = None;
+                            });
+                        });
                     },
                 )
-                .absolute()
-                .inset_0()
                 .size_full(),
             )
             .on_mouse_down(
@@ -419,7 +464,7 @@ impl WallpaperEditor {
                     if editor.busy {
                         return;
                     }
-                    let Some(frame) = down.get() else { return };
+                    let Some(frame) = bounds.get() else { return };
                     window.focus(&editor.focus, cx);
                     let rx =
                         f32::from(event.position.x - frame.origin.x) / f32::from(frame.size.width);
@@ -430,7 +475,14 @@ impl WallpaperEditor {
                         && ry >= crop.top
                         && ry <= crop.top + crop.height)
                         .then_some((0, 0));
-                    let mut nearest = 14.;
+                    let mut nearest = if handle.is_some() {
+                        (crop.width * f32::from(frame.size.width))
+                            .min(crop.height * f32::from(frame.size.height))
+                            .mul_add(0.35, 0.)
+                            .clamp(5., 14.)
+                    } else {
+                        14.
+                    };
                     for &(hx, hy) in handles {
                         let dx = (crop.left + crop.width * (hx as f32 + 1.) * 0.5 - rx)
                             * f32::from(frame.size.width);
@@ -443,32 +495,10 @@ impl WallpaperEditor {
                         }
                     }
                     editor.drag = handle.map(|h| (crop, h, event.position));
+                    if editor.drag.is_some() {
+                        cx.stop_propagation();
+                    }
                 }),
-            )
-            .on_mouse_move(cx.listener(move |editor, event: &MouseMoveEvent, _, cx| {
-                let (Some((start, handle, origin)), Some(frame)) = (editor.drag, bounds.get())
-                else {
-                    return;
-                };
-                let width = f32::from(frame.size.width);
-                let height = f32::from(frame.size.height);
-                editor.transform.crop = Some(start.drag(
-                    handle,
-                    f32::from(event.position.x - origin.x) / width,
-                    f32::from(event.position.y - origin.y) / height,
-                    64. / w as f32,
-                    64. / h as f32,
-                    locked,
-                ));
-                cx.notify();
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|editor, _, _, _| editor.drag = None),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|editor, _, _, _| editor.drag = None),
             )
             .on_key_down(
                 cx.listener(move |editor, event: &KeyDownEvent, window, cx| {
@@ -742,8 +772,29 @@ impl Render for WallpaperEditor {
 
 #[cfg(test)]
 mod tests {
-    use super::{AspectPreset, Crop, Transform, apply_transform};
+    use super::{AspectPreset, Crop, Transform, apply_transform, stage_frame};
+    use gpui::{Bounds, point, px, size};
     use image::RgbaImage;
+
+    #[test]
+    fn stage_frame_fits_and_centers_all_aspect_ratios() {
+        let area = Bounds::new(point(px(20.), px(10.)), size(px(628.), px(368.)));
+        let tall = stage_frame(area, 1920, 1386);
+        assert!((f32::from(tall.size.height) - 340.).abs() < 0.01);
+        assert!(f32::from(tall.size.width) < 600.);
+        assert!((f32::from(tall.origin.y) - 24.).abs() < 0.01);
+        assert!(
+            (f32::from(tall.origin.x + tall.size.width * 0.5)
+                - f32::from(area.origin.x + area.size.width * 0.5))
+            .abs()
+                < 0.01
+        );
+
+        let wide = stage_frame(area, 2560, 1080);
+        assert!((f32::from(wide.size.width) - 600.).abs() < 0.01);
+        assert!(f32::from(wide.size.height) < 340.);
+        assert!((f32::from(wide.origin.x) - 34.).abs() < 0.01);
+    }
 
     #[test]
     fn free_and_locked_handles_keep_the_opposite_edge_inside_the_image() {
