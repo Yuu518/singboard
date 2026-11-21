@@ -100,7 +100,7 @@ impl SettingsLayout {
     }
 }
 
-pub(super) fn loading_spinner(id: &'static str, size: Pixels, color: Rgba) -> AnyElement {
+pub(super) fn loading_spinner(id: impl Into<ElementId>, size: Pixels, color: Rgba) -> AnyElement {
     svg()
         .path("spinner")
         .size(size)
@@ -1465,16 +1465,6 @@ impl Workspace {
                     .line_height(px(32.))
                     .font_weight(FontWeight::BOLD),
             )
-            .when(!self.load_error.is_empty(), |el| {
-                el.child(
-                    div()
-                        .pb_2()
-                        .px_1()
-                        .text_xs()
-                        .text_color(palette.accent())
-                        .child(self.load_error.clone()),
-                )
-            })
             .child(section_header("核心与服务", palette, cx))
             .child(core_card)
             .child(section_header("Clash API", palette, cx).mt_6())

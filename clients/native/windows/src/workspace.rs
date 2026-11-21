@@ -268,6 +268,8 @@ impl Workspace {
         self.generation += 1;
         self.busy = false;
         self.refreshing = false;
+        self.proxy_ui.testing = None;
+        self.proxy_ui.testing_nodes.clear();
         self.groups.clear();
         self.rules.clear();
         self.providers.clear();
@@ -1165,6 +1167,8 @@ impl Workspace {
         self.generation += 1;
         self.busy = false;
         self.refreshing = false;
+        self.proxy_ui.testing = None;
+        self.proxy_ui.testing_nodes.clear();
         self.show_providers = false;
         if self.filter.is_none() {
             let search = cx.new(crate::search::Search::new);
@@ -1356,6 +1360,10 @@ impl Workspace {
         if let Command::GroupDelay{name,..} = &command {
             self.proxy_ui.testing = Some(name.clone());
             self.freeze_proxy_order(name);
+        } else if let Command::Delay { name, .. } = &command {
+            if !self.proxy_ui.testing_nodes.insert(name.clone()) {
+                return;
+            }
         }
         match &command {
             Command::Disconnect { id } => self.conn_ui.mark_closing(std::iter::once(id.clone())),
@@ -1391,6 +1399,8 @@ impl Workspace {
                 if matches!(&command,Command::GroupDelay{..}) {
                     this.proxy_ui.testing = None;
                     this.release_proxy_order();
+                } else if let Command::Delay { name, .. } = &command {
+                    this.proxy_ui.testing_nodes.remove(name);
                 }
                 match result {
                     Err(error) => {
@@ -1400,6 +1410,9 @@ impl Workspace {
                             Command::ProxyProviders | Command::RuleProviders => {
                                 this.providers.clear()
                             }
+                            Command::Delay { name, .. } => {
+                                this.set_node_delay(name, Some(0));
+                            }
                             Command::Disconnect { id } => this.conn_ui.unmark_closing(std::iter::once(id.as_str())),
                             Command::DisconnectMany { ids } => this.conn_ui.unmark_closing(ids.iter().map(String::as_str)),
                             Command::DisconnectAll => this.conn_ui.clear_closing(),
@@ -1407,7 +1420,7 @@ impl Workspace {
                         }
                         if matches!(command, Command::Proxies | Command::Rules | Command::ProxyProviders | Command::RuleProviders | Command::Config | Command::Summary | Command::Version) {
                             this.load_error = error;
-                        } else {
+                        } else if !matches!(command, Command::Delay { .. }) {
                             this.message(error,true,cx);
                         }
                     }
@@ -1430,15 +1443,7 @@ impl Workspace {
                                     this.ipv6_nodes.remove(&name);
                                 }
                             }
-                            for node in this
-                                .groups
-                                .iter_mut()
-                                .flat_map(|g| &mut g.nodes)
-                                .filter(|n| n.name == name)
-                            {
-                                node.delay = data["delay"].as_u64();
-                            }
-                            this.message(format!("{} · {} ms", name, data["delay"]),false,cx);
+                            this.set_node_delay(&name, data["delay"].as_u64());
                         }
                         Command::GroupDelay { .. } => {
                             if let Some(nodes) = data["ipv6"].as_object() {
@@ -1502,6 +1507,32 @@ impl Workspace {
         cx.notify();
     }
 
+    fn set_node_delay(&mut self, name: &str, delay: Option<u64>) {
+        for node in self
+            .groups
+            .iter_mut()
+            .flat_map(|g| &mut g.nodes)
+            .filter(|n| n.name == name)
+        {
+            node.delay = delay;
+        }
+        if let Some(d) = delay {
+            for (_, provider) in &mut self.providers {
+                if let Some(list) = provider["proxies"].as_array_mut() {
+                    for node in list {
+                        if node["name"].as_str() == Some(name) {
+                            if let Some(history) = node["history"].as_array_mut() {
+                                history.push(serde_json::json!({ "delay": d }));
+                            } else {
+                                node["history"] = serde_json::json!([{ "delay": d }]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn apply(&mut self, action: Action, cx: &mut Context<Self>) {
         match action {
             Action::Refresh => self.refresh(cx),
@@ -1509,6 +1540,8 @@ impl Workspace {
                 self.generation += 1;
                 self.busy = false;
                 self.refreshing = false;
+                self.proxy_ui.testing = None;
+                self.proxy_ui.testing_nodes.clear();
                 self.show_providers = !self.show_providers;
                 if self.page == Page::Rules {
                     if let Some(filter) = &self.filter {

@@ -1311,27 +1311,42 @@ impl Workspace {
             };
             site_cells.push(
                 div()
+                    .w_full()
+                    .min_w_0()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .gap_2()
+                    .gap(px(10.))
                     .px(if narrow { px(16.) } else { px(18.) })
                     .py(if narrow { px(8.) } else { px(7.) })
                     .text_size(crate::theme::text_px(13.))
                     .line_height(px(19.5))
-                    .child(div().text_color(palette.ink()).child(label))
-                    .when(!reason.is_empty() && !self.network_busy, |d| d.child(
+                    .child(
+                        div()
+                            .flex_none()
+                            .whitespace_nowrap()
+                            .text_color(palette.ink())
+                            .child(label),
+                    )
+                    .when(!reason.is_empty() && !self.network_busy && self.network_due.is_none(), |d| d.child(
                         div().id(("site-error", idx)).flex_1().min_w_0().truncate().text_right()
-                            .text_size(crate::theme::text_px(12.)).text_color(palette.muted()).child(reason.clone())
+                            .text_size(crate::theme::text_px(12.)).line_height(px(19.5)).text_color(palette.muted()).child(reason.clone())
                             .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(reason.clone()).build(window, cx)),
                     ))
                     .child(
                         div()
+                            .flex_none()
                             .flex()
                             .items_center()
-                            .gap(px(7.))
-                            .child(div().size(px(7.)).rounded_full().bg(dot_color))
-                            .child(div().text_color(palette.ink()).child(badge_text)),
+                            .gap(px(6.))
+                            .child(div().flex_none().size(px(7.)).rounded_full().bg(dot_color))
+                            .child(
+                                div()
+                                    .min_w(crate::theme::text_px(48.))
+                                    .whitespace_nowrap()
+                                    .text_color(palette.ink())
+                                    .child(badge_text),
+                            ),
                     ),
             );
         }
@@ -1343,14 +1358,9 @@ impl Workspace {
             }
             col
         } else {
-            let mut left = div().flex_1().min_w_0().flex().flex_col();
-            let mut right = div().flex_1().min_w_0().flex().flex_col();
-            for (idx, cell) in site_cells.into_iter().enumerate() {
-                if idx % 2 == 0 {
-                    left = left.child(cell);
-                } else {
-                    right = right.child(cell);
-                }
+            let mut grid = div().w_full().grid().grid_cols(2);
+            for cell in site_cells {
+                grid = grid.child(cell);
             }
             div()
                 .flex_1()
@@ -1358,9 +1368,9 @@ impl Workspace {
                 .py_2()
                 .px_1()
                 .flex()
-                .items_start()
-                .child(left)
-                .child(right)
+                .flex_col()
+                .justify_center()
+                .child(grid)
         };
 
         let running_net = live || local_running;

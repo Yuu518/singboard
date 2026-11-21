@@ -416,9 +416,9 @@ class _CatalogPageState extends State<CatalogPage> {
           v6Nodes.remove(nodeName);
         }
       });
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
-        showGlassToast(context, '测速失败：$e');
+        setState(() => delays[nodeName] = 0);
       }
     } finally {
       if (mounted) setState(() => testingNodes.remove(nodeName));
@@ -442,6 +442,48 @@ class _CatalogPageState extends State<CatalogPage> {
     if (delay == null) return '未测';
     if (delay == 0) return '失败';
     return '${delay}ms';
+  }
+
+  Widget _buildLatencyBadge(
+    int? delay,
+    bool testing,
+    Color bg,
+    Color fg, {
+    double verticalPadding = 1.5,
+    FontWeight? fontWeight,
+  }) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 7, vertical: verticalPadding),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Opacity(
+            opacity: testing ? 0 : 1,
+            child: Text(
+              _formatLatency(delay),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: fontWeight,
+                color: fg,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+          if (testing)
+            SizedBox.square(
+              dimension: 11,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.6,
+                color: fg,
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   String _formatSpeedCompact(int bytes) {
@@ -744,21 +786,13 @@ class _CatalogPageState extends State<CatalogPage> {
                             ),
                             if (showNowBadge) ...[
                               const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: nowBg,
-                                  borderRadius: BorderRadius.circular(999),
-                                ),
-                                child: Text(
-                                  _formatLatency(nowDelay),
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w500,
-                                    color: nowFg,
-                                    fontFeatures: const [FontFeature.tabularFigures()],
-                                  ),
-                                ),
+                              _buildLatencyBadge(
+                                nowDelay,
+                                testingNodes.contains(now),
+                                nowBg,
+                                nowFg,
+                                verticalPadding: 2,
+                                fontWeight: FontWeight.w500,
                               ),
                             ],
                             if (undoSwitch != null && undoSwitch!.$1 == gName) ...[
@@ -933,26 +967,12 @@ class _CatalogPageState extends State<CatalogPage> {
                                               group['test_url']?.toString() ?? '',
                                               nName,
                                             ),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 7,
-                                        vertical: 1.5,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: latBg,
-                                        borderRadius: BorderRadius.circular(999),
-                                      ),
-                                      child: Text(
-                                        testing ? '…' : _formatLatency(delay),
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w500,
-                                          color: latFg,
-                                          fontFeatures: const [
-                                            FontFeature.tabularFigures(),
-                                          ],
-                                        ),
-                                      ),
+                                    child: _buildLatencyBadge(
+                                      delay,
+                                      testing,
+                                      latBg,
+                                      latFg,
+                                      fontWeight: FontWeight.w500,
                                     ),
                                   ),
                               ],
@@ -1145,21 +1165,7 @@ class _CatalogPageState extends State<CatalogPage> {
                               ),
                               GestureDetector(
                                 onTap: testing ? null : () => testNode(testUrl, nName),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1.5),
-                                  decoration: BoxDecoration(
-                                    color: latBg,
-                                    borderRadius: BorderRadius.circular(999),
-                                  ),
-                                  child: Text(
-                                    testing ? '…' : _formatLatency(delay),
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: latFg,
-                                      fontFeatures: const [FontFeature.tabularFigures()],
-                                    ),
-                                  ),
-                                ),
+                                child: _buildLatencyBadge(delay, testing, latBg, latFg),
                               ),
                             ],
                           ),

@@ -1516,13 +1516,13 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                       child: Tooltip(
                         message: reason,
                         child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
                           child: Text(
                             reason,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.end,
-                            style: TextStyle(fontSize: 12, color: c.muted),
+                            style: TextStyle(fontSize: 12, height: 1.5, color: c.muted),
                           ),
                         ),
                       ),
@@ -1538,14 +1538,19 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                           color: dotColor,
                         ),
                       ),
-                      const SizedBox(width: 7),
-                      Text(
-                        msText,
-                        style: TextStyle(
-                          fontSize: 13,
-                          height: 1.5,
-                          color: c.ink.withValues(alpha: 0.85),
-                          fontFeatures: const [FontFeature.tabularFigures()],
+                      const SizedBox(width: 6),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(minWidth: 48),
+                        child: Text(
+                          msText,
+                          maxLines: 1,
+                          softWrap: false,
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.5,
+                            color: c.ink.withValues(alpha: 0.85),
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
                         ),
                       ),
                     ],
@@ -1911,25 +1916,21 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                       statDivider,
                       Expanded(
                         flex: 10,
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Expanded(
-                              child: Column(
+                            for (var i = 0; i < siteRows.length; i += 2)
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
                                 children: [
-                                  for (var i = 0; i < siteRows.length; i += 2)
-                                    siteRows[i],
+                                  Expanded(child: siteRows[i]),
+                                  Expanded(
+                                    child: i + 1 < siteRows.length
+                                        ? siteRows[i + 1]
+                                        : const SizedBox.shrink(),
+                                  ),
                                 ],
                               ),
-                            ),
-                            Expanded(
-                              child: Column(
-                                children: [
-                                  for (var i = 1; i < siteRows.length; i += 2)
-                                    siteRows[i],
-                                ],
-                              ),
-                            ),
                           ],
                         ),
                       ),

@@ -15,6 +15,7 @@ pub(super) struct ProxyUi {
     hover_motion: HashMap<(bool, String), (Instant, f32, bool)>,
     pointer: Option<Point<Pixels>>,
     pub(super) testing: Option<String>,
+    pub(super) testing_nodes: HashSet<String>,
     motion: HashMap<(bool, String), (Instant, f32, bool)>,
     reveal: Option<(String, Rc<Cell<Option<Bounds<Pixels>>>>)>,
 }
@@ -162,6 +163,42 @@ fn latency_badge_style(delay: Option<u64>, p: crate::theme::Palette) -> (Rgba, R
         Some(300..=799) => (p.warning_soft(), p.warning_ink()),
         Some(_) => (p.danger_soft(), p.danger()),
     }
+}
+
+fn latency_badge(
+    spin_id: SharedString,
+    delay: Option<u64>,
+    testing: bool,
+    palette: crate::theme::Palette,
+    medium: bool,
+) -> Div {
+    let (bg, fg) = latency_badge_style(delay, palette);
+    div()
+        .relative()
+        .flex_none()
+        .px(px(7.))
+        .py(px(1.))
+        .rounded_full()
+        .bg(bg)
+        .text_xs()
+        .when(medium, |el| el.font_weight(FontWeight::MEDIUM))
+        .text_color(fg)
+        .child(
+            div()
+                .when(testing, |el| el.opacity(0.))
+                .child(format_latency(delay)),
+        )
+        .when(testing, |el| {
+            el.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(super::settings::loading_spinner(spin_id, px(12.), fg)),
+            )
+        })
 }
 
 fn dot_color(delay: Option<u64>, p: crate::theme::Palette) -> Option<Rgba> {
@@ -849,9 +886,31 @@ impl Workspace {
                                     .as_array()
                                     .and_then(|h| h.last())
                                     .and_then(|v| v["delay"].as_u64());
-                                let (lat_bg, lat_fg) = latency_badge_style(delay, palette);
+                                let testing = self.proxy_ui.testing_nodes.contains(&n_name);
                                 let test_name = n_name.clone();
                                 let url = self.latency_test_url.clone();
+                                let badge = latency_badge(
+                                    SharedString::from(format!("pp-delay-spin-{pi}-{ni}")),
+                                    delay,
+                                    testing,
+                                    palette,
+                                    false,
+                                )
+                                .id(SharedString::from(format!("pp-delay-{pi}-{ni}")))
+                                .when(!testing, |el| {
+                                    el.cursor_pointer().on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.run(
+                                                Command::Delay {
+                                                    name: test_name.clone(),
+                                                    url: url.clone(),
+                                                    ipv6: this.ipv6,
+                                                },
+                                                cx,
+                                            );
+                                        },
+                                    ))
+                                });
                                 row = row.child(
                                     div()
                                         .w_full()
@@ -888,32 +947,7 @@ impl Workspace {
                                                         .truncate()
                                                         .child(n_kind),
                                                 )
-                                                .child(
-                                                    div()
-                                                        .id(SharedString::from(format!(
-                                                            "pp-delay-{pi}-{ni}"
-                                                        )))
-                                                        .cursor_pointer()
-                                                        .px(px(7.))
-                                                        .py(px(1.))
-                                                        .rounded_full()
-                                                        .bg(lat_bg)
-                                                        .text_xs()
-                                                        .text_color(lat_fg)
-                                                        .child(format_latency(delay))
-                                                        .on_click(cx.listener(
-                                                            move |this, _, _, cx| {
-                                                                this.run(
-                                                                    Command::Delay {
-                                                                        name: test_name.clone(),
-                                                                        url: url.clone(),
-                                                                        ipv6: this.ipv6,
-                                                                    },
-                                                                    cx,
-                                                                );
-                                                            },
-                                                        )),
-                                                ),
+                                                .child(badge),
                                         ),
                                 );
                             }
@@ -1047,18 +1081,13 @@ impl Workspace {
                 )
                 .child(div().truncate().child(crate::emoji::text(g.now.clone())));
             if show_now_badge {
-                let (bg, fg) = latency_badge_style(now_delay, palette);
-                current = current.child(
-                    div()
-                        .flex_none()
-                        .px(px(7.))
-                        .py(px(1.))
-                        .rounded_full()
-                        .bg(bg)
-                        .text_xs()
-                        .text_color(fg)
-                        .child(format_latency(now_delay)),
-                );
+                current = current.child(latency_badge(
+                    SharedString::from(format!("now-delay-spin-{gi}")),
+                    now_delay,
+                    self.proxy_ui.testing_nodes.contains(&g.now),
+                    palette,
+                    false,
+                ));
             }
             if let Some((group, previous, _)) =
                 self.undo.as_ref().filter(|(group, _, _)| group == &g.name)
@@ -1210,7 +1239,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .items_end()
-                .gap(px(4.))
+                .gap(px(2.))
                 .child(
                     div()
                         .id(("group-test", gi))
@@ -1239,20 +1268,21 @@ impl Workspace {
                             )
                         })),
                 )
-                .when(has_speed, |el| {
-                    el.child(
-                        div()
-                            .w(px(80.))
-                            .flex()
-                            .flex_col()
-                            .items_end()
-                            .pr_1()
-                            .text_xs()
-                            .text_color(palette.muted())
-                            .child(format!("↓{}", format_speed_compact(dl_spd)))
-                            .child(format!("↑{}", format_speed_compact(ul_spd))),
-                    )
-                });
+                .child(
+                    div()
+                        .min_w(px(80.))
+                        .flex()
+                        .flex_col()
+                        .items_end()
+                        .pr_1()
+                        .text_xs()
+                        .line_height(px(16.))
+                        .whitespace_nowrap()
+                        .text_color(palette.muted())
+                        .when(!has_speed, |el| el.opacity(0.))
+                        .child(format!("↓{}", format_speed_compact(dl_spd)))
+                        .child(format!("↑{}", format_speed_compact(ul_spd))),
+                );
 
             card = card.child(
                 div()
@@ -1411,31 +1441,31 @@ impl Workspace {
                         if show_lat {
                             let test_name = node.name.clone();
                             let url = g.test_url.clone();
-                            let (lat_bg, lat_fg) = latency_badge_style(node.delay, palette);
+                            let testing = self.proxy_ui.testing_nodes.contains(&node.name);
                             bottom = bottom.child(
-                                div()
-                                    .id(SharedString::from(format!("delay-{gi}-{ni}")))
-                                    .flex_none()
-                                    .cursor_pointer()
-                                    .px(px(7.))
-                                    .py(px(1.))
-                                    .rounded_full()
-                                    .bg(lat_bg)
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(lat_fg)
-                                    .child(format_latency(node.delay))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        cx.stop_propagation();
-                                        this.run(
-                                            Command::Delay {
-                                                name: test_name.clone(),
-                                                url: url.clone(),
-                                                ipv6: this.ipv6,
-                                            },
-                                            cx,
-                                        );
-                                    })),
+                                latency_badge(
+                                    SharedString::from(format!("delay-spin-{gi}-{ni}")),
+                                    node.delay,
+                                    testing,
+                                    palette,
+                                    true,
+                                )
+                                .id(SharedString::from(format!("delay-{gi}-{ni}")))
+                                .when(!testing, |el| {
+                                    el.cursor_pointer().on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.run(
+                                                Command::Delay {
+                                                    name: test_name.clone(),
+                                                    url: url.clone(),
+                                                    ipv6: this.ipv6,
+                                                },
+                                                cx,
+                                            );
+                                        },
+                                    ))
+                                }),
                             );
                         }
                         row = row.child(tile.child(bottom));
