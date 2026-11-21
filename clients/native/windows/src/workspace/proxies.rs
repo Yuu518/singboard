@@ -1210,7 +1210,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .items_end()
-                .gap(px(4.))
+                .gap(px(2.))
                 .child(
                     div()
                         .id(("group-test", gi))
@@ -1239,20 +1239,21 @@ impl Workspace {
                             )
                         })),
                 )
-                .when(has_speed, |el| {
-                    el.child(
-                        div()
-                            .w(px(80.))
-                            .flex()
-                            .flex_col()
-                            .items_end()
-                            .pr_1()
-                            .text_xs()
-                            .text_color(palette.muted())
-                            .child(format!("↓{}", format_speed_compact(dl_spd)))
-                            .child(format!("↑{}", format_speed_compact(ul_spd))),
-                    )
-                });
+                .child(
+                    div()
+                        .min_w(px(80.))
+                        .flex()
+                        .flex_col()
+                        .items_end()
+                        .pr_1()
+                        .text_xs()
+                        .line_height(px(16.))
+                        .whitespace_nowrap()
+                        .text_color(palette.muted())
+                        .when(!has_speed, |el| el.opacity(0.))
+                        .child(format!("↓{}", format_speed_compact(dl_spd)))
+                        .child(format!("↑{}", format_speed_compact(ul_spd))),
+                );
 
             card = card.child(
                 div()
