@@ -28,6 +28,7 @@ class _RuleAction {
 class CatalogPage extends StatefulWidget {
   final String endpoint, secret;
   final bool proxies, enabled, active;
+  final int reconnectGeneration;
   final Map<String, dynamic> preferences;
   final Map<String, dynamic> chainSpeeds;
 
@@ -38,6 +39,7 @@ class CatalogPage extends StatefulWidget {
     required this.proxies,
     this.enabled = true,
     this.active = true,
+    this.reconnectGeneration = 0,
     this.preferences = const {},
     this.chainSpeeds = const {},
   });
@@ -190,6 +192,9 @@ class _CatalogPageState extends State<CatalogPage> {
     super.didUpdateWidget(old);
     if (widget.enabled && !old.enabled) {
       load();
+    } else if (widget.enabled &&
+        widget.reconnectGeneration != old.reconnectGeneration) {
+      load(silent: items.isNotEmpty);
     } else if (widget.enabled && widget.active && !old.active) {
       load(silent: items.isNotEmpty);
     }

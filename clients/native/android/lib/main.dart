@@ -142,7 +142,9 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   List<Item> active = [], history = [];
   String connectionStatus = '连接中', keyword = '', level = '跟随核心';
   int endpointRevision = 0;
-  Timer? timer, profileTimer, summaryTimer;
+  Timer? timer, profileTimer, summaryTimer, _summaryRetryTimer;
+  bool _readingSummary = false, _summaryPending = false;
+  int _reconnectGeneration = 0;
   Item summary = {}, metrics = {};
   Item? frozenTopology, hoveredTopology;
   int? coreMemory;
@@ -176,7 +178,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   Timer? networkScheduled;
   int networkGeneration = 0;
   bool get _networkRunning => preferences['nativeRootEnabled'] == true
-      ? rootRunning
+      ? (rootRunning && summary.isNotEmpty)
       : (trafficStatus == '已连接' || connectionStatus == '已连接' || summary.isNotEmpty);
   String summaryError = '';
 
@@ -320,7 +322,18 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     networkChecked = networkBusy = false;
   }
 
+  bool _isAuthError(String err) =>
+      err.contains('401') || err.contains('403') || err.contains('认证失败');
+
   Future<void> readSummary() async {
+    if (_readingSummary) {
+      _summaryPending = true;
+      return;
+    }
+    _readingSummary = true;
+    _summaryPending = false;
+    _summaryRetryTimer?.cancel();
+    _summaryRetryTimer = null;
     final revision = endpointRevision;
     try {
       final value = await clashRequest(endpoint, secret, 'summary') as Item;
@@ -334,11 +347,33 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       }
     } catch (e) {
       if (mounted && revision == endpointRevision) {
+        final err = e.toString();
         setState(() {
           summary = {};
-          summaryError = e.toString();
+          summaryError = err;
           _syncNetwork();
         });
+        final shouldRetry =
+            timer != null &&
+            !_isAuthError(err) &&
+            ((preferences['nativeRootEnabled'] == true && rootRunning) ||
+                connectionStatus == '已连接' ||
+                trafficStatus == '已连接' ||
+                logStatus == '已连接');
+        if (shouldRetry) {
+          _summaryRetryTimer = Timer(const Duration(milliseconds: 1200), () {
+            _summaryRetryTimer = null;
+            if (mounted && timer != null && summary.isEmpty) {
+              unawaited(readSummary());
+            }
+          });
+        }
+      }
+    } finally {
+      _readingSummary = false;
+      if (_summaryPending && mounted && timer != null) {
+        _summaryPending = false;
+        unawaited(readSummary());
       }
     }
   }
@@ -364,14 +399,33 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     try {
       final status = await configRequest(await configDirectory(), 'root_service_status') as Item;
       if (mounted && generation == _rootGeneration) {
+        final hadState = rootService.isNotEmpty;
+        final wasRunning = rootRunning;
+        final nowRunning = status['state'] == 'running';
         setState(() {
           rootService = status;
+          if (wasRunning && !nowRunning) {
+            summary = {};
+            summaryError = '';
+            _summaryRetryTimer?.cancel();
+            _summaryRetryTimer = null;
+          }
           _syncNetwork();
           final cpu = status['cpuPercent'];
           if (rootRunning && cpu is num) {
             appendSample(cpuTrend, (cpu * 10).round());
           }
         });
+        if (hadState && !wasRunning && nowRunning && _rootAction == null) {
+          setState(() {
+            summary = {};
+            summaryError = '';
+            disconnect();
+            connect();
+          });
+        } else if (nowRunning && summary.isEmpty && !_isAuthError(summaryError) && timer != null) {
+          unawaited(readSummary());
+        }
       }
     } catch (_) {
       if (mounted && generation == _rootGeneration && rootService['state'] != 'unknown') {
@@ -630,12 +684,22 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       return;
     }
     final prevLogStatus = logStatus;
+    final prevTrafficStatus = trafficStatus;
+    final prevConnectionStatus = connectionStatus;
     logStatus = batch['status'] as String? ?? logStatus;
     _logFailures = nextFailures;
     _trafficFailures = trafficFailures;
     _connectionFailures = connectionFailures;
     trafficStatus = sample['status'] as String? ?? trafficStatus;
     connectionStatus = snapshot['status'] as String? ?? connectionStatus;
+    final reconnected =
+        (prevConnectionStatus != '已连接' && connectionStatus == '已连接') ||
+        (prevTrafficStatus != '已连接' && trafficStatus == '已连接') ||
+        (prevLogStatus != '已连接' && logStatus == '已连接');
+    if (reconnected) {
+      _reconnectGeneration++;
+      unawaited(readSummary());
+    }
     _syncNetwork();
     if (snapshot['connections'] case final Map data) {
       active = (data['connections'] as List? ?? []).cast<Item>();
@@ -721,6 +785,9 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     _trafficFailures = _connectionFailures = 0;
     summaryTimer?.cancel();
     summaryTimer = null;
+    _summaryRetryTimer?.cancel();
+    _summaryRetryTimer = null;
+    _summaryPending = false;
     profileTimer?.cancel();
     profileTimer = null;
     timer?.cancel();
@@ -816,6 +883,13 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     setState(() {
       probing = true;
       _rootAction = action;
+      if (action == 'root_stop' || action == 'root_restart') {
+        summary = {};
+        summaryError = '';
+        _summaryRetryTimer?.cancel();
+        _summaryRetryTimer = null;
+        _syncNetwork();
+      }
     });
     try {
       final reply = await configRequest(await configDirectory(), 'tool', {
@@ -825,9 +899,23 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       if (mounted) {
         setState(() => rootStatus = reply['text']);
         await _sampleRoot();
-        if (mounted && action != 'root_stop') {
-          disconnect();
-          connect();
+        if (mounted) {
+          if (action == 'root_stop') {
+            setState(() {
+              summary = {};
+              summaryError = '';
+              _summaryRetryTimer?.cancel();
+              _summaryRetryTimer = null;
+              _syncNetwork();
+            });
+          } else {
+            setState(() {
+              summary = {};
+              summaryError = '';
+              disconnect();
+              connect();
+            });
+          }
         }
       }
     } catch (e) {
@@ -2817,7 +2905,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     if (root && rootService.isNotEmpty && !rootRunning) {
       return ('服务未运行', '请先启动 sing-box 服务以查看${_titles[page]}', false);
     }
-    if (summaryError.contains('401') || summaryError.contains('403')) {
+    if (_isAuthError(summaryError)) {
       return ('Clash API 密钥不匹配', '请在设置中检查 Clash API 密钥', false);
     }
     if (summary.isNotEmpty) return null;
@@ -2838,6 +2926,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       proxies: index == 1,
       enabled: gate == null,
       active: tab == index,
+      reconnectGeneration: _reconnectGeneration,
       preferences: preferences,
       chainSpeeds:
           (metrics['chainSpeeds'] as Map<String, dynamic>?) ??
