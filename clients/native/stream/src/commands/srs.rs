@@ -1,8 +1,17 @@
 use flate2::read::ZlibDecoder;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::io::{self, Cursor, Read};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
+
+const MAX_SRS_DECOMPRESSED: u64 = 128 * 1024 * 1024;
+const MAX_SRS_LIST_LEN: usize = 2_000_000;
+const MAX_SRS_BYTES: usize = 64 * 1024 * 1024;
+const MAX_SRS_ENUM_ENTRIES: usize = 2_000_000;
+const MAX_SRS_ENUM_DEPTH: usize = 512;
+const MAX_ADGUARD_STEPS: usize = 65_536;
+const META_PAGE_FLAG: u16 = 0x04;
 
 // ---- low-level readers ----
 
@@ -37,18 +46,37 @@ fn read_uvarint<R: Read>(r: &mut R) -> io::Result<u64> {
     }
 }
 
+fn checked_len(n: u64, limit: usize) -> io::Result<usize> {
+    usize::try_from(n)
+        .ok()
+        .filter(|&v| v <= limit)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "SRS length exceeds limit"))
+}
+
 fn skip_exact<R: Read>(r: &mut R, n: usize) -> io::Result<()> {
-    let mut buf = vec![0u8; n];
-    r.read_exact(&mut buf)
+    if n > MAX_SRS_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "SRS skip exceeds limit",
+        ));
+    }
+    let mut remaining = n;
+    let mut buf = [0u8; 4096];
+    while remaining > 0 {
+        let take = remaining.min(buf.len());
+        r.read_exact(&mut buf[..take])?;
+        remaining -= take;
+    }
+    Ok(())
 }
 
 // ---- string list ----
 
 fn read_string_list<R: Read>(r: &mut R) -> io::Result<Vec<String>> {
-    let count = read_uvarint(r)? as usize;
-    let mut v = Vec::with_capacity(count);
+    let count = checked_len(read_uvarint(r)?, MAX_SRS_LIST_LEN)?;
+    let mut v = Vec::with_capacity(count.min(4096));
     for _ in 0..count {
-        let len = read_uvarint(r)? as usize;
+        let len = checked_len(read_uvarint(r)?, MAX_SRS_BYTES)?;
         let mut buf = vec![0u8; len];
         r.read_exact(&mut buf)?;
         v.push(String::from_utf8_lossy(&buf).into_owned());
@@ -57,21 +85,24 @@ fn read_string_list<R: Read>(r: &mut R) -> io::Result<Vec<String>> {
 }
 
 fn skip_string_list<R: Read>(r: &mut R) -> io::Result<()> {
-    let count = read_uvarint(r)? as usize;
+    let count = checked_len(read_uvarint(r)?, MAX_SRS_LIST_LEN)?;
     for _ in 0..count {
-        let len = read_uvarint(r)? as usize;
+        let len = checked_len(read_uvarint(r)?, MAX_SRS_BYTES)?;
         skip_exact(r, len)?;
     }
     Ok(())
 }
 
 fn skip_u16_list<R: Read>(r: &mut R) -> io::Result<()> {
-    let count = read_uvarint(r)? as usize;
-    skip_exact(r, count * 2)
+    let count = checked_len(read_uvarint(r)?, MAX_SRS_LIST_LEN)?;
+    let bytes = count
+        .checked_mul(2)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "SRS length overflow"))?;
+    skip_exact(r, bytes)
 }
 
 fn skip_u8_list<R: Read>(r: &mut R) -> io::Result<()> {
-    let count = read_uvarint(r)? as usize;
+    let count = checked_len(read_uvarint(r)?, MAX_SRS_BYTES)?;
     skip_exact(r, count)
 }
 
@@ -113,16 +144,16 @@ fn select_ith_one(bm: &[u64], target: usize) -> usize {
 }
 
 fn read_u64_slice<R: Read>(r: &mut R) -> io::Result<Vec<u64>> {
-    let count = read_uvarint(r)? as usize;
-    let mut v = vec![0u64; count];
-    for x in &mut v {
-        *x = read_u64_be(r)?;
+    let count = checked_len(read_uvarint(r)?, MAX_SRS_BYTES / 8)?;
+    let mut v = Vec::with_capacity(count.min(4096));
+    for _ in 0..count {
+        v.push(read_u64_be(r)?);
     }
     Ok(v)
 }
 
 fn read_byte_slice<R: Read>(r: &mut R) -> io::Result<Vec<u8>> {
-    let count = read_uvarint(r)? as usize;
+    let count = checked_len(read_uvarint(r)?, MAX_SRS_BYTES)?;
     let mut buf = vec![0u8; count];
     r.read_exact(&mut buf)?;
     Ok(buf)
@@ -164,7 +195,9 @@ impl SuccinctSet {
                 if get_bit(&self.label_bitmap, bm_idx) {
                     return false;
                 }
-                let li = bm_idx - node_id;
+                let Some(li) = bm_idx.checked_sub(node_id) else {
+                    return false;
+                };
                 if li >= self.labels.len() {
                     return false;
                 }
@@ -185,7 +218,11 @@ impl SuccinctSet {
             }
             node_id = count_zeros(&self.label_bitmap, bm_idx + 1);
             // node_id >= 1 here since bm[bm_idx] was 0
-            bm_idx = select_ith_one(&self.label_bitmap, node_id - 1) + 1;
+            let next_bm = select_ith_one(&self.label_bitmap, node_id - 1) + 1;
+            if next_bm <= bm_idx {
+                return false;
+            }
+            bm_idx = next_bm;
         }
 
         if get_bit(&self.leaves, node_id) {
@@ -195,7 +232,9 @@ impl SuccinctSet {
             if get_bit(&self.label_bitmap, bm_idx) {
                 return false;
             }
-            let li = bm_idx - node_id;
+            let Some(li) = bm_idx.checked_sub(node_id) else {
+                return false;
+            };
             if li >= self.labels.len() {
                 return false;
             }
@@ -227,14 +266,18 @@ impl AdGuardMatcher {
 
     fn match_domain(&self, domain: &str) -> bool {
         let mut key = domain.bytes().rev().collect::<Vec<u8>>();
-        if self.has(&key, 0, 0, 0) {
+        let mut steps = 0usize;
+        let mut failed = HashSet::new();
+        if self.has(&key, 0, 0, 0, &mut steps, &mut failed) {
             return true;
         }
         loop {
             let mut with_suffix = Vec::with_capacity(1 + key.len());
             with_suffix.push(Self::SUFFIX);
             with_suffix.extend_from_slice(&key);
-            if self.has(&with_suffix, 0, 0, 0) {
+            steps = 0;
+            failed.clear();
+            if self.has(&with_suffix, 0, 0, 0, &mut steps, &mut failed) {
                 return true;
             }
             if let Some(idx) = key.iter().position(|&b| b == b'.') {
@@ -245,19 +288,37 @@ impl AdGuardMatcher {
         }
     }
 
-    fn has(&self, key: &[u8], mut node_id: usize, mut bm_idx: usize, depth: usize) -> bool {
-        if depth > Self::MAX_DEPTH {
+    fn has(
+        &self,
+        key: &[u8],
+        mut node_id: usize,
+        mut bm_idx: usize,
+        depth: usize,
+        steps: &mut usize,
+        failed: &mut HashSet<(usize, usize, usize)>,
+    ) -> bool {
+        if depth > Self::MAX_DEPTH || *steps >= MAX_ADGUARD_STEPS {
             return false;
         }
+        let state = (node_id, bm_idx, key.len());
+        if failed.contains(&state) {
+            return false;
+        }
+        *steps += 1;
 
         for i in 0..key.len() {
             let ch = key[i];
             loop {
                 if get_bit(&self.set.label_bitmap, bm_idx) {
+                    failed.insert(state);
                     return false;
                 }
-                let li = bm_idx.saturating_sub(node_id);
+                let Some(li) = bm_idx.checked_sub(node_id) else {
+                    failed.insert(state);
+                    return false;
+                };
                 if li >= self.set.labels.len() {
+                    failed.insert(state);
                     return false;
                 }
                 let lbl = self.set.labels[li];
@@ -277,19 +338,26 @@ impl AdGuardMatcher {
                     let next_node = count_zeros(&self.set.label_bitmap, bm_idx + 1);
                     let next_bm =
                         select_ith_one(&self.set.label_bitmap, next_node.saturating_sub(1)) + 1;
-                    if self.has(&key[i..], next_node, next_bm, depth + 1) {
-                        return true;
-                    }
-                    for j in (i + 1)..=key.len() {
-                        if self.has(&key[j..], next_node, next_bm, depth + 1) {
+                    if next_bm > bm_idx {
+                        if self.has(&key[i..], next_node, next_bm, depth + 1, steps, failed) {
                             return true;
+                        }
+                        for j in (i + 1)..=key.len() {
+                            if self.has(&key[j..], next_node, next_bm, depth + 1, steps, failed) {
+                                return true;
+                            }
                         }
                     }
                 }
                 bm_idx += 1;
             }
             node_id = count_zeros(&self.set.label_bitmap, bm_idx + 1);
-            bm_idx = select_ith_one(&self.set.label_bitmap, node_id.saturating_sub(1)) + 1;
+            let next_bm = select_ith_one(&self.set.label_bitmap, node_id.saturating_sub(1)) + 1;
+            if next_bm <= bm_idx {
+                failed.insert(state);
+                return false;
+            }
+            bm_idx = next_bm;
         }
 
         if get_bit(&self.set.leaves, node_id) {
@@ -297,10 +365,15 @@ impl AdGuardMatcher {
         }
         loop {
             if get_bit(&self.set.label_bitmap, bm_idx) {
+                failed.insert(state);
                 return false;
             }
-            let li = bm_idx.saturating_sub(node_id);
+            let Some(li) = bm_idx.checked_sub(node_id) else {
+                failed.insert(state);
+                return false;
+            };
             if li >= self.set.labels.len() {
+                failed.insert(state);
                 return false;
             }
             let lbl = self.set.labels[li];
@@ -311,7 +384,15 @@ impl AdGuardMatcher {
                 let next_node = count_zeros(&self.set.label_bitmap, bm_idx + 1);
                 let next_bm =
                     select_ith_one(&self.set.label_bitmap, next_node.saturating_sub(1)) + 1;
-                return self.has(&[], next_node, next_bm, depth + 1);
+                if next_bm <= bm_idx {
+                    failed.insert(state);
+                    return false;
+                }
+                let matched = self.has(&[], next_node, next_bm, depth + 1, steps, failed);
+                if !matched {
+                    failed.insert(state);
+                }
+                return matched;
             }
             bm_idx += 1;
         }
@@ -328,14 +409,14 @@ struct IpSet {
 
 fn read_ip_set<R: Read>(r: &mut R) -> io::Result<IpSet> {
     let _ver = read_u8(r)?;
-    let count = read_u64_be(r)? as usize;
+    let count = checked_len(read_u64_be(r)?, MAX_SRS_LIST_LEN)?;
     let mut v4 = Vec::new();
     let mut v6 = Vec::new();
     for _ in 0..count {
-        let fl = read_uvarint(r)? as usize;
+        let fl = checked_len(read_uvarint(r)?, 16)?;
         let mut from = vec![0u8; fl];
         r.read_exact(&mut from)?;
-        let tl = read_uvarint(r)? as usize;
+        let tl = checked_len(read_uvarint(r)?, 16)?;
         let mut to = vec![0u8; tl];
         r.read_exact(&mut to)?;
         match (fl, tl) {
@@ -550,11 +631,17 @@ fn match_default_rule<R: Read>(r: &mut R, query: &Query) -> io::Result<bool> {
         match item_type {
             ITEM_FINAL => {
                 let invert = read_u8(r)? != 0;
-                let result = match query {
-                    Query::Domain(_) => domain_seen && domain_matched,
-                    Query::Ip(_) | Query::IpRange(..) => ip_seen && ip_matched,
+                let (applicable, result) = match query {
+                    Query::Domain(_) => (domain_seen, domain_seen && domain_matched),
+                    Query::Ip(_) | Query::IpRange(..) => (ip_seen, ip_seen && ip_matched),
                 };
-                return Ok(if invert { !result } else { result });
+                return Ok(if !applicable {
+                    false
+                } else if invert {
+                    !result
+                } else {
+                    result
+                });
             }
             ITEM_DOMAIN => {
                 let set = SuccinctSet::read(r)?;
@@ -569,7 +656,7 @@ fn match_default_rule<R: Read>(r: &mut R, query: &Query) -> io::Result<bool> {
             ITEM_DOMAIN_KEYWORD => {
                 let kws = read_string_list(r)?;
                 let m = if let Query::Domain(d) = query {
-                    kws.iter().any(|kw| d.contains(kw.as_str()))
+                    kws.iter().any(|kw| d.contains(&kw.to_ascii_lowercase()))
                 } else {
                     false
                 };
@@ -699,15 +786,25 @@ fn validate_srs_header(data: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn srs_match_bytes(data: &[u8], query: &Query) -> Result<bool, String> {
-    validate_srs_header(data)?;
+fn decompress_srs(data: &[u8]) -> Result<Vec<u8>, String> {
     let mut decompressed = Vec::new();
-    ZlibDecoder::new(&data[4..])
+    let mut reader = ZlibDecoder::new(&data[4..]).take(MAX_SRS_DECOMPRESSED + 1);
+    reader
         .read_to_end(&mut decompressed)
         .map_err(|e| format!("decompress: {}", e))?;
+    if decompressed.len() as u64 > MAX_SRS_DECOMPRESSED {
+        return Err("decompress: SRS exceeds maximum size".into());
+    }
+    Ok(decompressed)
+}
+
+pub(crate) fn srs_match_bytes(data: &[u8], query: &Query) -> Result<bool, String> {
+    validate_srs_header(data)?;
+    let decompressed = decompress_srs(data)?;
     let mut cur = Cursor::new(&decompressed);
     let rule_count =
-        read_uvarint(&mut cur).map_err(|e| format!("read rule count: {}", e))? as usize;
+        checked_len(read_uvarint(&mut cur).map_err(|e| format!("read rule count: {}", e))?, MAX_SRS_LIST_LEN)
+            .map_err(|e| format!("read rule count: {}", e))?;
     for i in 0..rule_count {
         match match_rule(&mut cur, query) {
             Ok(true) => return Ok(true),
@@ -746,18 +843,47 @@ fn bolt_page_size(data: &[u8]) -> usize {
 ///   16: magic(u32), 20: version(u32), 24: pageSize(u32), 28: flags(u32)
 ///   32: root.root(u64), 40: root.sequence(u64)
 ///   48: freelist(u64), 56: pgid(u64), 64: txid(u64), 72: checksum(u64)
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn read_valid_meta(data: &[u8], page_off: usize) -> Option<(u64, u64)> {
+    let page = data.get(page_off..page_off.checked_add(80)?)?;
+    let flags = u16::from_le_bytes(page[8..10].try_into().ok()?);
+    if flags != 0 && flags & META_PAGE_FLAG == 0 {
+        return None;
+    }
+    let magic = u32::from_le_bytes(page[16..20].try_into().ok()?);
+    if magic != BOLT_MAGIC {
+        return None;
+    }
+    let stored_sum = u64::from_le_bytes(page[72..80].try_into().ok()?);
+    if stored_sum != 0 && fnv1a_64(&page[16..72]) != stored_sum {
+        return None;
+    }
+    let root = u64::from_le_bytes(page[32..40].try_into().ok()?);
+    let txid = u64::from_le_bytes(page[64..72].try_into().ok()?);
+    Some((root, txid))
+}
+
 fn bolt_meta_root(data: &[u8], ps: usize) -> u64 {
-    let read_u64_le = |off: usize| -> u64 {
-        if off + 8 > data.len() {
-            return 0;
+    match (read_valid_meta(data, 0), read_valid_meta(data, ps)) {
+        (Some((r0, t0)), Some((r1, t1))) => {
+            if t1 >= t0 {
+                r1
+            } else {
+                r0
+            }
         }
-        u64::from_le_bytes(data[off..off + 8].try_into().unwrap())
-    };
-    let root0 = read_u64_le(32);
-    let txid0 = read_u64_le(64);
-    let root1 = read_u64_le(ps + 32);
-    let txid1 = read_u64_le(ps + 64);
-    if txid1 >= txid0 { root1 } else { root0 }
+        (Some((r0, _)), None) => r0,
+        (None, Some((r1, _))) => r1,
+        (None, None) => 0,
+    }
 }
 
 /// Navigate the B-tree rooted at `pgid` to find `key`.
@@ -818,20 +944,31 @@ fn bolt_branch_child(page: &[u8], count: usize, key: &[u8]) -> u64 {
     let mut hi = count;
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        let elem_start = PAGE_HEADER_SIZE + mid * BRANCH_ELEM_SIZE;
-        if elem_start + BRANCH_ELEM_SIZE > page.len() {
+        let Some(elem_start) = mid
+            .checked_mul(BRANCH_ELEM_SIZE)
+            .and_then(|v| v.checked_add(PAGE_HEADER_SIZE))
+        else {
             hi = mid;
             continue;
-        }
-        let pos = u32::from_le_bytes(page[elem_start..elem_start + 4].try_into().unwrap()) as usize;
-        let ksize =
-            u32::from_le_bytes(page[elem_start + 4..elem_start + 8].try_into().unwrap()) as usize;
-        let k_end = elem_start + pos + ksize;
-        if k_end > page.len() {
+        };
+        let Some(header) = page.get(elem_start..elem_start.saturating_add(BRANCH_ELEM_SIZE)) else {
             hi = mid;
             continue;
-        }
-        let k = &page[elem_start + pos..k_end];
+        };
+        let pos = u32::from_le_bytes(header[0..4].try_into().unwrap()) as usize;
+        let ksize = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
+        let Some(k_start) = elem_start.checked_add(pos) else {
+            hi = mid;
+            continue;
+        };
+        let Some(k_end) = k_start.checked_add(ksize) else {
+            hi = mid;
+            continue;
+        };
+        let Some(k) = page.get(k_start..k_end) else {
+            hi = mid;
+            continue;
+        };
         if k < key {
             lo = mid + 1;
         } else {
@@ -841,12 +978,18 @@ fn bolt_branch_child(page: &[u8], count: usize, key: &[u8]) -> u64 {
     // lo = first index where elem.key >= key
     // if exact match: use lo; if not exact and lo > 0: use lo-1; else use 0
     let is_exact = lo < count && {
-        let es = PAGE_HEADER_SIZE + lo * BRANCH_ELEM_SIZE;
-        es + BRANCH_ELEM_SIZE <= page.len() && {
-            let pos = u32::from_le_bytes(page[es..es + 4].try_into().unwrap()) as usize;
-            let ksize = u32::from_le_bytes(page[es + 4..es + 8].try_into().unwrap()) as usize;
-            es + pos + ksize <= page.len() && &page[es + pos..es + pos + ksize] == key
-        }
+        let exact = lo
+            .checked_mul(BRANCH_ELEM_SIZE)
+            .and_then(|v| v.checked_add(PAGE_HEADER_SIZE))
+            .and_then(|es| {
+                let header = page.get(es..es.checked_add(BRANCH_ELEM_SIZE)?)?;
+                let pos = u32::from_le_bytes(header[0..4].try_into().ok()?) as usize;
+                let ksize = u32::from_le_bytes(header[4..8].try_into().ok()?) as usize;
+                let k_start = es.checked_add(pos)?;
+                let k_end = k_start.checked_add(ksize)?;
+                Some(page.get(k_start..k_end)? == key)
+            });
+        exact.unwrap_or(false)
     };
     let idx = if is_exact {
         lo
@@ -855,8 +998,13 @@ fn bolt_branch_child(page: &[u8], count: usize, key: &[u8]) -> u64 {
     } else {
         0
     };
-    let elem_start = PAGE_HEADER_SIZE + idx * BRANCH_ELEM_SIZE;
-    page.get(elem_start + 8..elem_start + 16)
+    idx.checked_mul(BRANCH_ELEM_SIZE)
+        .and_then(|v| v.checked_add(PAGE_HEADER_SIZE))
+        .and_then(|es| {
+            let start = es.checked_add(8)?;
+            let end = es.checked_add(16)?;
+            page.get(start..end)
+        })
         .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
         .unwrap_or(u64::MAX)
 }
@@ -868,32 +1016,24 @@ fn bolt_leaf_lookup(page: &[u8], count: usize, key: &[u8]) -> Option<(bool, Vec<
     let mut hi = count;
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        let elem_start = PAGE_HEADER_SIZE + mid * LEAF_ELEM_SIZE;
-        if elem_start + LEAF_ELEM_SIZE > page.len() {
-            break;
-        }
-        let elem_flags = u32::from_le_bytes(page[elem_start..elem_start + 4].try_into().unwrap());
-        let pos =
-            u32::from_le_bytes(page[elem_start + 4..elem_start + 8].try_into().unwrap()) as usize;
-        let ksize =
-            u32::from_le_bytes(page[elem_start + 8..elem_start + 12].try_into().unwrap()) as usize;
-        let vsize =
-            u32::from_le_bytes(page[elem_start + 12..elem_start + 16].try_into().unwrap()) as usize;
-        let k_start = elem_start + pos;
-        let k_end = k_start + ksize;
-        if k_end > page.len() {
-            break;
-        }
-        let k = &page[k_start..k_end];
+        let elem_start = mid
+            .checked_mul(LEAF_ELEM_SIZE)
+            .and_then(|v| v.checked_add(PAGE_HEADER_SIZE))?;
+        let header = page.get(elem_start..elem_start.checked_add(LEAF_ELEM_SIZE)?)?;
+        let elem_flags = u32::from_le_bytes(header[0..4].try_into().unwrap());
+        let pos = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
+        let ksize = u32::from_le_bytes(header[8..12].try_into().unwrap()) as usize;
+        let vsize = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+        let k_start = elem_start.checked_add(pos)?;
+        let k_end = k_start.checked_add(ksize)?;
+        let k = page.get(k_start..k_end)?;
         match k.cmp(key) {
             std::cmp::Ordering::Equal => {
-                let v_start = k_end;
-                let v_end = v_start + vsize;
-                let v = if v_end <= page.len() {
-                    page[v_start..v_end].to_vec()
-                } else {
-                    vec![]
-                };
+                let v = k_end
+                    .checked_add(vsize)
+                    .and_then(|v_end| page.get(k_end..v_end))
+                    .map(|slice| slice.to_vec())
+                    .unwrap_or_default();
                 return Some((elem_flags & BUCKET_LEAF_FLAG != 0, v));
             }
             std::cmp::Ordering::Less => lo = mid + 1,
@@ -957,9 +1097,16 @@ const BOLT_MAGIC: u32 = 0xED0C_DAED;
 const BOLT_MAX_DEPTH: usize = 64;
 
 fn is_bolt(data: &[u8]) -> bool {
-    data.get(16..20)
-        .map(|b| u32::from_le_bytes(b.try_into().unwrap()) == BOLT_MAGIC)
-        .unwrap_or(false)
+    let page0 = data
+        .get(16..20)
+        .is_some_and(|b| u32::from_le_bytes(b.try_into().unwrap()) == BOLT_MAGIC);
+    if page0 {
+        return true;
+    }
+    let ps = bolt_page_size(data);
+    ps.checked_add(20)
+        .and_then(|end| data.get(ps + 16..end))
+        .is_some_and(|b| u32::from_le_bytes(b.try_into().unwrap()) == BOLT_MAGIC)
 }
 
 pub(crate) const NOT_BOLT: &str = "不是 sing-box 缓存数据库";
@@ -1062,11 +1209,13 @@ impl SuccinctSet {
             if !path.is_empty() {
                 if has_suffix_marker {
                     // Has ROOT/PREFIX child → domain_suffix
-                    let suffix: String = path.iter().rev().map(|&b| b as char).collect();
+                    let rev: Vec<u8> = path.iter().rev().copied().collect();
+                    let suffix = String::from_utf8_lossy(&rev).into_owned();
                     results.push(("domain_suffix".to_string(), suffix));
                 } else if !from_root && get_bit(&self.leaves, node_id) {
                     // Pure leaf without suffix marker → domain
-                    let domain: String = path.iter().rev().map(|&b| b as char).collect();
+                    let rev: Vec<u8> = path.iter().rev().copied().collect();
+                    let domain = String::from_utf8_lossy(&rev).into_owned();
                     results.push(("domain".to_string(), domain));
                 }
             }
@@ -1077,7 +1226,9 @@ impl SuccinctSet {
                 if get_bit(&self.label_bitmap, bm_idx) {
                     break;
                 }
-                let li = bm_idx.saturating_sub(node_id);
+                let Some(li) = bm_idx.checked_sub(node_id) else {
+                    break;
+                };
                 if li >= self.labels.len() {
                     break;
                 }
@@ -1088,18 +1239,28 @@ impl SuccinctSet {
                 } else if lbl == ROOT {
                     // Recurse into ROOT child for deeper entries
                     let child_node = count_zeros(&self.label_bitmap, bm_idx + 1);
-                    if child_node > 0 {
+                    if child_node > node_id {
                         let child_bm = select_ith_one(&self.label_bitmap, child_node - 1) + 1;
-                        stack.push((child_node, child_bm, path.clone(), true));
+                        if child_bm > bm_idx
+                            && path.len() < MAX_SRS_ENUM_DEPTH
+                            && results.len() < MAX_SRS_ENUM_ENTRIES
+                        {
+                            stack.push((child_node, child_bm, path.clone(), true));
+                        }
                     }
                 } else {
                     // Regular character - recurse
                     let child_node = count_zeros(&self.label_bitmap, bm_idx + 1);
-                    if child_node > 0 {
+                    if child_node > node_id {
                         let child_bm = select_ith_one(&self.label_bitmap, child_node - 1) + 1;
-                        let mut child_path = path.clone();
-                        child_path.push(lbl);
-                        stack.push((child_node, child_bm, child_path, false));
+                        if child_bm > bm_idx
+                            && path.len() < MAX_SRS_ENUM_DEPTH
+                            && results.len() < MAX_SRS_ENUM_ENTRIES
+                        {
+                            let mut child_path = path.clone();
+                            child_path.push(lbl);
+                            stack.push((child_node, child_bm, child_path, false));
+                        }
                     }
                 }
 
@@ -1116,10 +1277,12 @@ impl AdGuardMatcher {
         // AdGuard trie is similar but more complex; fall back to reporting it as opaque
         let mut results = self.set.enumerate();
         for r in &mut results {
+            r.1 = r.1.replace(Self::SUFFIX as char, "");
             if r.0 == "domain" {
                 r.0 = "domain".to_string();
             }
         }
+        results.retain(|r| !r.1.is_empty());
         results
     }
 }
@@ -1198,8 +1361,8 @@ impl IpSet {
 }
 
 fn read_u16_list<R: Read>(r: &mut R) -> io::Result<Vec<u16>> {
-    let count = read_uvarint(r)? as usize;
-    let mut v = Vec::with_capacity(count);
+    let count = checked_len(read_uvarint(r)?, MAX_SRS_LIST_LEN)?;
+    let mut v = Vec::with_capacity(count.min(4096));
     for _ in 0..count {
         let mut buf = [0u8; 2];
         r.read_exact(&mut buf)?;
@@ -1449,13 +1612,11 @@ fn list_logical_rule<R: Read>(r: &mut R) -> io::Result<Vec<RuleEntry>> {
 
 pub(crate) fn srs_list_bytes(data: &[u8]) -> Result<Vec<RuleEntry>, String> {
     validate_srs_header(data)?;
-    let mut decompressed = Vec::new();
-    ZlibDecoder::new(&data[4..])
-        .read_to_end(&mut decompressed)
-        .map_err(|e| format!("decompress: {}", e))?;
+    let decompressed = decompress_srs(data)?;
     let mut cur = Cursor::new(&decompressed);
     let rule_count =
-        read_uvarint(&mut cur).map_err(|e| format!("read rule count: {}", e))? as usize;
+        checked_len(read_uvarint(&mut cur).map_err(|e| format!("read rule count: {}", e))?, MAX_SRS_LIST_LEN)
+            .map_err(|e| format!("read rule count: {}", e))?;
     let mut entries = Vec::new();
     for i in 0..rule_count {
         match list_rule(&mut cur) {

@@ -38,13 +38,24 @@ pub fn replace_with_backup(path: &Path, content: &[u8]) -> Result<bool, String> 
 
 fn lock_config(path: &Path) -> Result<std::fs::File, String> {
     use std::os::windows::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .share_mode(0)
-        .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_DELETE_ON_CLOSE)
-        .open(sibling_path(path, ".singboard.lock"))
-        .map_err(|e| format!("无法锁定配置文件：{e}"))
+    let lock_path = sibling_path(path, ".singboard.lock");
+    let mut last_error = None;
+    for attempt in 0..10 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(0)
+            .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_DELETE_ON_CLOSE)
+            .open(&lock_path)
+        {
+            Ok(file) => return Ok(file),
+            Err(e) => last_error = Some(e),
+        }
+    }
+    Err(format!("无法锁定配置文件：{}", last_error.unwrap()))
 }
 
 pub fn replace_checked(
@@ -70,7 +81,9 @@ pub fn replace_checked(
 fn replace_existing(path: &Path, content: &[u8]) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+    const ERROR_UNABLE_TO_MOVE_REPLACEMENT: i32 = 1176;
     let staged = stage(path, content)?.into_temp_path();
+    let backup_path = config_backup_path(path);
     let wide = |p: &Path| {
         p.as_os_str()
             .encode_wide()
@@ -79,7 +92,7 @@ fn replace_existing(path: &Path, content: &[u8]) -> Result<(), String> {
     };
     let target = wide(path);
     let replacement = wide(&staged);
-    let backup = wide(&config_backup_path(path));
+    let backup = wide(&backup_path);
     let success = unsafe {
         ReplaceFileW(
             target.as_ptr(),
@@ -91,11 +104,27 @@ fn replace_existing(path: &Path, content: &[u8]) -> Result<(), String> {
         )
     };
     if success == 0 {
-        return Err(format!(
-            "替换配置文件失败：{}",
-            std::io::Error::last_os_error()
-        ));
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(ERROR_UNABLE_TO_MOVE_REPLACEMENT) {
+            match staged.persist(path) {
+                Ok(()) => return Ok(()),
+                Err(persist_err) => {
+                    let restored = !path.exists() && std::fs::rename(&backup_path, path).is_ok();
+                    if !restored {
+                        if let Ok(kept) = persist_err.path.keep() {
+                            return Err(format!(
+                                "替换配置文件失败：{error}；新内容已保留在 {}",
+                                kept.display()
+                            ));
+                        }
+                    }
+                    return Err(format!("替换配置文件失败：{error}"));
+                }
+            }
+        }
+        return Err(format!("替换配置文件失败：{error}"));
     }
+    let _ = staged.keep();
     Ok(())
 }
 
@@ -153,15 +182,20 @@ pub async fn run_singbox_check(
     working_dir: Option<&str>,
 ) -> Result<String, String> {
     let cwd = resolve_working_dir(working_dir, config_path)?;
-    let output = tokio::process::Command::new(&singbox_path)
-        .args(["check", "-c", &config_path])
-        .current_dir(&cwd)
-        .kill_on_drop(true)
-        .env("NO_COLOR", "1")
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .output()
-        .await
-        .map_err(|e| format!("无法运行 sing-box 校验：{}", e))?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        tokio::process::Command::new(&singbox_path)
+            .args(["check", "-c", &config_path])
+            .current_dir(&cwd)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .env("NO_COLOR", "1")
+            .creation_flags(0x08000000)
+            .output(),
+    )
+    .await
+    .map_err(|_| "sing-box 配置校验超时（30 秒）".to_string())?
+    .map_err(|e| format!("无法运行 sing-box 校验：{}", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();

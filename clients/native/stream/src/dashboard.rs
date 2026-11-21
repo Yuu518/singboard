@@ -35,7 +35,16 @@ pub fn host(row: &Value) -> &str {
 pub fn compare(a: &Value, b: &Value, key: &str, closed: bool) -> std::cmp::Ordering {
     let start = |r: &Value| r["startMs"].as_i64().unwrap_or_default();
     let numeric = |r: &Value| match key {
-        "duration" => r["closedAt"].as_i64().unwrap_or_default() - start(r),
+        "duration" => {
+            let s = start(r);
+            if s <= 0 {
+                i64::MIN
+            } else if closed {
+                r["closedAt"].as_i64().unwrap_or(s).saturating_sub(s)
+            } else {
+                -s
+            }
+        }
         "upload" if !closed => r["uploadSpeed"].as_i64().unwrap_or(0),
         "download" if !closed => r["downloadSpeed"].as_i64().unwrap_or(0),
         "uploadTotal" => r["upload"].as_i64().unwrap_or(0),
@@ -204,6 +213,7 @@ pub fn metrics(snapshot: &Value) -> Value {
             .as_array()
             .into_iter()
             .flatten()
+            .rev()
             .filter_map(Value::as_str)
             .collect::<Vec<_>>()
             .join(" → ");

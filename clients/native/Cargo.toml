@@ -10,6 +10,7 @@ gpui-pre = { path = "compat/gpui-pre" }
 
 [profile.release]
 strip = true
+panic = "abort"
 
 [profile.windows-release]
 inherits = "release"

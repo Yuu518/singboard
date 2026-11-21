@@ -12,12 +12,12 @@ use std::time::{Duration, Instant};
 const FALLBACK_DNS: [&str; 2] = ["223.5.5.5", "1.1.1.1"];
 
 #[cfg(not(windows))]
-fn get_system_proxy() -> Option<String> {
+pub(crate) fn get_system_proxy() -> Option<String> {
     None
 }
 
 #[cfg(windows)]
-fn get_system_proxy() -> Option<String> {
+pub(crate) fn get_system_proxy() -> Option<String> {
     use winreg::RegKey;
     use winreg::enums::*;
 
@@ -35,29 +35,52 @@ fn get_system_proxy() -> Option<String> {
         return None;
     }
 
-    let addr = if server.contains('=') {
-        server
+    let (scheme, addr) = if server.contains('=') {
+        let pairs: Vec<(&str, &str)> = server
             .split(';')
-            .find(|s| s.starts_with("http="))
-            .map(|s| s.trim_start_matches("http=").to_string())
-            .unwrap_or_else(|| server.split(';').next().unwrap_or("").to_string())
+            .filter_map(|entry| {
+                let (k, v) = entry.trim().split_once('=')?;
+                let v = v.trim();
+                if v.is_empty() {
+                    None
+                } else {
+                    Some((k.trim(), v))
+                }
+            })
+            .collect();
+        pairs
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("https"))
+            .or_else(|| pairs.iter().find(|(k, _)| k.eq_ignore_ascii_case("http")))
+            .or_else(|| pairs.iter().find(|(k, _)| k.eq_ignore_ascii_case("socks")))
+            .copied()
+            .map(|(k, v)| {
+                let default_scheme = if k.eq_ignore_ascii_case("socks") {
+                    "socks5://"
+                } else {
+                    "http://"
+                };
+                (default_scheme, v.to_string())
+            })?
     } else {
-        server
+        ("http://", server.trim().to_string())
     };
 
     if addr.is_empty() {
         return None;
     }
 
-    if addr.starts_with("http://") || addr.starts_with("https://") {
+    if addr.contains("://") {
         Some(addr)
     } else {
-        Some(format!("http://{}", addr))
+        Some(format!("{scheme}{addr}"))
     }
 }
 
 pub fn build_client(timeout: Option<Duration>) -> Result<reqwest::Client, reqwest::Error> {
-    let mut builder = reqwest::Client::builder();
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(60));
 
     if let Some(t) = timeout {
         builder = builder.timeout(t);
@@ -68,6 +91,17 @@ pub fn build_client(timeout: Option<Duration>) -> Result<reqwest::Client, reqwes
         None => builder.no_proxy(),
     }
     .build()
+}
+
+pub fn build_direct_client(timeout: Option<Duration>) -> Result<reqwest::Client, reqwest::Error> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(60))
+        .no_proxy();
+    if let Some(t) = timeout {
+        builder = builder.timeout(t);
+    }
+    builder.build()
 }
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -87,8 +121,11 @@ fn describe_fetch_error(error: reqwest::Error) -> String {
     }
 }
 
-pub async fn fetch_url(url: String, user_agent: Option<String>) -> Result<String, String> {
-    let client = build_client(Some(FETCH_TIMEOUT)).map_err(|e| e.to_string())?;
+async fn fetch_with_client(
+    client: reqwest::Client,
+    url: String,
+    user_agent: Option<String>,
+) -> Result<String, String> {
     let mut request = client.get(&url);
     if let Some(agent) = user_agent.filter(|agent| !agent.trim().is_empty()) {
         request = request.header(reqwest::header::USER_AGENT, agent);
@@ -101,6 +138,16 @@ pub async fn fetch_url(url: String, user_agent: Option<String>) -> Result<String
     resp.text().await.map_err(describe_fetch_error)
 }
 
+pub async fn fetch_url(url: String, user_agent: Option<String>) -> Result<String, String> {
+    let client = build_client(Some(FETCH_TIMEOUT)).map_err(|e| e.to_string())?;
+    fetch_with_client(client, url, user_agent).await
+}
+
+pub async fn fetch_url_direct(url: String, user_agent: Option<String>) -> Result<String, String> {
+    let client = build_direct_client(Some(FETCH_TIMEOUT)).map_err(|e| e.to_string())?;
+    fetch_with_client(client, url, user_agent).await
+}
+
 pub async fn http_ping(url: String, count: u32) -> Result<f64, String> {
     let client = build_client(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
 
@@ -109,9 +156,15 @@ pub async fn http_ping(url: String, count: u32) -> Result<f64, String> {
 
     for _ in 0..count {
         let start = Instant::now();
-        if client.head(&url).send().await.is_ok() {
-            total += start.elapsed().as_secs_f64() * 1000.0;
-            success += 1;
+        if let Ok(resp) = client.head(&url).send().await {
+            let status = resp.status();
+            if status.is_success()
+                || status.is_redirection()
+                || status == reqwest::StatusCode::METHOD_NOT_ALLOWED
+            {
+                total += start.elapsed().as_secs_f64() * 1000.0;
+                success += 1;
+            }
         }
     }
 
@@ -179,27 +232,40 @@ fn name_server(ip: IpAddr, port: u16) -> NameServerConfig {
 }
 
 #[cfg(windows)]
-fn system_resolver(_reported: &[String]) -> Result<Resolver<TokioRuntimeProvider>, String> {
-    hickory_resolver::TokioResolver::builder_tokio()
+fn system_resolver(
+    _reported: &[String],
+) -> Result<(Resolver<TokioRuntimeProvider>, Option<String>), String> {
+    let resolver = hickory_resolver::TokioResolver::builder_tokio()
         .map_err(|e| e.to_string())?
         .with_options(ResolverOpts::default())
         .build()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok((resolver, None))
 }
 
 #[cfg(not(windows))]
-fn system_resolver(reported: &[String]) -> Result<Resolver<TokioRuntimeProvider>, String> {
+fn system_resolver(
+    reported: &[String],
+) -> Result<(Resolver<TokioRuntimeProvider>, Option<String>), String> {
     let servers: Vec<IpAddr> = reported
         .iter()
-        .filter_map(|s| s.trim().trim_start_matches('/').parse().ok())
+        .filter_map(|s| {
+            let clean = s.trim().trim_start_matches('/');
+            let without_zone = clean.split('%').next().unwrap_or(clean);
+            let ip: IpAddr = without_zone.parse().ok()?;
+            match ip {
+                IpAddr::V6(v6) if (v6.segments()[0] & 0xffc0) == 0xfe80 => None,
+                _ => Some(ip),
+            }
+        })
         .collect();
-    let servers = if servers.is_empty() {
-        FALLBACK_DNS.iter().filter_map(|s| s.parse().ok()).collect()
-    } else {
-        servers
-    };
+    if servers.is_empty() {
+        let fallback: Vec<IpAddr> = FALLBACK_DNS.iter().filter_map(|s| s.parse().ok()).collect();
+        let name_servers = fallback.into_iter().map(|ip| name_server(ip, 53)).collect();
+        return Ok((custom_resolver(name_servers)?, Some(FALLBACK_DNS.join(", "))));
+    }
     let name_servers = servers.into_iter().map(|ip| name_server(ip, 53)).collect();
-    custom_resolver(name_servers)
+    Ok((custom_resolver(name_servers)?, None))
 }
 
 fn custom_resolver(
@@ -240,11 +306,21 @@ pub async fn lookup_dns(domain:String, record_type:String, server:Option<String>
         }
     });
 
-    let resolver = if let Some(server_text) = server.as_deref() {
+    let (resolver, source, resolved_server) = if let Some(server_text) = server.as_deref() {
         let (ip, port) = parse_dns_server(server_text)?;
-        custom_resolver(vec![name_server(ip, port)])?
+        (
+            custom_resolver(vec![name_server(ip, port)])?,
+            "custom".to_string(),
+            server,
+        )
     } else {
-        system_resolver(reported)?
+        let (resolver, fallback) = system_resolver(reported)?;
+        let source = if fallback.is_some() {
+            "fallback"
+        } else {
+            "system"
+        };
+        (resolver, source.to_string(), fallback)
     };
 
     let lookup = resolver
@@ -268,12 +344,8 @@ pub async fn lookup_dns(domain:String, record_type:String, server:Option<String>
         .collect::<Vec<_>>();
 
     Ok(DnsQueryResult {
-        source: if server.is_some() {
-            "custom".to_string()
-        } else {
-            "system".to_string()
-        },
-        server,
+        source,
+        server: resolved_server,
         records,
     })
 }

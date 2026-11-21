@@ -347,14 +347,22 @@ async fn fetch_to_file(
         .await
         .map_err(|e| format!("创建临时文件失败: {}", e))?;
 
+    let max_size = if expected_size > 0 {
+        expected_size
+    } else {
+        256 * 1024 * 1024
+    };
     let mut downloaded: u64 = 0;
     let mut last_emit = Instant::now();
     emit_progress(app, event, "download", 0, total);
     while let Some(chunk) = resp.chunk().await.map_err(|e| format!("下载中断: {}", e))? {
+        downloaded = downloaded.saturating_add(chunk.len() as u64);
+        if downloaded > max_size {
+            return Err(format!("下载内容超过预期大小上限（{} 字节）", max_size));
+        }
         file.write_all(&chunk)
             .await
             .map_err(|e| format!("写入临时文件失败: {}", e))?;
-        downloaded += chunk.len() as u64;
         if last_emit.elapsed() >= Duration::from_millis(200) {
             emit_progress(app, event, "download", downloaded, total);
             last_emit = Instant::now();

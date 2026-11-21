@@ -10,6 +10,7 @@ use super::{
 };
 
 const CORE_BIN_NAME: &str = "sing-box";
+const MAX_CORE_EXTRACT_BYTES: u64 = 256 * 1024 * 1024;
 
 fn arch_names() -> Result<&'static [&'static str], String> {
     match std::env::consts::ARCH {
@@ -55,7 +56,7 @@ fn extract_core(archive_path: &Path, files_dir: &Path, asset_digest: &str) -> Re
         .entries()
         .map_err(|e| format!("读取压缩包失败: {}", e))?;
     for entry in entries {
-        let mut entry = entry.map_err(|e| format!("读取压缩包失败: {}", e))?;
+        let entry = entry.map_err(|e| format!("读取压缩包失败: {}", e))?;
         if !entry.header().entry_type().is_file() {
             continue;
         }
@@ -69,8 +70,12 @@ fn extract_core(archive_path: &Path, files_dir: &Path, asset_digest: &str) -> Re
         }
         let mut data = Vec::new();
         entry
+            .take(MAX_CORE_EXTRACT_BYTES + 1)
             .read_to_end(&mut data)
             .map_err(|e| format!("解压失败: {}", e))?;
+        if data.len() as u64 > MAX_CORE_EXTRACT_BYTES {
+            return Err("解压后的核心文件超过大小上限".into());
+        }
         std::fs::write(files_dir.join(CORE_BIN_NAME), data)
             .map_err(|e| format!("写入临时文件失败: {}", e))?;
         return Ok(());
@@ -120,6 +125,12 @@ async fn download_and_extract(
 async fn swap_core(staged: &Path, target: &str) -> Result<(String, bool), String> {
     use crate::commands::service;
 
+    if let Some(installed) = service::installed_core_path().await {
+        if installed != target {
+            return Err("所选核心路径与已登记服务不一致，请先在设置中重新识别工作目录".into());
+        }
+    }
+
     let pending = format!("{SERVICE_HOME}/.staging/{CORE_BIN_NAME}");
     let version_line = root::run_async(format!(
         "set -e\nmkdir -p {stage_dir}\ncp -f {src} {pending}\nchmod 755 {pending}\n{pending} version",
@@ -133,18 +144,27 @@ async fn swap_core(staged: &Path, target: &str) -> Result<(String, bool), String
 
     let was_running = service::is_running().await;
     if was_running {
-        service::stop().await?;
+        if let Err(e) = service::stop().await {
+            let _ = root::run_async(format!("rm -f {}", quote(&pending))).await;
+            return Err(e);
+        }
     }
 
     let backup = format!("{target}.bak");
-    root::run_async(format!(
+    if let Err(e) = root::run_async(format!(
         "set -e\nmkdir -p \"$(dirname {t})\"\nif [ -f {t} ]; then cp -f {t} {b}; fi\nmv -f {p} {t}\nchmod 755 {t}",
         t = quote(target),
         b = quote(&backup),
         p = quote(&pending)
     ))
     .await
-    .map_err(|e| format!("替换核心失败: {e}"))?;
+    {
+        let _ = root::run_async(format!("rm -f {}", quote(&pending))).await;
+        if was_running {
+            let _ = service::start().await;
+        }
+        return Err(format!("替换核心失败: {e}"));
+    }
 
     if !was_running {
         let _ = root::run_async(format!("rm -f {}", quote(&backup))).await;
@@ -163,6 +183,7 @@ async fn swap_core(staged: &Path, target: &str) -> Result<(String, bool), String
         return Ok((version, true));
     }
 
+    let _ = service::stop().await;
     let _ = root::run_async(format!(
         "if [ -f {b} ]; then mv -f {b} {t}; chmod 755 {t}; fi",
         b = quote(&backup),

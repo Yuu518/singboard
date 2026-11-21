@@ -198,6 +198,10 @@ impl Drop for Subscription {
 async fn receive(mut url: Url, feed: Feed, batch: Arc<Mutex<Batch>>) {
     let mut delay = 1;
     let mut previous;
+    let idle_timeout = match feed {
+        Feed::Logs => Duration::from_secs(45),
+        _ => Duration::from_secs(15),
+    };
     loop {
         let result = tokio::time::timeout(
             Duration::from_secs(10),
@@ -206,25 +210,65 @@ async fn receive(mut url: Url, feed: Feed, batch: Arc<Mutex<Batch>>) {
         .await;
         let status = match result {
             Ok(Ok((mut socket, _))) => {
-                delay = 1;
                 previous = None;
+                let mut received_frame = false;
+                let mut ping_sent = false;
                 if !matches!(feed, Feed::Memory) {
                     let mut state = batch.lock().unwrap();
                     state.status = "已连接";
-                    state.failures = 0;
                 }
-                while let Some(Ok(message)) = socket.next().await {
-                    match message {
-                        Message::Text(text) => {
-                            record(&mut batch.lock().unwrap(), feed, &text, &mut previous)
-                        }
-                        Message::Ping(data) => {
-                            if socket.send(Message::Pong(data)).await.is_err() {
-                                break;
+                loop {
+                    let wait = if ping_sent {
+                        Duration::from_secs(10)
+                    } else {
+                        idle_timeout
+                    };
+                    match tokio::time::timeout(wait, socket.next()).await {
+                        Ok(Some(Ok(message))) => {
+                            ping_sent = false;
+                            match message {
+                                Message::Text(text) => {
+                                    if !received_frame {
+                                        received_frame = true;
+                                        delay = 1;
+                                        if !matches!(feed, Feed::Memory) {
+                                            batch.lock().unwrap().failures = 0;
+                                        }
+                                    }
+                                    record(&mut batch.lock().unwrap(), feed, &text, &mut previous);
+                                }
+                                Message::Ping(data) => {
+                                    if tokio::time::timeout(
+                                        Duration::from_secs(5),
+                                        socket.send(Message::Pong(data)),
+                                    )
+                                    .await
+                                    .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                                Message::Pong(_) => {}
+                                Message::Close(_) => break,
+                                _ => {}
                             }
                         }
-                        Message::Close(_) => break,
-                        _ => {}
+                        Ok(Some(Err(_))) | Ok(None) => break,
+                        Err(_) => {
+                            if ping_sent {
+                                break;
+                            }
+                            if tokio::time::timeout(
+                                Duration::from_secs(5),
+                                socket.send(Message::Ping(Vec::new().into())),
+                            )
+                            .await
+                            .is_err()
+                            {
+                                break;
+                            }
+                            ping_sent = true;
+                        }
                     }
                 }
                 "连接已断开，正在重连"

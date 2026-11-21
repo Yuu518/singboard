@@ -39,6 +39,11 @@ pub fn format(source: &str) -> Result<String, String> {
                 out.push('\n');
             }
             out.push_str(&"  ".repeat(depth));
+        } else if matches!(item.token, Token::CommentLine(_) | Token::CommentBlock(_))
+            && !out.is_empty()
+            && !out.ends_with([' ', '\n', '\t'])
+        {
+            out.push(' ');
         }
         out.push_str(item.text(source));
         last_open = matches!(item.token, Token::OpenBrace | Token::OpenBracket);
@@ -82,20 +87,21 @@ pub fn toggle_comment(source: &str, range: Range<usize>) -> (String, Range<usize
     let changed = slice
         .split('\n')
         .map(|v| {
+            let (line, cr) = v.strip_suffix('\r').map_or((v, ""), |s| (s, "\r"));
             if remove {
-                let trimmed = v.trim_start();
-                let indent = &v[..v.len() - trimmed.len()];
+                let trimmed = line.trim_start();
+                let indent = &line[..line.len() - trimmed.len()];
                 let rest = trimmed
                     .strip_prefix("// ")
                     .or_else(|| trimmed.strip_prefix("//"))
                     .unwrap_or(trimmed);
-                format!("{indent}{rest}")
-            } else if v.trim().is_empty() && has_non_empty {
+                format!("{indent}{rest}{cr}")
+            } else if line.trim().is_empty() && has_non_empty {
                 v.to_string()
             } else {
-                let trimmed = v.trim_start();
-                let indent = &v[..v.len() - trimmed.len()];
-                format!("{indent}// {trimmed}")
+                let trimmed = line.trim_start();
+                let indent = &line[..line.len() - trimmed.len()];
+                format!("{indent}// {trimmed}{cr}")
             }
         })
         .collect::<Vec<_>>()

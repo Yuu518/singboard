@@ -198,7 +198,7 @@ const SHARED_TTL: Duration = Duration::from_secs(5);
 
 static SHARED: Mutex<Option<(PathBuf, Instant, Arc<Vec<u8>>)>> = Mutex::new(None);
 
-fn forget_shared(path: &Path) {
+pub(crate) fn forget_shared(path: &Path) {
     if let Ok(mut guard) = SHARED.lock() {
         if guard.as_ref().is_some_and(|(cached, _, _)| cached == path) {
             *guard = None;

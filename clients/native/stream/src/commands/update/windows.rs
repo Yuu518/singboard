@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -9,6 +10,7 @@ use super::{
 };
 
 const CORE_EXE_NAME: &str = "sing-box.exe";
+const MAX_CORE_EXTRACT_BYTES: u64 = 256 * 1024 * 1024;
 
 pub(super) fn asset_suffixes() -> Result<Vec<String>, String> {
     match std::env::consts::ARCH {
@@ -53,8 +55,9 @@ fn extract_core_files(
 
     let mut found_exe = false;
     let mut dlls: Vec<String> = Vec::new();
+    let mut total_extracted: u64 = 0;
     for i in 0..archive.len() {
-        let mut entry = archive
+        let entry = archive
             .by_index(i)
             .map_err(|e| format!("读取压缩包失败: {}", e))?;
         if entry.is_dir() {
@@ -68,14 +71,22 @@ fn extract_core_files(
             found_exe = true;
             staging.join(CORE_EXE_NAME)
         } else if name.to_ascii_lowercase().ends_with(".dll") {
-            dlls.push(name.clone());
+            if !dlls.iter().any(|existing| existing.eq_ignore_ascii_case(&name)) {
+                dlls.push(name.clone());
+            }
             staging.join(&name)
         } else {
             continue;
         };
+        let remaining = MAX_CORE_EXTRACT_BYTES.saturating_sub(total_extracted);
         let mut out =
             std::fs::File::create(&dest).map_err(|e| format!("写入临时文件失败: {}", e))?;
-        std::io::copy(&mut entry, &mut out).map_err(|e| format!("解压失败: {}", e))?;
+        let mut limited = entry.take(remaining + 1);
+        let written = std::io::copy(&mut limited, &mut out).map_err(|e| format!("解压失败: {}", e))?;
+        total_extracted = total_extracted.saturating_add(written);
+        if total_extracted > MAX_CORE_EXTRACT_BYTES {
+            return Err("解压后的核心文件超过大小上限".into());
+        }
     }
 
     if !found_exe {
@@ -86,12 +97,18 @@ fn extract_core_files(
 
 
 async fn probe_core_version(exe: &Path) -> Result<String, String> {
-    let output = tokio::process::Command::new(exe)
-        .args(["version"])
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .output()
-        .await
-        .map_err(|e| format!("下载的核心无法运行: {}", e))?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio::process::Command::new(exe)
+            .args(["version"])
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output(),
+    )
+    .await
+    .map_err(|_| "核心版本检测超时".to_string())?
+    .map_err(|e| format!("下载的核心无法运行: {}", e))?;
     if !output.status.success() {
         return Err("下载的核心无法运行（version 命令执行失败）".into());
     }

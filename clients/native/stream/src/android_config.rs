@@ -156,20 +156,36 @@ async fn root_action(
             if !files.found {
                 return Err("所选目录中没有找到核心或配置".into());
             }
+            let core_path = files
+                .singbox_path
+                .clone()
+                .unwrap_or_else(|| files.core_install_path.clone());
+            let config_path = files.config_path.clone().unwrap_or_default();
             Settings::edit(dir, |p| {
                 p.working_dir = files.base_dir.clone();
-                p.singbox_path = files
-                    .singbox_path
-                    .clone()
-                    .unwrap_or(files.core_install_path.clone());
-                p.config_path = files.config_path.clone().unwrap_or_default();
+                p.singbox_path = core_path.clone();
+                p.config_path = config_path.clone();
                 Ok(())
             })?;
+            let install_note = if let (Some(detected_core), Some(detected_config)) =
+                (files.singbox_path.clone(), files.config_path.clone())
+            {
+                match service::service_install(
+                    detected_core,
+                    detected_config,
+                    files.base_dir.clone(),
+                )
+                .await
+                {
+                    Ok(()) => "\n服务脚本已同步",
+                    Err(_) => "",
+                }
+            } else {
+                ""
+            };
             Ok(Reply::saved(format!(
-                "工作目录：{}\n核心：{}\n配置：{}",
-                files.base_dir,
-                files.singbox_path.unwrap_or(files.core_install_path),
-                files.config_path.unwrap_or_default()
+                "工作目录：{}\n核心：{}\n配置：{}{}",
+                files.base_dir, core_path, config_path, install_note
             )))
         }
         "root_install" => {
@@ -209,6 +225,20 @@ async fn root_action(
             )))
         }
         "root_start" => {
+            let prefs = Settings::load(dir)?;
+            let work = prefs.working_dir.trim();
+            let core = prefs.singbox_path.trim();
+            let cfg = prefs.config_path.trim();
+            if !work.is_empty() && !core.is_empty() && !cfg.is_empty() {
+                let needs_install = match tokio::task::spawn_blocking(runtime_files).await {
+                    Ok(Ok(rt)) => rt.dir != work || rt.core != core || rt.config != cfg,
+                    _ => true,
+                };
+                if needs_install {
+                    config::validate_config(core.into(), cfg.into(), Some(work.into())).await?;
+                    service::service_install(core.into(), cfg.into(), work.into()).await?;
+                }
+            }
             service::service_start().await?;
             Ok(Reply::text(
                 crate::tools::readiness(&Settings::load(dir)?).await,
@@ -285,6 +315,29 @@ fn runtime_files() -> Result<Runtime, String> {
     })
 }
 
+fn runtime_files_with_fallback(prefs: &crate::settings::Settings) -> Result<Runtime, String> {
+    if let Ok(rt) = runtime_files() {
+        return Ok(rt);
+    }
+    let dir = prefs.working_dir.trim();
+    let core = prefs.singbox_path.trim();
+    let config = prefs.config_path.trim();
+    if !dir.is_empty()
+        && !core.is_empty()
+        && !config.is_empty()
+        && Path::new(dir).is_absolute()
+        && Path::new(core).is_absolute()
+        && Path::new(config).is_absolute()
+    {
+        return Ok(Runtime {
+            config: config.to_string(),
+            core: core.to_string(),
+            dir: dir.to_string(),
+        });
+    }
+    Err("未安装 Singboard 服务，请先在设置中识别工作目录".into())
+}
+
 fn root_document(backup: bool, expected: Option<&str>) -> Result<Value, String> {
     let runtime = runtime_files()?;
     if expected.is_some_and(|p| p != runtime.config) {
@@ -296,9 +349,13 @@ fn root_document(backup: bool, expected: Option<&str>) -> Result<Value, String> 
     Ok(json!({"path":runtime.config,"text":content,"backup":root::fs::is_file(&previous)}))
 }
 
-fn check_root(path: &str, text: &str, expected: Option<&str>) -> Result<Value, String> {
+fn check_root_with_runtime(
+    runtime: &Runtime,
+    path: &str,
+    text: &str,
+    expected: Option<&str>,
+) -> Result<Value, String> {
     profiles::validate_jsonc(text)?;
-    let runtime = runtime_files()?;
     if runtime.config != path {
         return Err("服务配置路径已变化，请重新打开".into());
     }
@@ -325,15 +382,23 @@ fn check_root(path: &str, text: &str, expected: Option<&str>) -> Result<Value, S
     if let Some(expected) = expected {
         let digest = format!("{:x}", Sha256::digest(expected.as_bytes()));
         let backup = root::quote(&format!("{path}.bak"));
-        script.push_str(&format!("actual=$(sha256sum {target}); [ \"${{actual%% *}}\" = {digest} ] || {{ echo '配置已被其他程序修改'; exit 1; }}\ncmp -s \"$tmp\" {target} && exit 0\nold=$(mktemp {parent}/.singboard-backup.XXXXXX)\ncp -p {target} \"$old\""));
-        script.push_str(&format!("\nchmod --reference={target} \"$tmp\" 2>/dev/null || chmod \"$(stat -c %a {target})\" \"$tmp\"\nchown \"$(stat -c %u:%g {target})\" \"$tmp\"\nmv -f \"$old\" {backup}\nmv -f \"$tmp\" {target}\n"));
+        script.push_str(&format!("actual=$(sha256sum {target}); [ \"${{actual%% *}}\" = {digest} ] || {{ echo '配置已被其他程序修改'; exit 1; }}\ncmp -s \"$tmp\" {target} && exit 0\nold=$(mktemp {parent}/.singboard-backup.XXXXXX)\ncp -p {target} \"$old\" 2>/dev/null || cp {target} \"$old\""));
+        script.push_str(&format!("\nchmod --reference={target} \"$tmp\" 2>/dev/null || chmod \"$(stat -c %a {target})\" \"$tmp\" 2>/dev/null || true\nchown \"$(stat -c %u:%g {target})\" \"$tmp\" 2>/dev/null || true\nmv -f \"$old\" {backup}\nmv -f \"$tmp\" {target}\n"));
     }
     root::run(&script)?;
+    if expected.is_some() {
+        root::fs::forget_shared(Path::new(path));
+    }
     Ok(json!(if expected.is_some() {
         "已保存，重启核心后生效"
     } else {
         "sing-box 校验通过"
     }))
+}
+
+fn check_root(path: &str, text: &str, expected: Option<&str>) -> Result<Value, String> {
+    let runtime = runtime_files()?;
+    check_root_with_runtime(&runtime, path, text, expected)
 }
 
 static UPDATE_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -364,16 +429,20 @@ pub async fn request(dir: PathBuf, input: &str) -> Result<Value, String> {
     let check_with_core = prefs.native_root_enabled
         && !prefs.config_path.is_empty()
         && !prefs.singbox_path.is_empty();
-    let syntax = |text: String| async move {
-        if check_with_core {
-            tokio::task::spawn_blocking(move || {
-                let runtime = runtime_files()?;
-                check_root(&runtime.config, &text, None).map(|_| ())
-            })
-            .await
-            .map_err(|e| e.to_string())??;
+    let fallback_prefs = prefs.clone();
+    let syntax = move |text: String| {
+        let fallback_prefs = fallback_prefs.clone();
+        async move {
+            if check_with_core {
+                tokio::task::spawn_blocking(move || {
+                    let runtime = runtime_files_with_fallback(&fallback_prefs)?;
+                    check_root_with_runtime(&runtime, &runtime.config, &text, None).map(|_| ())
+                })
+                .await
+                .map_err(|e| e.to_string())??;
+            }
+            Ok::<(), String>(())
         }
-        Ok(())
     };
     let reading_backup = matches!(op, Command::Backup { .. });
     Ok(match op {
@@ -392,23 +461,29 @@ pub async fn request(dir: PathBuf, input: &str) -> Result<Value, String> {
         Command::ConnectionGeo { ip } => {
             if crate::tools::public_ip(&ip) { crate::tools::geo_details(&ip).await? } else { Value::Null }
         }
-        Command::RuleEntries { tag } => tokio::task::spawn_blocking(move || {
-            let runtime = runtime_files()?;
-            crate::commands::srs::srs_list_provider(runtime.dir, runtime.config, runtime.core, tag)
-        }).await.map_err(|e| e.to_string()).and_then(|r| r).map(|rows| json!(rows))?,
-        Command::RuleMatches { tags, query } => tokio::task::spawn_blocking(move || {
-            let runtime = runtime_files()?;
-            let mut hits = Vec::new();
-            let mut errors = Vec::new();
-            for tag in tags {
-                match crate::commands::srs::srs_match_provider(runtime.dir.clone(), runtime.config.clone(), runtime.core.clone(), tag.clone(), query.clone()) {
-                    Ok(true) => hits.push(tag),
-                    Ok(false) => {}
-                    Err(e) => errors.push(format!("{tag} · {e}")),
+        Command::RuleEntries { tag } => {
+            let rule_prefs = prefs.clone();
+            tokio::task::spawn_blocking(move || {
+                let runtime = runtime_files_with_fallback(&rule_prefs)?;
+                crate::commands::srs::srs_list_provider(runtime.dir, runtime.config, runtime.core, tag)
+            }).await.map_err(|e| e.to_string()).and_then(|r| r).map(|rows| json!(rows))?
+        }
+        Command::RuleMatches { tags, query } => {
+            let rule_prefs = prefs.clone();
+            tokio::task::spawn_blocking(move || {
+                let runtime = runtime_files_with_fallback(&rule_prefs)?;
+                let mut hits = Vec::new();
+                let mut errors = Vec::new();
+                for tag in tags {
+                    match crate::commands::srs::srs_match_provider(runtime.dir.clone(), runtime.config.clone(), runtime.core.clone(), tag.clone(), query.clone()) {
+                        Ok(true) => hits.push(tag),
+                        Ok(false) => {}
+                        Err(e) => errors.push(format!("{tag} · {e}")),
+                    }
                 }
-            }
-            Ok::<_, String>(json!({"hits": hits, "errors": errors}))
-        }).await.map_err(|e| e.to_string())??,
+                Ok::<_, String>(json!({"hits": hits, "errors": errors}))
+            }).await.map_err(|e| e.to_string())??
+        }
         Command::SetGlassTint{tint}=>{
             crate::settings::Settings::set_glass_tint(&dir,tint)?;
             Value::Null
@@ -487,7 +562,7 @@ pub async fn request(dir: PathBuf, input: &str) -> Result<Value, String> {
         Command::Due => {
             let mut errors = vec![];
             for p in store.list()?.into_iter().filter(|p| p.due()) {
-                if let Err(e) = store.update(&p.id, None, syntax).await {
+                if let Err(e) = store.update(&p.id, None, &syntax).await {
                     errors.push(format!("{} · {e}", p.name));
                 }
             }

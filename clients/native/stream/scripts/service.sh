@@ -24,7 +24,14 @@ core_pid() {
 trim_log() {
   [ -f "$LOG_FILE" ] || return 0
   size=$(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0)
-  [ "$size" -gt "$LOG_LIMIT" ] && : > "$LOG_FILE"
+  if [ "$size" -gt "$LOG_LIMIT" ]; then
+    tmp="$LOG_FILE.tmp.$$"
+    if tail -c 262144 "$LOG_FILE" > "$tmp" 2>/dev/null; then
+      mv -f "$tmp" "$LOG_FILE"
+    else
+      rm -f "$tmp"
+    fi
+  fi
   return 0
 }
 
@@ -55,7 +62,13 @@ start() {
   mkdir -p "$RUN_DIR" "$WORKDIR"
   record "starting $CORE run -c $CONFIG -D $WORKDIR"
   cd "$WORKDIR" || { fail "cannot enter working directory: $WORKDIR"; return 1; }
-  nohup setsid "$CORE" run -c "$CONFIG" -D "$WORKDIR" --disable-color </dev/null >>"$LOG_FILE" 2>&1 &
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$CORE" run -c "$CONFIG" -D "$WORKDIR" --disable-color </dev/null >>"$LOG_FILE" 2>&1 &
+  elif command -v nohup >/dev/null 2>&1; then
+    nohup "$CORE" run -c "$CONFIG" -D "$WORKDIR" --disable-color </dev/null >>"$LOG_FILE" 2>&1 &
+  else
+    "$CORE" run -c "$CONFIG" -D "$WORKDIR" --disable-color </dev/null >>"$LOG_FILE" 2>&1 &
+  fi
   pid=$!
   echo "$pid" > "$PID_FILE"
   detach_cgroup "$pid"
@@ -88,12 +101,23 @@ stop() {
 }
 
 status() {
-  trim_log
   if pid=$(core_pid); then
-    set -- $(cat "/proc/$pid/stat" 2>/dev/null)
-    utime=${14}
-    stime=${15}
-    started=${22}
+    stat_line=$(cat "/proc/$pid/stat" 2>/dev/null)
+    if [ -z "$stat_line" ]; then
+      echo stopped
+      return 0
+    fi
+    rest=${stat_line##*) }
+    set -f
+    set -- $rest
+    set +f
+    utime=${12}
+    stime=${13}
+    started=${20}
+    if [ -z "$utime" ] || [ -z "$stime" ] || [ -z "$started" ]; then
+      echo stopped
+      return 0
+    fi
     rss=$(grep VmRSS "/proc/$pid/status" 2>/dev/null | tr -s ' \t' ' ' | cut -d ' ' -f 2)
     cpus=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
     echo "running $pid $started $(cut -d ' ' -f 1 /proc/uptime) $utime $stime ${rss:-0} ${cpus:-1}"

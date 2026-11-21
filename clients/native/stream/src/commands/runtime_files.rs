@@ -37,49 +37,58 @@ pub(super) fn normalize_path_for_client(path: &Path) -> String {
 }
 
 fn scan_dir(
-    dir: &Path,
-    depth: usize,
+    root: &Path,
     singbox_path: &mut Option<PathBuf>,
     config_path: &mut Option<PathBuf>,
 ) -> Result<(), String> {
-    if depth > MAX_SCAN_DEPTH || (singbox_path.is_some() && config_path.is_some()) {
-        return Ok(());
-    }
-
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map_err(|e| format!("Failed to read directory {}: {}", dir.display(), e))?
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .collect();
-    entries.sort();
-
-    for path in entries {
-        if singbox_path.is_some() && config_path.is_some() {
-            break;
+    let mut queue = std::collections::VecDeque::from([(root.to_path_buf(), 0usize)]);
+    while let Some((dir, depth)) = queue.pop_front() {
+        if depth > MAX_SCAN_DEPTH || (singbox_path.is_some() && config_path.is_some()) {
+            continue;
         }
-
-        if path.is_file() {
-            if config_path.is_none()
-                && path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.eq_ignore_ascii_case("config.json"))
-                    .unwrap_or(false)
-            {
-                *config_path = Some(path.clone());
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(e) if depth == 0 => {
+                return Err(format!("Failed to read directory {}: {}", dir.display(), e));
             }
+            Err(_) => continue,
+        };
+        let mut entries: Vec<PathBuf> = rd.filter_map(|entry| entry.ok().map(|e| e.path())).collect();
+        entries.sort();
 
-            if singbox_path.is_none() {
-                if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                    if is_singbox_binary(file_name) {
-                        *singbox_path = Some(path.clone());
+        for path in entries {
+            if singbox_path.is_some() && config_path.is_some() {
+                break;
+            }
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            let ft = meta.file_type();
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_file() {
+                if config_path.is_none()
+                    && path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.eq_ignore_ascii_case("config.json"))
+                        .unwrap_or(false)
+                {
+                    *config_path = Some(path.clone());
+                }
+                if singbox_path.is_none() {
+                    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                        if is_singbox_binary(file_name) {
+                            *singbox_path = Some(path.clone());
+                        }
                     }
                 }
+            } else if ft.is_dir() && depth < MAX_SCAN_DEPTH {
+                queue.push_back((path, depth + 1));
             }
-        } else if path.is_dir() {
-            scan_dir(&path, depth + 1, singbox_path, config_path)?;
         }
     }
-
     Ok(())
 }
 
@@ -117,7 +126,7 @@ pub async fn detect_runtime_files(
         let mut singbox_path = None;
         let mut config_path = None;
 
-        scan_dir(&base_dir, 0, &mut singbox_path, &mut config_path)?;
+        scan_dir(&base_dir, &mut singbox_path, &mut config_path)?;
         let found = singbox_path.is_some() && config_path.is_some();
 
         Ok(DetectedRuntimeFiles {

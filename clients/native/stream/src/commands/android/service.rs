@@ -198,14 +198,14 @@ fn env_content(core: &str, config: &str, working_dir: &str) -> String {
 }
 
 fn write_file_script(path: &str, content: &str, mode: &str) -> String {
+    let body = if content.ends_with('\n') {
+        content.to_string()
+    } else {
+        format!("{content}\n")
+    };
     format!(
-        "cat > {p} <<'__SINGBOARD_SCRIPT__'\n{content}__SINGBOARD_SCRIPT__\nchmod {mode} {p}\n",
+        "tmp={p}.tmp.$$\ncat > \"$tmp\" <<'__SINGBOARD_SCRIPT__'\n{body}__SINGBOARD_SCRIPT__\nchmod {mode} \"$tmp\"\nmv -f \"$tmp\" {p}\n",
         p = quote(path),
-        content = if content.ends_with('\n') {
-            content.to_string()
-        } else {
-            format!("{content}\n")
-        }
     )
 }
 
@@ -217,22 +217,55 @@ fn boot_hook_script() -> String {
     )
 }
 
+pub(crate) async fn installed_core_path() -> Option<String> {
+    let output = root::run_async_within(
+        format!(
+            "if [ -f {e} ]; then cat {e}; fi",
+            e = quote(&env_path())
+        ),
+        QUICK_TIMEOUT,
+    )
+    .await
+    .ok()?;
+    for line in output.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key == "CORE" {
+            let unquoted = value
+                .strip_prefix('\'')
+                .and_then(|v| v.strip_suffix('\''))
+                .map(|v| v.replace("'\\''", "'"))
+                .unwrap_or_else(|| value.to_string());
+            if !unquoted.is_empty() {
+                return Some(unquoted);
+            }
+        }
+    }
+    None
+}
+
 pub async fn service_install(
     singbox_path: String,
     config_path: String,
     working_dir: String,
 ) -> Result<(), String> {
     let working_dir = working_dir.trim().trim_end_matches('/');
-    if working_dir.is_empty() {
-        return Err("请先设置 sing-box 工作目录".into());
+    if working_dir.is_empty() || working_dir.chars().any(char::is_control) {
+        return Err("请先设置有效的 sing-box 工作目录".into());
     }
     let core = singbox_path.trim();
-    if core.is_empty() {
-        return Err("未在工作目录中找到 sing-box 核心".into());
+    if core.is_empty() || core.chars().any(char::is_control) {
+        return Err("未在工作目录中找到有效的 sing-box 核心".into());
     }
     let config = config_path.trim();
-    if config.is_empty() {
-        return Err("未在工作目录中找到配置文件".into());
+    if config.is_empty() || config.chars().any(char::is_control) {
+        return Err("未在工作目录中找到有效的配置文件".into());
+    }
+    if let Some(previous_core) = installed_core_path().await {
+        if previous_core != core && is_running().await {
+            stop().await?;
+        }
     }
     let mut script = format!(
         "set -e\nmkdir -p {home} {home}/run {home}/logs\n",
@@ -281,7 +314,7 @@ async fn sync_component() -> Result<String, String> {
     if service_current && boot_current {
         return Ok("ok".into());
     }
-    let mut update = String::new();
+    let mut update = String::from("set -e\n");
     if !service_current {
         update.push_str(&write_file_script(&script, &expected, "755"));
     }

@@ -31,10 +31,17 @@ impl Shell {
     }
 
     fn spawn_program(program: &str) -> Result<Self, String> {
-        let mut child = Command::new(program)
+        let mut command = Command::new(program);
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let mut child = command
             .spawn()
             .map_err(|e| format!("无法启动 su: {e}"))?;
         let stdin = child.stdin.take().ok_or("无法连接 su 输入")?;
@@ -107,6 +114,15 @@ impl Drop for Shell {
         let Some(mut child) = self.child.take() else {
             return;
         };
+        #[cfg(unix)]
+        {
+            let pgid = child.id() as libc::pid_t;
+            if pgid > 0 {
+                unsafe {
+                    libc::kill(-pgid, libc::SIGKILL);
+                }
+            }
+        }
         let _ = child.kill();
         std::thread::spawn(move || {
             let _ = child.wait();

@@ -225,7 +225,26 @@ fn cidr_matches(value: &str, query: &Query) -> bool {
     }
 }
 
+fn source_rule_applicable(rule: &Value, query: &Query) -> bool {
+    if is_logical(rule) {
+        return source_rules(rule)
+            .iter()
+            .any(|r| source_rule_applicable(r, query));
+    }
+    match query {
+        Query::Domain(_) => {
+            !listable(rule.get("domain")).is_empty()
+                || !listable(rule.get("domain_suffix")).is_empty()
+                || !listable(rule.get("domain_keyword")).is_empty()
+        }
+        Query::Ip(_) | Query::IpRange(..) => !listable(rule.get("ip_cidr")).is_empty(),
+    }
+}
+
 fn source_rule_matches(rule: &Value, query: &Query) -> bool {
+    if !source_rule_applicable(rule, query) {
+        return false;
+    }
     let result = if is_logical(rule) {
         let rules = source_rules(rule);
         let all = rule

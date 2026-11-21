@@ -14,7 +14,7 @@ pub async fn dns_records(dir: &Path, domain: String, record: String, server: Opt
     let mut answer = json!(network::lookup_dns(domain.to_owned(), record, server, servers).await?);
     if let Some(records) = answer["records"].as_array_mut() {
         for rec in records {
-            if geo_enabled && let Some(ip) = rec["ip"].as_str() {
+            if geo_enabled && let Some(ip) = rec["ip"].as_str() && public_ip(ip) {
                 rec["geo"] = json!(geo(ip).await.unwrap_or_default());
             }
         }
@@ -673,7 +673,7 @@ pub async fn run(
         }
         "exit_ip" => {
             let (direct, proxy) = tokio::join!(
-                network::fetch_url("http://myip.ipip.net".into(), None),
+                network::fetch_url_direct("http://myip.ipip.net".into(), None),
                 network::fetch_url("https://api.ip.sb/geoip".into(), None)
             );
             let proxy = proxy
@@ -715,6 +715,7 @@ pub async fn run(
                 );
                 if flag("geo")
                     && let Some(ip) = rec["ip"].as_str()
+                    && public_ip(ip)
                 {
                     line.push_str(&format!("  {}", geo(ip).await.unwrap_or_else(|e| e)));
                 }
@@ -916,7 +917,7 @@ pub async fn network_overview() -> Value {
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let domestic_fut = async {
-        match network::fetch_url(format!("http://myip.ipip.net?t={stamp}"), None).await {
+        match network::fetch_url_direct(format!("http://myip.ipip.net?t={stamp}"), None).await {
             Ok(text) => {
                 let (ip, location) = parse_ipipnet(&text);
                 if ip.is_empty() {

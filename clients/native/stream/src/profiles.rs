@@ -86,14 +86,58 @@ impl Profile {
     }
 }
 
+fn is_local_or_private_host(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(domain)) => {
+            let lower = domain.to_ascii_lowercase();
+            lower == "localhost" || lower.ends_with(".localhost")
+        }
+        Some(url::Host::Ipv4(ip)) => {
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_broadcast()
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+        }
+        None => true,
+    }
+}
+
 pub async fn download(url: &str) -> Result<String, String> {
-    let client = reqwest::Client::builder()
+    let initial = Url::parse(url).map_err(|_| "请输入有效的 HTTP(S) 订阅地址")?;
+    let initial_local = is_local_or_private_host(&initial);
+    let mut builder = reqwest::Client::builder()
         .user_agent("sing-box")
+        .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(45))
-        .build()
-        .map_err(err)?;
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() >= 10 {
+                return attempt.error("重定向次数过多");
+            }
+            let next = attempt.url();
+            if !matches!(next.scheme(), "http" | "https") {
+                return attempt.error("不支持的重定向协议");
+            }
+            if !initial_local && is_local_or_private_host(next) {
+                return attempt.error("拒绝重定向到本机或内网地址");
+            }
+            attempt.follow()
+        }));
+    builder = match crate::commands::network::get_system_proxy()
+        .and_then(|proxy| reqwest::Proxy::all(&proxy).ok())
+    {
+        Some(proxy) => builder.proxy(proxy),
+        None => builder.no_proxy(),
+    };
+    let client = builder.build().map_err(err)?;
     let mut response = client
-        .get(url)
+        .get(initial)
         .send()
         .await
         .map_err(|e| err(e.without_url()))?
@@ -146,11 +190,14 @@ impl Store {
             if uuid::Uuid::parse_str(&name.to_string_lossy()).is_err() {
                 continue;
             }
-            let profile: Profile =
-                serde_json::from_slice(&fs::read(entry.path().join("profile.json")).map_err(err)?)
-                    .map_err(err)?;
+            let Ok(bytes) = fs::read(entry.path().join("profile.json")) else {
+                continue;
+            };
+            let Ok(profile) = serde_json::from_slice::<Profile>(&bytes) else {
+                continue;
+            };
             if profile.id != name.to_string_lossy() {
-                return Err("订阅索引损坏".into());
+                continue;
             }
             out.push(profile);
         }
