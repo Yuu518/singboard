@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'config_page.dart';
@@ -107,14 +106,9 @@ class _ToolsPageState extends State<ToolsPage> {
           !await confirm(label, '确认执行「$label」？'))
         return;
       final dir = await configDirectory();
-      final servers = action == 'dns' && values['resolver'] == 'system'
-          ? await const MethodChannel('singboard/config')
-                .invokeListMethod<String>('dnsServers')
-          : null;
       final args = <String, dynamic>{
         'action': action,
         'values': values,
-        'servers': servers ?? <String>[],
       };
       var reply = await configRequest(dir, 'tool', args) as Map;
       if (!mounted) return;

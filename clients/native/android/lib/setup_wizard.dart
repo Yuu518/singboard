@@ -58,7 +58,6 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
       await configRequest(await configDirectory(), 'tool', {
         'action': 'skip_setup',
         'values': <String, String>{},
-        'servers': <String>[],
       });
       if (mounted) widget.onGoToSettings();
     } catch (e) {
@@ -93,12 +92,10 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
         await configRequest(dir, 'tool', {
           'action': 'root_enable',
           'values': {'workdir': workDir},
-          'servers': <String>[],
         });
         await configRequest(dir, 'tool', {
           'action': 'root_detect',
           'values': {'workdir': workDir},
-          'servers': <String>[],
         });
       }
       final apis = (widget.preferences['clashApis'] as List? ?? [])
@@ -115,7 +112,6 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
           'secret': apiSecret,
           'workdir': _rootMode ? workDir : '',
         },
-        'servers': <String>[],
       });
       if (mounted) widget.onCompleted();
     } catch (e) {

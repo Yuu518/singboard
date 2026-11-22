@@ -59,8 +59,6 @@ enum Command {
     Tool {
         action: String,
         values: crate::tools::Values,
-        #[serde(default)]
-        servers: Vec<String>,
         ticket: Option<String>,
     },
     Preferences,
@@ -72,7 +70,7 @@ enum Command {
     SetProxyGroupOpen { group: String, open: bool },
     UpdateProgress,
     CancelUpdate { ticket: String },
-    DnsLookup { domain: String, record: String, server: Option<String>, servers: Vec<String>, geo: bool },
+    DnsLookup { domain: String, record: String, server: Option<String>, geo: bool },
     RemoveDnsHistory { domain: String },
     SetDnsGeo { enabled: bool },
     DownloadUpdate {
@@ -540,12 +538,12 @@ pub async fn request(dir: PathBuf, input: &str) -> Result<Value, String> {
             Value::Null
         }
         Command::Tools=>json!(crate::tools::forms(&crate::settings::Settings::load(&dir)?)),
-        Command::Tool{action,values,servers,ticket}=>{
+        Command::Tool{action,values,ticket}=>{
             let reply=if action.starts_with("core_"){crate::core_actions::run(&dir,&action,&values,ticket.as_deref()).await?}
                 else if action.starts_with("root_"){root_action(&dir,&action,&values).await?}
                 else{
                     if action.starts_with("rules_"){root::set_enabled(prefs.native_root_enabled);}
-                    crate::tools::run(&dir,&action,&values,&servers).await?
+                    crate::tools::run(&dir,&action,&values).await?
                 };
             json!(reply)
         }
@@ -577,7 +575,7 @@ pub async fn request(dir: PathBuf, input: &str) -> Result<Value, String> {
             update_cancel().send_replace(ticket);
             Value::Null
         }
-        Command::DnsLookup { domain, record, server, servers, geo } => crate::tools::dns_records(&dir, domain, record, server, &servers, geo).await?,
+        Command::DnsLookup { domain, record, server, geo } => crate::tools::dns_records(&dir, domain, record, server, geo).await?,
         Command::RemoveDnsHistory { domain } => json!(crate::settings::Settings::dns_history(&dir, &domain, false)?),
         Command::SetDnsGeo { enabled } => {
             crate::settings::Settings::edit(&dir, |s| { s.dns_geo_enabled = enabled; Ok(()) })?;

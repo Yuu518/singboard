@@ -142,7 +142,7 @@ impl SetupWizard {
 
         let task = singboard_stream::runtime().spawn(async move {
             let dir = service::data_dir()?;
-            tools::run(&dir, "setup", &values, &[]).await
+            tools::run(&dir, "setup", &values).await
         });
         cx.spawn(async move |weak, cx| {
             let result = task.await.unwrap_or_else(|e| Err(e.to_string()));

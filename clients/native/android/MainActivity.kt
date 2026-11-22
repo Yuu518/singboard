@@ -67,14 +67,6 @@ class MainActivity : FlutterActivity() {
         methodChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "directory" -> result.success(filesDir.absolutePath)
-                "dnsServers" -> {
-                    val manager = getSystemService(android.net.ConnectivityManager::class.java)
-                    val servers = manager.getLinkProperties(manager.activeNetwork)?.dnsServers
-                        ?.filter { !it.isLinkLocalAddress }
-                        ?.mapNotNull { it.hostAddress?.substringBefore('%') }
-                        ?: emptyList()
-                    result.success(servers)
-                }
                 "version" -> result.success(packageManager.getPackageInfo(packageName, 0).versionName)
                 "installedApk" -> result.success(applicationInfo.sourceDir)
                 "openChangelog" -> {

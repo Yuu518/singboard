@@ -102,7 +102,7 @@ class _SettingsPageState extends State<SettingsPage>
   final _open = <String>{};
   final _busy = <String>{};
   final _messages = <String, String>{};
-  String _record = 'A', _resolver = 'system', _version = '';
+  String _record = 'A', _resolver = 'cloudflare', _version = '';
   late List<String> _dnsHistory = List<String>.from(
     widget.preferences['dnsHistory'] ?? [],
   );
@@ -430,7 +430,6 @@ class _SettingsPageState extends State<SettingsPage>
             ThemeMode.system => 'auto',
           },
         },
-        'servers': <String>[],
       });
       if (theme != null) widget.onThemeChanged(theme);
       await widget.onReload();
@@ -747,13 +746,9 @@ class _SettingsPageState extends State<SettingsPage>
     });
     try {
       final dir = await configDirectory();
-      final servers = action == 'dns' && values['resolver'] == 'system'
-          ? await _channel.invokeListMethod<String>('dnsServers')
-          : null;
       final args = <String, dynamic>{
         'action': action,
         'values': values,
-        'servers': servers ?? <String>[],
       };
       var reply = await configRequest(dir, 'tool', args) as Map;
       if (!mounted) return false;
@@ -1439,21 +1434,13 @@ class _SettingsPageState extends State<SettingsPage>
     try {
       final domain = _input('domain').text.trim();
       if (domain.isEmpty) throw StateError('请输入域名。');
-      final custom = _resolver == 'custom';
-      final server = custom ? _input('server').text.trim() : _resolver;
-      if (custom && server.isEmpty) throw StateError('请输入自定义解析器地址。');
-      final system = _resolver == 'system';
-      final servers = system
-          ? await _channel.invokeListMethod<String>('dnsServers')
-          : null;
       final result = await configRequest(
         await configDirectory(),
         'dns_lookup',
         {
           'domain': domain,
           'record': _record,
-          'server': system ? null : server,
-          'servers': servers ?? <String>[],
+          'server': _resolver,
           'geo': true,
         },
       );
@@ -1633,12 +1620,10 @@ class _SettingsPageState extends State<SettingsPage>
                         '解析器',
                         _resolver,
                         {
-                          'system': '本机 DNS',
-                          '8.8.8.8': 'Google (8.8.8.8)',
-                          '1.1.1.1': 'Cloudflare (1.1.1.1)',
-                          '223.5.5.5': 'AliDNS (223.5.5.5)',
-                          '119.29.29.29': 'DNSPod (119.29.29.29)',
-                          'custom': '自定义',
+                          'cloudflare': 'Cloudflare (DoH)',
+                          'google': 'Google (DoH)',
+                          'alidns': 'AliDNS (DoH)',
+                          'dnspod': 'DNSPod (DoH)',
                         },
                         (v) => setState(() => _resolver = v),
                         mono: true,
@@ -1649,17 +1634,6 @@ class _SettingsPageState extends State<SettingsPage>
                 ),
               ],
             ),
-            if (_resolver == 'custom') ...[
-              const SizedBox(height: 12),
-              Text('自定义解析器', style: TextStyle(fontSize: 12, color: c.muted)),
-              const SizedBox(height: 6),
-              _glassInput(
-                'server',
-                'IP 或 IP:端口',
-                mono: true,
-                onSubmitted: busy ? null : _lookup,
-              ),
-            ],
             if (_messages.containsKey('dns')) _note('dns'),
             if (answer != null) ...[
               const SizedBox(height: 12),
@@ -1751,11 +1725,7 @@ class _SettingsPageState extends State<SettingsPage>
                       ],
                       Divider(height: 16, thickness: 0.5, color: c.hairline),
                       Text(
-                        answer['source'] == 'custom'
-                            ? "指定 DNS · ${answer['server']}"
-                            : answer['source'] == 'fallback'
-                                ? "回退公共 DNS · ${answer['server']}"
-                                : '本机当前 DNS',
+                        "DoH · ${answer['server'] ?? ''}",
                         style: TextStyle(fontSize: 12, color: c.muted),
                       ),
                     ],

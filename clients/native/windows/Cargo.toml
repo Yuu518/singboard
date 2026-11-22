@@ -13,7 +13,7 @@ embed-resource = "3"
 
 [dependencies]
 zip = { version = "4", default-features = false, features = ["deflate"] }
-reqwest = { version = "0.12", default-features = false, features = ["json","rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
 anyhow = "1"
 gpui = { workspace = true, features = ["windows-manifest-provided-by-host"] }
 gpui_platform = { package = "gpui-fast-platform", version = "=0.1.17", default-features = false }

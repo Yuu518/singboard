@@ -11,7 +11,6 @@ crate-type = ["rlib", "cdylib"]
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 base64 = "0.22"
 flate2 = "1"
-hickory-resolver = { version = "0.26", default-features = false, features = ["tokio"] }
 semver = "1"
 sha2 = "0.10"
 jsonc-parser = { version = "0.34", features = ["serde"] }
@@ -31,6 +30,6 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
-hickory-resolver = { version = "0.26", features = ["tokio","system-config"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
 tokio = { version = "1", features = ["process"] }

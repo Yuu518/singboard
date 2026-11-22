@@ -252,7 +252,7 @@ impl Workspace {
                     .await?;
                     Ok(singboard_stream::tools::Reply::text("服务已卸载"))
                 }
-                _ => singboard_stream::tools::run(&dir, action, &values, &[]).await,
+                _ => singboard_stream::tools::run(&dir, action, &values).await,
             }
         });
         cx.spawn(async move |weak, cx| {
@@ -314,7 +314,6 @@ impl Workspace {
         domain: String,
         record: String,
         resolver: String,
-        custom_server: String,
         geo_enabled: bool,
         cx: &mut Context<Self>,
     ) {
@@ -330,22 +329,7 @@ impl Workspace {
             cx.notify();
             return;
         }
-        let server = match resolver.as_str() {
-            "system" | "" => None,
-            "custom" => {
-                let s = custom_server.trim().to_owned();
-                if s.is_empty() {
-                    self.settings_layout.pending.remove("dns");
-                    self.settings_layout
-                        .results
-                        .insert("dns", "请输入自定义解析器地址。".into());
-                    cx.notify();
-                    return;
-                }
-                Some(s)
-            }
-            s => Some(s.to_owned()),
-        };
+        let server = (!resolver.trim().is_empty()).then_some(resolver);
         self.settings_layout.results.remove("dns");
         self.settings_layout.dns_view = None;
         self.settings_layout.dns_history_open = false;
@@ -354,22 +338,14 @@ impl Workspace {
                 &crate::service::data_dir()?,
                 domain,
                 record,
-                server.clone(),
-                &[],
+                server,
                 geo_enabled,
             )
             .await?;
-            let source_label = if val["source"].as_str() == Some("custom") {
-                format!(
-                    "指定 DNS: {}",
-                    val["server"]
-                        .as_str()
-                        .or(server.as_deref())
-                        .unwrap_or("自定义")
-                )
-            } else {
-                "本机当前 DNS".into()
-            };
+            let source_label = format!(
+                "DoH · {}",
+                val["server"].as_str().unwrap_or("DoH")
+            );
             let mut rows = Vec::new();
             for rec in val["records"].as_array().into_iter().flatten() {
                 rows.push(DnsRow {
@@ -1284,25 +1260,21 @@ impl Workspace {
             &self.settings_layout.dns_record
         }
         .to_owned();
-        let resolver = if self.settings_layout.dns_server.is_empty() {
-            "system"
+        let resolver = if singboard_stream::commands::network::DOH_PROVIDERS
+            .iter()
+            .any(|p| p.id == self.settings_layout.dns_server)
+        {
+            self.settings_layout.dns_server.clone()
         } else {
-            &self.settings_layout.dns_server
-        }
-        .to_owned();
+            singboard_stream::commands::network::DEFAULT_DOH_PROVIDER.to_owned()
+        };
         let records = ["A", "AAAA", "CNAME"]
             .map(|s| (s.into(), s.into()))
             .to_vec();
-        let servers = [
-            ("system", "本机 DNS"),
-            ("8.8.8.8", "Google"),
-            ("1.1.1.1", "Cloudflare"),
-            ("223.5.5.5", "AliDNS"),
-            ("119.29.29.29", "DNSPod"),
-            ("custom", "自定义"),
-        ]
-        .map(|(v, l)| (v.into(), l.into()))
-        .to_vec();
+        let servers = singboard_stream::commands::network::DOH_PROVIDERS
+            .iter()
+            .map(|p| (p.id.into(), p.label.into()))
+            .collect::<Vec<_>>();
         let wide = width >= 620.;
         let label = |s: &'static str| {
             div()
@@ -1366,26 +1338,17 @@ impl Workspace {
                         cx,
                     )),
             );
-        if resolver == "custom" {
-            let server = self.field("server", "", "IP 或 IP:端口", w, cx);
-            controls = controls.child(
-                label("自定义")
-                    .when(wide, |s| s.w(px(130.)).flex_none())
-                    .child(glass_input("dns-custom-input", &server, true, p)),
-            );
-        }
         let busy = self.settings_layout.pending.contains("dns");
         let rec_submit = record.clone();
         let res_submit = resolver.clone();
         controls = controls.child(
             action_btn("lookup", if busy { "查询中…" } else { "查询" }, busy, p).when(!busy, |b| {
                 b.on_click(cx.listener(move |v, _, _, cx| {
-                    let vals = v.values(&["domain", "server"], cx);
+                    let vals = v.values(&["domain"], cx);
                     v.run_dns_query(
                         vals.get("domain").cloned().unwrap_or_default(),
                         rec_submit.clone(),
                         res_submit.clone(),
-                        vals.get("server").cloned().unwrap_or_default(),
                         true,
                         cx,
                     );

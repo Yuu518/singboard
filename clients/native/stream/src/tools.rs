@@ -9,9 +9,9 @@ use std::{collections::BTreeMap, path::Path};
 
 pub type Values = BTreeMap<String, String>;
 
-pub async fn dns_records(dir: &Path, domain: String, record: String, server: Option<String>, servers: &[String], geo_enabled: bool) -> Result<Value, String> {
+pub async fn dns_records(dir: &Path, domain: String, record: String, server: Option<String>, geo_enabled: bool) -> Result<Value, String> {
     let domain = domain.trim();
-    let mut answer = json!(network::lookup_dns(domain.to_owned(), record, server, servers).await?);
+    let mut answer = json!(network::lookup_dns(domain.to_owned(), record, server).await?);
     if let Some(records) = answer["records"].as_array_mut() {
         for rec in records {
             if geo_enabled && let Some(ip) = rec["ip"].as_str() && public_ip(ip) {
@@ -134,16 +134,14 @@ pub fn forms(p: &Settings) -> Vec<Form> {
                 choice(
                     "resolver",
                     "解析器",
-                    "system",
+                    network::DEFAULT_DOH_PROVIDER,
                     &[
-                        ("system", "系统 DNS"),
-                        ("1.1.1.1", "Cloudflare"),
-                        ("8.8.8.8", "Google"),
-                        ("223.5.5.5", "阿里 DNS"),
-                        ("custom", "自定义"),
+                        ("cloudflare", "Cloudflare (DoH)"),
+                        ("google", "Google (DoH)"),
+                        ("alidns", "AliDNS (DoH)"),
+                        ("dnspod", "DNSPod (DoH)"),
                     ],
                 ),
-                field("server", "自定义 DNS 地址或 IP:端口", ""),
                 toggle("geo", "通过 ip.sb 查询 IP 归属地", false),
             ],
             actions: vec![("dns", "查询")],
@@ -381,7 +379,6 @@ pub async fn run(
     dir: &Path,
     action: &str,
     v: &Values,
-    servers: &[String],
 ) -> Result<Reply, String> {
     let get = |key: &str| value(v, key);
     let flag = |key| get(key) == "on";
@@ -695,17 +692,14 @@ pub async fn run(
             )))
         }
         "dns" => {
-            let server = match get("resolver") {
-                "system" => None,
-                "custom" if get("server").trim().is_empty() => {
-                    return Err("请输入自定义解析器地址".into());
-                }
-                "custom" => Some(get("server").into()),
-                s => Some(s.into()),
+            let resolver = get("resolver").trim();
+            let server = if resolver.is_empty() {
+                None
+            } else {
+                Some(resolver.to_owned())
             };
             let answer = json!(
-                network::lookup_dns(get("domain").into(), get("record").into(), server, servers)
-                    .await?
+                network::lookup_dns(get("domain").into(), get("record").into(), server).await?
             );
             let mut lines = vec![];
             for rec in answer["records"].as_array().into_iter().flatten() {
@@ -967,7 +961,7 @@ mod tests {
     fn skipped_setup_stays_completed_after_reopening_preferences() {
         crate::runtime().block_on(async {
             let dir = tempfile::tempdir().unwrap();
-            run(dir.path(), "skip_setup", &Values::new(), &[]).await.unwrap();
+            run(dir.path(), "skip_setup", &Values::new()).await.unwrap();
             assert!(Settings::load(dir.path()).unwrap().setup_completed);
         });
     }
@@ -1001,13 +995,13 @@ mod tests {
                 ("channel", "stable"),
                 ("mirror", "https://example.org"),
             ]);
-            run(dir.path(), "update_preferences", &v, &[])
+            run(dir.path(), "update_preferences", &v)
                 .await
                 .unwrap();
             v.insert("channel".into(), "testing".into());
             v.insert("mirror".into(), "invalid".into());
             assert!(
-                run(dir.path(), "update_preferences", &v, &[])
+                run(dir.path(), "update_preferences", &v)
                     .await
                     .is_err()
             );
@@ -1028,29 +1022,28 @@ mod tests {
                 ("url", "http://127.0.0.1:9090"),
                 ("secret", "old"),
             ]);
-            run(dir.path(), "save_api", &api, &[]).await.unwrap();
+            run(dir.path(), "save_api", &api).await.unwrap();
             let old = Settings::load(dir.path()).unwrap().active_clash_api_id;
             let mut second = api.clone();
             second.insert("secret".into(), "new".into());
-            run(dir.path(), "add_api", &second, &[]).await.unwrap();
+            run(dir.path(), "add_api", &second).await.unwrap();
             assert_eq!(
                 Settings::load(dir.path()).unwrap().active().unwrap().secret,
                 "new"
             );
             let values = values(&[("id", &old)]);
-            run(dir.path(), "switch_api", &values, &[]).await.unwrap();
+            run(dir.path(), "switch_api", &values).await.unwrap();
             assert_eq!(
                 Settings::load(dir.path()).unwrap().active().unwrap().secret,
                 "old"
             );
-            run(dir.path(), "delete_api", &values, &[]).await.unwrap();
+            run(dir.path(), "delete_api", &values).await.unwrap();
             let id = Settings::load(dir.path()).unwrap().active_clash_api_id;
             assert!(
                 run(
                     dir.path(),
                     "delete_api",
                     &BTreeMap::from([("id".into(), id)]),
-                    &[]
                 )
                 .await
                 .is_err()
@@ -1058,36 +1051,17 @@ mod tests {
         })
     }
     #[test]
-    fn query_a_record_through_a_custom_local_resolver() {
+    fn dns_tool_rejects_system_and_custom_resolvers() {
         crate::runtime().block_on(async {
-            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-            let server = socket.local_addr().unwrap().to_string();
-            let responder = tokio::spawn(async move {
-                let mut bytes = [0u8; 512];
-                let (n, peer) = socket.recv_from(&mut bytes).await.unwrap();
-                let end = 12 + bytes[12..n].iter().position(|b| *b == 0).unwrap() + 5;
-                let mut answer = bytes[..end].to_vec();
-                answer[2..12].copy_from_slice(&[0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0]);
-                answer
-                    .extend_from_slice(&[0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 0, 2, 42]);
-                socket.send_to(&answer, peer).await.unwrap();
-            });
-            let input = values(&[
-                ("domain", "sample.test"),
-                ("record", "A"),
-                ("resolver", "custom"),
-                ("server", &server),
-            ]);
             let dir = tempfile::tempdir().unwrap();
-            let reply = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                run(dir.path(), "dns", &input, &[]),
-            )
-            .await
-            .unwrap()
-            .unwrap();
-            responder.await.unwrap();
-            assert!(reply.text.contains("192.0.2.42") && reply.text.contains("TTL 60"));
+            for resolver in ["system", "custom", "8.8.8.8"] {
+                let input = values(&[
+                    ("domain", "sample.test"),
+                    ("record", "A"),
+                    ("resolver", resolver),
+                ]);
+                assert!(run(dir.path(), "dns", &input).await.is_err());
+            }
         })
     }
     #[test]
