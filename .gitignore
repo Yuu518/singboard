@@ -1,5 +1,9 @@
 dist/
+release/
 .dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
 build/
 
 # Logs
@@ -9,14 +13,19 @@ build/
 .env
 .env.*
 !.env.example
+*.jks
+*.keystore
+*.pfx
 
 # Rust
 target/
+**/*.rs.bk
 
 # OS / Editor
 .DS_Store
 Thumbs.db
 Desktop.ini
+*.iml
 .idea/
 .vscode/
 .claude/
