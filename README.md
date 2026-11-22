@@ -1,6 +1,6 @@
 # Singboard
 
-`Singboard` is a native sing-box dashboard with a shared Rust Clash API core (`singboard-stream`). One repository ships two native apps:
+`Singboard` is a native sing-box dashboard with a shared Rust Clash API core (`singboard-core`). One repository ships two native apps:
 
 - **Windows panel** (`GPUI-Fast` + `Rust`): Clash API visualization, config profile management, Windows service control, and core/panel updates.
 - **Android app** (`Flutter` + `Rust` FFI): a remote panel for any reachable Clash API, which can also run a local core on rooted devices.
@@ -113,7 +113,7 @@
 - **Overview** (opens first): traffic wave, connection/memory trends, exit IPs, site latencies, and connection topology
   - Root mode adds the core version, restart and power buttons, the core process's CPU usage and resident memory, and asks for a working directory when none is set
   - Remote mode shows the endpoint name, and points to the Clash API settings when the core cannot be reached
-- **Proxies, Connections, Logs, Rules**: full native Flutter pages powered by `singboard-stream`. Each page shows a clear state when the core is stopped, the Clash API is unreachable, or the secret is wrong
+- **Proxies, Connections, Logs, Rules**: full native Flutter pages powered by `singboard-core`. Each page shows a clear state when the core is stopped, the Clash API is unreachable, or the secret is wrong
 - **Config** (root mode, from Settings):
   - Manage remote sing-box JSON subscriptions (with optional auto-update) and edit local or root config files
   - Whole-file or top-level module JSON/JSONC editing, formatting, `sing-box check` validation, and `.bak` restore
@@ -166,7 +166,7 @@ Each time the app starts the core, it rewrites the service script with the detec
 
 ## Tech Stack
 
-- Shared core: `Rust` (`singboard-stream`)
+- Shared core: `Rust` (`singboard-core`)
 - Windows UI: `Rust`, `GPUI-Fast`, `gpui-component` (with Windows Service integration)
 - Android UI: `Flutter` (`Dart` + Rust FFI), remote panel plus root mode
 
@@ -187,16 +187,16 @@ Each time the app starts the core, it rewrites the service script with the detec
 Build the Windows app:
 
 ```powershell
-pwsh clients/native/build.ps1 -Platform Windows
+pwsh scripts/build.ps1 -Platform Windows
 ```
 
 Build the Android APKs:
 
 ```powershell
-pwsh clients/native/build.ps1 -Platform Android
+pwsh scripts/build.ps1 -Platform Android
 ```
 
-Outputs are written to `dist/native/`:
+Outputs are written to `dist/`:
 
 - Windows writes `singboard.exe` by default, or `singboard-windows-x64.exe` when `-ReleaseAssets` is passed.
 - Android writes `singboard-arm64-v8a.apk` and `singboard-armeabi-v7a.apk`. Release signing uses `SINGBOARD_ANDROID_KEYSTORE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` (required with `-ReleaseAssets`).
@@ -205,7 +205,7 @@ Outputs are written to `dist/native/`:
 The Windows build produces one self-contained executable with the service host embedded.
 
 - **Service host**
-  - It is a standalone crate (`clients/native/service-host/`), embedded into `singboard.exe` at build time.
+  - It is a standalone crate (`crates/service-host/`), embedded into `singboard.exe` at build time.
   - An elevated install creates `%ProgramFiles%\singboard-service\` and places there:
     - `singboard.service`
     - Approved copies of the core, its adjacent DLLs and the configuration
@@ -218,8 +218,8 @@ The Windows build produces one self-contained executable with the service host e
   - Existing services are migrated through the startup elevation request.
   - A change in the service-host version also requests a component refresh.
 - **Building the helper**
-  - `clients/native/build.ps1 -Platform Windows` builds `singboard-service` first and passes `SINGBOARD_SERVICE_HOST` when compiling `singboard-gpui`.
-  - If you build Rust directly, first build `singboard-service` in release mode from `clients/native/` and set `SINGBOARD_SERVICE_HOST` to the resulting executable.
+  - `scripts/build.ps1 -Platform Windows` builds `singboard-service` first and passes `SINGBOARD_SERVICE_HOST` when compiling `singboard-gpui`.
+  - If you build Rust directly, first build `singboard-service` in release mode from the repository root and set `SINGBOARD_SERVICE_HOST` to the resulting executable.
 
 ## Releases
 
@@ -247,14 +247,16 @@ Android APKs are built only when all four `ANDROID_*` secrets are set. Without t
 .
 ├─ .github/workflows/
 │  └─ build.yml           # Windows and Android CI build & release workflow
-└─ clients/native/
-   ├─ Cargo.toml          # Rust workspace (stream, windows, service-host)
-   ├─ build.ps1           # Local Windows and Android build script
-   ├─ stream/             # Shared Rust Clash API, commands, root shell, Android scripts
-   ├─ windows/            # Windows GPUI-Fast client, icons, manifest and service integration
+├─ Cargo.toml             # Rust workspace (core, windows, service-host)
+├─ scripts/
+│  └─ build.ps1           # Local Windows and Android build script
+├─ apps/
+│  ├─ windows/            # Windows GPUI-Fast client, resources and service integration
+│  └─ android/            # Android Flutter app, shaders, icons and Kotlin host
+└─ crates/
+   ├─ core/               # Shared Rust Clash API, commands, root shell, Android scripts
    ├─ service-host/       # Windows service host, embedded into singboard.exe
-   ├─ android/            # Android Flutter app, shaders, icons and Kotlin host
-   └─ compat/gpui-pre/    # GPUI compatibility patch crate
+   └─ gpui-pre/           # GPUI compatibility patch crate
 ```
 
 ## Configuration and Data

@@ -79,7 +79,6 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2.9.2
         with:
-          workspaces: clients/native -> target
           env-vars: CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS
           cache-on-failure: true
 
@@ -131,10 +130,10 @@ jobs:
       - name: Build service host
         shell: pwsh
         run: |
-          cargo build --locked --profile windows-release --target x86_64-pc-windows-msvc --manifest-path clients/native/Cargo.toml -p singboard-service
+          cargo build --locked --profile windows-release --target x86_64-pc-windows-msvc -p singboard-service
           if ($LASTEXITCODE -ne 0) { throw "building singboard-service.exe failed" }
           $hostExe = Join-Path $env:RUNNER_TEMP "singboard-service.exe"
-          Copy-Item -LiteralPath clients/native/target/x86_64-pc-windows-msvc/windows-release/singboard-service.exe -Destination $hostExe -Force
+          Copy-Item -LiteralPath target/x86_64-pc-windows-msvc/windows-release/singboard-service.exe -Destination $hostExe -Force
           if ($env:CERT_THUMBPRINT) {
             & $env:SIGNTOOL sign /sha1 $env:CERT_THUMBPRINT /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com $hostExe
             if ($LASTEXITCODE -ne 0) { throw "signing singboard-service.exe failed" }
@@ -145,10 +144,10 @@ jobs:
         shell: pwsh
         run: |
           $env:SINGBOARD_RELEASE_VERSION = $env:APP_VERSION
-          cargo build --locked --profile windows-release --target x86_64-pc-windows-msvc --manifest-path clients/native/Cargo.toml -p singboard-gpui
+          cargo build --locked --profile windows-release --target x86_64-pc-windows-msvc -p singboard-gpui
           if ($LASTEXITCODE -ne 0) { throw "building singboard.exe failed" }
           New-Item -ItemType Directory -Force release | Out-Null
-          Copy-Item -LiteralPath clients/native/target/x86_64-pc-windows-msvc/windows-release/singboard.exe -Destination release/singboard-windows-x64.exe
+          Copy-Item -LiteralPath target/x86_64-pc-windows-msvc/windows-release/singboard.exe -Destination release/singboard-windows-x64.exe
 
       - name: Sign application
         if: env.CERT_THUMBPRINT != ''
@@ -158,7 +157,7 @@ jobs:
           & $env:SIGNTOOL verify /pa $serviceHost.FullName
           if ($LASTEXITCODE -ne 0) { throw "singboard-service.exe lost its signature during the build" }
           $hostHash = (Get-FileHash $serviceHost.FullName -Algorithm SHA256).Hash
-          $embedded = Get-ChildItem clients/native/target/x86_64-pc-windows-msvc/windows-release/build -Recurse -File -Filter singboard.service |
+          $embedded = Get-ChildItem target/x86_64-pc-windows-msvc/windows-release/build -Recurse -File -Filter singboard.service |
             Where-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash -eq $hostHash }
           if (-not $embedded) { throw "no embedded singboard.service matches the signed singboard-service.exe" }
 
@@ -237,7 +236,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ matrix.abi }}-${{ hashFiles('clients/native/android/pubspec.lock') }}
+          key: gradle-${{ runner.os }}-${{ matrix.abi }}-${{ hashFiles('apps/android/pubspec.lock') }}
           restore-keys: |
             gradle-${{ runner.os }}-${{ matrix.abi }}-
             gradle-${{ runner.os }}-
@@ -272,12 +271,11 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2.9.2
         with:
-          workspaces: clients/native -> target
           key: ${{ matrix.rust-target }}
           env-vars: NDK_HOME
           cache-on-failure: true
 
-      - name: Build Rust stream library
+      - name: Build Rust core library
         run: |
           bin="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           compiler="$bin/${{ matrix.clang }}26-clang"
@@ -287,7 +285,7 @@ jobs:
           export "CC_${key}=$compiler"
           export "AR_${key}=$bin/llvm-ar"
           export SINGBOARD_RELEASE_VERSION="$APP_VERSION"
-          cargo build --locked --release --manifest-path clients/native/Cargo.toml -p singboard-stream --target "${{ matrix.rust-target }}"
+          cargo build --locked --release -p singboard-core --target "${{ matrix.rust-target }}"
 
       - name: Build and sign APK
         env:
@@ -297,24 +295,24 @@ jobs:
           stage="$RUNNER_TEMP/android-app"
           rm -rf "$stage"
           flutter create --no-pub --empty --platforms=android --org io.github.yuu518 --project-name singboard_native "$stage"
-          cp clients/native/android/pubspec.yaml clients/native/android/pubspec.lock "$stage/"
-          cp clients/native/android/lib/*.dart "$stage/lib/"
-          cp -r clients/native/android/assets "$stage/"
-          cp clients/native/android/AndroidManifest.xml "$stage/android/app/src/main/"
+          cp apps/android/pubspec.yaml apps/android/pubspec.lock "$stage/"
+          cp apps/android/lib/*.dart "$stage/lib/"
+          cp -r apps/android/assets "$stage/"
+          cp apps/android/host/AndroidManifest.xml "$stage/android/app/src/main/"
           mkdir -p "$stage/android/app/src/main/res/xml"
-          cp clients/native/android/update_paths.xml "$stage/android/app/src/main/res/xml/"
+          cp apps/android/host/update_paths.xml "$stage/android/app/src/main/res/xml/"
           rm -rf "$stage/android/app/src/main/kotlin"
           mkdir -p "$stage/android/app/src/main/kotlin/io/github/Yuu518/singboard"
-          cp clients/native/android/MainActivity.kt "$stage/android/app/src/main/kotlin/io/github/Yuu518/singboard/MainActivity.kt"
+          cp apps/android/host/MainActivity.kt "$stage/android/app/src/main/kotlin/io/github/Yuu518/singboard/MainActivity.kt"
           rm -rf "$stage/android/app/src/main/res/mipmap-anydpi-v26"
-          cp -r clients/native/android/res/. "$stage/android/app/src/main/res/"
+          cp -r apps/android/host/res/. "$stage/android/app/src/main/res/"
           ndk_version=$(basename "$NDK_HOME")
           sed -i -E "s/namespace = \"[^\"]+\"/namespace = \"io.github.Yuu518.singboard\"/; s/applicationId = \"[^\"]+\"/applicationId = \"io.github.Yuu518.singboard\"/; s/minSdk = flutter\.minSdkVersion/minSdk = 26/; s/ndkVersion = flutter\.ndkVersion/ndkVersion = \"$ndk_version\"/" "$stage/android/app/build.gradle.kts"
           grep -q 'namespace = "io.github.Yuu518.singboard"' "$stage/android/app/build.gradle.kts"
           grep -q 'applicationId = "io.github.Yuu518.singboard"' "$stage/android/app/build.gradle.kts"
           grep -q 'minSdk = 26' "$stage/android/app/build.gradle.kts"
           mkdir -p "$stage/android/app/src/main/jniLibs/${{ matrix.abi }}"
-          cp "clients/native/target/${{ matrix.rust-target }}/release/libsingboard_stream.so" "$stage/android/app/src/main/jniLibs/${{ matrix.abi }}/"
+          cp "target/${{ matrix.rust-target }}/release/libsingboard_core.so" "$stage/android/app/src/main/jniLibs/${{ matrix.abi }}/"
 
           (
             cd "$stage"
