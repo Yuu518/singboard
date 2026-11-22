@@ -179,6 +179,11 @@ class _GlassBottomNavState extends State<GlassBottomNav>
     final c = SingboardColors.of(context), scope = GlassScope.of(context);
     final inset = MediaQuery.viewPaddingOf(context);
     final margin = MediaQuery.sizeOf(context).width < 360 ? 12.0 : 24.0;
+    final barAlpha = scope.alpha(
+      0.08 + 0.22 * scope.tint + 0.40 * scope.tint * scope.tint,
+      .58,
+    );
+    final navSel = scope.navSelectionStyle(c, barAlpha: barAlpha);
     Widget row(bool accent) => Padding(
       padding: const EdgeInsets.all(4),
       child: Row(
@@ -194,7 +199,7 @@ class _GlassBottomNavState extends State<GlassBottomNav>
                       widget.items[i].icon,
                       size: 22,
                       color: accent
-                          ? c.selectionInk
+                          ? navSel.ink
                           : c.ink.withValues(alpha: .72),
                     ),
                     const SizedBox(height: 1),
@@ -206,7 +211,7 @@ class _GlassBottomNavState extends State<GlassBottomNav>
                         fontSize: 12,
                         height: 1.25,
                         color: accent
-                            ? c.selectionInk
+                            ? navSel.ink
                             : c.ink.withValues(alpha: .72),
                         fontWeight: accent || scope.tint < .5
                             ? FontWeight.w600
@@ -315,12 +320,7 @@ class _GlassBottomNavState extends State<GlassBottomNav>
                               DecoratedBox(
                                 decoration: BoxDecoration(
                                   color: c.glassRgb.withValues(
-                                    alpha: scope.alpha(
-                                      0.08 +
-                                          0.22 * scope.tint +
-                                          0.40 * scope.tint * scope.tint,
-                                      .58,
-                                    ),
+                                    alpha: barAlpha,
                                   ),
                                   image: scope.grain,
                                   borderRadius: BorderRadius.circular(32),
@@ -377,16 +377,18 @@ class _GlassBottomNavState extends State<GlassBottomNav>
                                     child: DecoratedBox(
                                       decoration: BoxDecoration(
                                         color: Color.lerp(
-                                          c.primary.withValues(alpha: .15),
-                                          Colors.black.withValues(alpha: .03),
+                                          navSel.bg,
+                                          Colors.black.withValues(alpha: .04),
                                           press,
                                         ),
                                         borderRadius: BorderRadius.circular(99),
                                         border: Border.all(
                                           width: 1,
-                                          color: Colors.white.withValues(
-                                            alpha: .45 * press,
-                                          ),
+                                          color: Color.lerp(
+                                            navSel.border,
+                                            Colors.white.withValues(alpha: .45),
+                                            press,
+                                          )!,
                                         ),
                                       ),
                                     ),

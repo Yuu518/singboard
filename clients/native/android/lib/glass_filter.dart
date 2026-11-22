@@ -20,6 +20,7 @@ class GlassEnvironment extends StatefulWidget {
 class _GlassEnvironmentState extends State<GlassEnvironment> {
   bool _lightConflict = false, _darkConflict = false;
   bool? _lightToneLight, _darkToneLight;
+  Color? _lightNavRgb, _darkNavRgb;
   int _revision = 0;
   ui.Image? _sourceImage;
   ui.Image? _blurredImage;
@@ -206,6 +207,7 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
     final revision = ++_revision, path = widget.wallpaperPath;
     _lightConflict = _darkConflict = false;
     _lightToneLight = _darkToneLight = null;
+    _lightNavRgb = _darkNavRgb = null;
     if (path == null || path.isEmpty) {
       final oldSource = _sourceImage;
       final oldBlur = _blurredImage;
@@ -266,8 +268,39 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
         return luma / (bytes.lengthInBytes / 4);
       }
 
+      Color sampleBottom(double veil, double alpha) {
+        final w = image!.width, h = image.height;
+        final x0 = (w * 10 ~/ 100).clamp(0, w - 1);
+        final x1 = (w * 90 ~/ 100).clamp(x0 + 1, w);
+        final y0 = (h * 82 ~/ 100).clamp(0, h - 1);
+        var sr = 0.0, sg = 0.0, sb = 0.0;
+        var count = 0;
+        for (var y = y0; y < h; y++) {
+          for (var x = x0; x < x1; x++) {
+            final idx = (y * w + x) * 4;
+            if (idx + 2 >= bytes.lengthInBytes) continue;
+            sr += bytes.getUint8(idx) * (1 - alpha) + veil * alpha;
+            sg += bytes.getUint8(idx + 1) * (1 - alpha) + veil * alpha;
+            sb += bytes.getUint8(idx + 2) * (1 - alpha) + veil * alpha;
+            count++;
+          }
+        }
+        if (count == 0) {
+          final v = veil.round().clamp(0, 255);
+          return Color.fromARGB(255, v, v, v);
+        }
+        return Color.fromARGB(
+          255,
+          (sr / count).round().clamp(0, 255),
+          (sg / count).round().clamp(0, 255),
+          (sb / count).round().clamp(0, 255),
+        );
+      }
+
       final lightLuma = luminance(255, .28);
       final darkLuma = luminance(0, .38);
+      final lightNav = sampleBottom(255, .28);
+      final darkNav = sampleBottom(0, .38);
       final oldSource = _sourceImage;
       _sourceImage = decodedSource;
       _builtDark = null;
@@ -279,6 +312,8 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
         _darkConflict = darkLuma > .179;
         _lightToneLight = lightLuma > .179;
         _darkToneLight = darkLuma > .179;
+        _lightNavRgb = lightNav;
+        _darkNavRgb = darkNav;
       });
       _scheduleBlur();
     } on Exception {
@@ -302,6 +337,7 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
       wallpaperRevision: widget.wallpaperRevision,
       contrastingBackdrop: dark ? _darkConflict : _lightConflict,
       backdropToneLight: dark ? _darkToneLight : _lightToneLight,
+      navBackdropRgb: dark ? _darkNavRgb : _lightNavRgb,
       blurredWallpaper: _blurredImage,
       child: widget.child,
     );

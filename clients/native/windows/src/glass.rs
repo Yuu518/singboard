@@ -167,6 +167,7 @@ pub struct Wallpaper {
     thumb: Option<Arc<RenderImage>>,
     tone_light: bool,
     contrast: bool,
+    nav_backdrop: [f32; 3],
     material_key: Option<(u16, u16)>,
 }
 
@@ -230,6 +231,7 @@ impl Wallpaper {
             thumb: None,
             tone_light: true,
             contrast: false,
+            nav_backdrop: [0.91, 0.94, 0.99],
             material_key: None,
         };
         wallpaper.set_dark(false);
@@ -262,8 +264,9 @@ impl Wallpaper {
         };
         self.material_key = None;
         self.prewarmed = None;
+        let sample = image::imageops::thumbnail(&self.clear, 32, 32);
+        self.nav_backdrop = sample_region_rgb(&sample, 0, (sample.width() * 22 / 100).max(1), sample.height() * 8 / 100, (sample.height() * 65 / 100).max(1));
         if self.custom {
-            let sample = image::imageops::thumbnail(&self.clear, 32, 32);
             let linear = |v: u8| {
                 let c = f32::from(v) / 255.;
                 if c <= 0.04045 {
@@ -327,6 +330,7 @@ pub struct CardBackdrop {
     custom: bool,
     tone_light: bool,
     contrast: bool,
+    nav_backdrop: [f32; 3],
     tint: f32,
 }
 
@@ -365,6 +369,7 @@ impl crate::Overview {
                 custom: self.wallpaper.custom,
                 tone_light: self.wallpaper.tone_light,
                 contrast: self.wallpaper.contrast,
+                nav_backdrop: self.wallpaper.nav_backdrop,
                 tint,
                 image: initial,
             });
@@ -379,6 +384,7 @@ impl crate::Overview {
                 || b.custom != self.wallpaper.custom
                 || b.tone_light != self.wallpaper.tone_light
                 || b.contrast != self.wallpaper.contrast
+                || b.nav_backdrop != self.wallpaper.nav_backdrop
         }) {
             let backdrop = cx.global_mut::<CardBackdrop>();
             backdrop.tint = tint;
@@ -386,6 +392,7 @@ impl crate::Overview {
             backdrop.custom = self.wallpaper.custom;
             backdrop.tone_light = self.wallpaper.tone_light;
             backdrop.contrast = self.wallpaper.contrast;
+            backdrop.nav_backdrop = self.wallpaper.nav_backdrop;
         }
         let Some(source) = source else { return };
         if self.material_busy {
@@ -733,6 +740,204 @@ pub fn wallpaper_thumb(cx: &App) -> Option<Arc<RenderImage>> {
 
 pub fn backdrop_image(cx: &App) -> Option<Arc<RenderImage>> {
     cx.try_global::<CardBackdrop>().and_then(|b| b.image.clone())
+}
+
+pub struct NavSelectionStyle {
+    pub bg: gpui::Rgba,
+    pub border: gpui::Rgba,
+    pub ink: gpui::Rgba,
+}
+
+fn sample_region_rgb(image: &RgbaImage, x0: u32, x1: u32, y0: u32, y1: u32) -> [f32; 3] {
+    let w = image.width();
+    let h = image.height();
+    if w == 0 || h == 0 {
+        return [0.5, 0.5, 0.5];
+    }
+    let sx0 = x0.min(w - 1);
+    let sx1 = x1.clamp(sx0 + 1, w);
+    let sy0 = y0.min(h - 1);
+    let sy1 = y1.clamp(sy0 + 1, h);
+    let mut sum = [0.0f32; 3];
+    let mut count = 0u32;
+    for y in sy0..sy1 {
+        for x in sx0..sx1 {
+            let p = image.get_pixel(x, y);
+            sum[0] += f32::from(p[0]) / 255.;
+            sum[1] += f32::from(p[1]) / 255.;
+            sum[2] += f32::from(p[2]) / 255.;
+            count += 1;
+        }
+    }
+    let inv = 1. / count.max(1) as f32;
+    [sum[0] * inv, sum[1] * inv, sum[2] * inv]
+}
+
+fn srgb_to_linear(v: f32) -> f32 {
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn relative_luminance(rgb: [f32; 3]) -> f32 {
+    0.2126 * srgb_to_linear(rgb[0])
+        + 0.7152 * srgb_to_linear(rgb[1])
+        + 0.0722 * srgb_to_linear(rgb[2])
+}
+
+fn contrast_ratio(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let la = relative_luminance(a);
+    let lb = relative_luminance(b);
+    let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+fn alpha_blend_rgb(fg: gpui::Rgba, bg: [f32; 3]) -> [f32; 3] {
+    let a = fg.a.clamp(0., 1.);
+    [
+        fg.r * a + bg[0] * (1. - a),
+        fg.g * a + bg[1] * (1. - a),
+        fg.b * a + bg[2] * (1. - a),
+    ]
+}
+
+fn rgb_to_hsl(rgb: [f32; 3]) -> (f32, f32, f32) {
+    let r = rgb[0].clamp(0., 1.);
+    let g = rgb[1].clamp(0., 1.);
+    let b = rgb[2].clamp(0., 1.);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) * 0.5;
+    let d = max - min;
+    if d <= 1e-5 {
+        return (0., 0., l);
+    }
+    let s = if l > 0.5 {
+        d / (2. - max - min)
+    } else {
+        d / (max + min)
+    };
+    let mut h = if (max - r).abs() <= 1e-5 {
+        (g - b) / d + if g < b { 6. } else { 0. }
+    } else if (max - g).abs() <= 1e-5 {
+        (b - r) / d + 2.
+    } else {
+        (r - g) / d + 4.
+    };
+    h /= 6.;
+    (h.rem_euclid(1.), s.clamp(0., 1.), l.clamp(0., 1.))
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
+    if s <= 1e-5 {
+        return [l, l, l];
+    }
+    let q = if l < 0.5 { l * (1. + s) } else { l + s - l * s };
+    let p = 2. * l - q;
+    let hue = |mut t: f32| {
+        t = t.rem_euclid(1.);
+        if t < 1. / 6. {
+            p + (q - p) * 6. * t
+        } else if t < 0.5 {
+            q
+        } else if t < 2. / 3. {
+            p + (q - p) * (2. / 3. - t) * 6.
+        } else {
+            p
+        }
+    };
+    [hue(h + 1. / 3.), hue(h), hue(h - 1. / 3.)]
+}
+
+fn make_rgba(rgb: [f32; 3], a: f32) -> gpui::Rgba {
+    gpui::Rgba {
+        r: rgb[0].clamp(0., 1.),
+        g: rgb[1].clamp(0., 1.),
+        b: rgb[2].clamp(0., 1.),
+        a: a.clamp(0., 1.),
+    }
+}
+
+pub fn compute_nav_selection(
+    backdrop_rgb: [f32; 3],
+    surface: gpui::Rgba,
+    dark: bool,
+) -> NavSelectionStyle {
+    let surface_rgb = alpha_blend_rgb(surface, backdrop_rgb);
+    let luma = relative_luminance(surface_rgb);
+    let (h, s, _) = rgb_to_hsl(surface_rgb);
+    let tint_s = if s < 0.08 { 0. } else { (s * 0.30).min(0.18) };
+
+    let (bg, border) = if !dark {
+        if luma >= 0.68 {
+            let base = hsl_to_rgb(h, (s * 0.42).min(0.22), 0.24);
+            let alpha = 0.11 + 0.05 * ((luma - 0.68) / 0.32).clamp(0., 1.);
+            (make_rgba(base, alpha), make_rgba(base, alpha * 1.45))
+        } else {
+            let base = hsl_to_rgb(h, tint_s, 0.96);
+            let darkness = ((0.68 - luma) / 0.68).clamp(0., 1.);
+            let alpha = 0.56 + 0.26 * darkness;
+            (make_rgba(base, alpha), make_rgba([1., 1., 1.], 0.42 + 0.30 * darkness))
+        }
+    } else if luma < 0.42 {
+        let base = hsl_to_rgb(h, (s * 0.35).min(0.20), 0.88);
+        let alpha = 0.18 + 0.10 * (1. - (luma / 0.42).clamp(0., 1.));
+        (make_rgba(base, alpha), make_rgba(base, (alpha + 0.12).min(0.42)))
+    } else {
+        let base = hsl_to_rgb(h, tint_s, 0.12);
+        let lightness = ((luma - 0.42) / 0.58).clamp(0., 1.);
+        let alpha = 0.66 + 0.20 * lightness;
+        (make_rgba(base, alpha), make_rgba([1., 1., 1.], 0.26 + 0.12 * lightness))
+    };
+
+    let pill_rgb = alpha_blend_rgb(bg, surface_rgb);
+    let dark_ink = if tint_s > 0.01 {
+        hsl_to_rgb(h, (s * 0.35).min(0.24), 0.11)
+    } else {
+        [0.09, 0.10, 0.12]
+    };
+    let light_ink = if tint_s > 0.01 {
+        hsl_to_rgb(h, (s * 0.22).min(0.14), 0.97)
+    } else {
+        [0.98, 0.98, 0.99]
+    };
+    let dark_cr = contrast_ratio(dark_ink, pill_rgb);
+    let light_cr = contrast_ratio(light_ink, pill_rgb);
+    let ink_rgb = if dark_cr >= light_cr {
+        if dark_cr >= 7.0 {
+            dark_ink
+        } else {
+            [0.06, 0.07, 0.09]
+        }
+    } else if light_cr >= 7.0 {
+        light_ink
+    } else {
+        [1., 1., 1.]
+    };
+
+    NavSelectionStyle {
+        bg,
+        border,
+        ink: make_rgba(ink_rgb, 1.),
+    }
+}
+
+pub fn nav_selection_style(
+    palette: crate::theme::Palette,
+    tint: f32,
+    cx: &App,
+) -> NavSelectionStyle {
+    let fallback = if palette.0 {
+        [0.06, 0.08, 0.15]
+    } else {
+        [0.91, 0.94, 0.99]
+    };
+    let backdrop = cx
+        .try_global::<CardBackdrop>()
+        .map_or(fallback, |b| b.nav_backdrop);
+    compute_nav_selection(backdrop, palette.floating(tint), palette.0)
 }
 
 pub fn backdrop_ink(palette: crate::theme::Palette, cx: &App) -> gpui::Rgba {
@@ -1238,5 +1443,23 @@ mod tests {
         assert!(wp.set_dark(true));
         assert!(!wp.set_dark(true));
         assert!(wp.set_dark(false));
+    }
+
+    #[test]
+    fn nav_selection_maintains_high_contrast_across_backdrops() {
+        let scenarios = [
+            ([0.24, 0.27, 0.46], gpui::Rgba { r: 1., g: 1., b: 1., a: 0.18 }, false),
+            ([0.96, 0.97, 0.99], gpui::Rgba { r: 1., g: 1., b: 1., a: 0.55 }, false),
+            ([0.72, 0.41, 0.25], gpui::Rgba { r: 1., g: 1., b: 1., a: 0.20 }, false),
+            ([0.08, 0.10, 0.18], gpui::Rgba { r: 0.17, g: 0.17, b: 0.19, a: 0.30 }, true),
+            ([0.92, 0.93, 0.95], gpui::Rgba { r: 0.17, g: 0.17, b: 0.19, a: 0.15 }, true),
+        ];
+        for (backdrop, surface, dark) in scenarios {
+            let style = super::compute_nav_selection(backdrop, surface, dark);
+            let surface_rgb = super::alpha_blend_rgb(surface, backdrop);
+            let pill_rgb = super::alpha_blend_rgb(style.bg, surface_rgb);
+            let cr = super::contrast_ratio([style.ink.r, style.ink.g, style.ink.b], pill_rgb);
+            assert!(cr >= 7.0, "contrast ratio {cr} too low for backdrop {backdrop:?} dark={dark}");
+        }
     }
 }

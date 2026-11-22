@@ -109,6 +109,7 @@ class GlassScope extends InheritedWidget {
   final int wallpaperRevision;
   final bool contrastingBackdrop;
   final bool? backdropToneLight;
+  final Color? navBackdropRgb;
   final ui.Image? blurredWallpaper;
   final bool inPopover;
 
@@ -119,6 +120,7 @@ class GlassScope extends InheritedWidget {
     required this.wallpaperRevision,
     this.contrastingBackdrop = false,
     this.backdropToneLight,
+    this.navBackdropRgb,
     this.blurredWallpaper,
     this.inPopover = false,
     required super.child,
@@ -161,6 +163,86 @@ class GlassScope extends InheritedWidget {
           ];
   }
 
+  ({Color bg, Color border, Color ink}) navSelectionStyle(
+    SingboardColors c, {
+    required double barAlpha,
+  }) {
+    final fallback = c.dark
+        ? const Color(0xFF0E1626)
+        : const Color(0xFFE7F0FA);
+    final backdrop = hasWallpaper ? (navBackdropRgb ?? fallback) : fallback;
+    final surface = c.glassRgb.withValues(alpha: barAlpha.clamp(0.0, 1.0));
+    final surfaceRgb = Color.alphaBlend(surface, backdrop);
+    final luma = surfaceRgb.computeLuminance();
+    final hsl = HSLColor.fromColor(surfaceRgb);
+    final h = hsl.hue;
+    final s = hsl.saturation;
+    final tintS = s < 0.08 ? 0.0 : math.min(s * 0.30, 0.18);
+
+    Color bg;
+    Color border;
+    if (!c.dark) {
+      if (luma >= 0.68) {
+        final base = HSLColor.fromAHSL(
+          1.0,
+          h,
+          math.min(s * 0.42, 0.22),
+          0.24,
+        ).toColor();
+        final a = 0.11 + 0.05 * ((luma - 0.68) / 0.32).clamp(0.0, 1.0);
+        bg = base.withValues(alpha: a);
+        border = base.withValues(alpha: (a * 1.45).clamp(0.0, 1.0));
+      } else {
+        final base = HSLColor.fromAHSL(1.0, h, tintS, 0.96).toColor();
+        final darkness = ((0.68 - luma) / 0.68).clamp(0.0, 1.0);
+        final a = 0.56 + 0.26 * darkness;
+        bg = base.withValues(alpha: a);
+        border = Colors.white.withValues(alpha: 0.42 + 0.30 * darkness);
+      }
+    } else if (luma < 0.42) {
+      final base = HSLColor.fromAHSL(
+        1.0,
+        h,
+        math.min(s * 0.35, 0.20),
+        0.88,
+      ).toColor();
+      final a = 0.18 + 0.10 * (1.0 - (luma / 0.42).clamp(0.0, 1.0));
+      bg = base.withValues(alpha: a);
+      border = base.withValues(alpha: math.min(a + 0.12, 0.42));
+    } else {
+      final base = HSLColor.fromAHSL(1.0, h, tintS, 0.12).toColor();
+      final lightness = ((luma - 0.42) / 0.58).clamp(0.0, 1.0);
+      final a = 0.66 + 0.20 * lightness;
+      bg = base.withValues(alpha: a);
+      border = Colors.white.withValues(alpha: 0.26 + 0.12 * lightness);
+    }
+
+    final pillRgb = Color.alphaBlend(bg, surfaceRgb);
+    final pillLuma = pillRgb.computeLuminance();
+    final darkInk = tintS > 0.01
+        ? HSLColor.fromAHSL(1.0, h, math.min(s * 0.35, 0.24), 0.11).toColor()
+        : const Color(0xFF171A1F);
+    final lightInk = tintS > 0.01
+        ? HSLColor.fromAHSL(1.0, h, math.min(s * 0.22, 0.14), 0.97).toColor()
+        : const Color(0xFFFAFAFC);
+    double ratio(Color fg) {
+      final l = fg.computeLuminance();
+      final hi = math.max(l, pillLuma);
+      final lo = math.min(l, pillLuma);
+      return (hi + 0.05) / (lo + 0.05);
+    }
+
+    final darkCr = ratio(darkInk);
+    final lightCr = ratio(lightInk);
+    final Color ink;
+    if (darkCr >= lightCr) {
+      ink = darkCr >= 7.0 ? darkInk : const Color(0xFF0F1217);
+    } else {
+      ink = lightCr >= 7.0 ? lightInk : Colors.white;
+    }
+    return (bg: bg, border: border, ink: ink);
+  }
+
   static GlassScope of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<GlassScope>() ??
       const GlassScope(
@@ -175,6 +257,7 @@ class GlassScope extends InheritedWidget {
       tint != old.tint ||
       contrastingBackdrop != old.contrastingBackdrop ||
       backdropToneLight != old.backdropToneLight ||
+      navBackdropRgb != old.navBackdropRgb ||
       wallpaperPath != old.wallpaperPath ||
       wallpaperRevision != old.wallpaperRevision ||
       !identical(blurredWallpaper, old.blurredWallpaper) ||
@@ -483,6 +566,7 @@ class GlassCard extends StatelessWidget {
             wallpaperRevision: scope.wallpaperRevision,
             contrastingBackdrop: scope.contrastingBackdrop,
             backdropToneLight: scope.backdropToneLight,
+            navBackdropRgb: scope.navBackdropRgb,
             blurredWallpaper: scope.blurredWallpaper,
             inPopover: true,
             child: child,
@@ -1006,6 +1090,77 @@ class GlassTintSliderWidget extends StatelessWidget {
       ))),
       const SizedBox(width: 12),
       PanelIcon('glass-tinted', size: 22, color: c.muted),
+    ]);
+  }
+}
+
+class GlassFontScaleSliderWidget extends StatelessWidget {
+  final double value;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double>? onChangeEnd;
+
+  const GlassFontScaleSliderWidget({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    this.onChangeEnd,
+  });
+
+  static const double minScale = 0.9;
+  static const double maxScale = 1.4;
+
+  static double _snap(double v) {
+    final clamped = v.clamp(minScale, maxScale);
+    if ((clamped - 1.0).abs() <= 0.012) return 1.0;
+    return (clamped * 100).round() / 100;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SingboardColors.of(context);
+    final pos = ((value - minScale) / (maxScale - minScale)).clamp(0.0, 1.0);
+    return Row(children: [
+      SizedBox(
+        width: 22,
+        child: Center(
+          child: Text(
+            'A',
+            textScaler: TextScaler.noScaling,
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: c.muted),
+          ),
+        ),
+      ),
+      const SizedBox(width: 12),
+      Expanded(child: SizedBox(height: 36, child: LayoutBuilder(builder: (context, limits) =>
+        Stack(alignment: Alignment.center, children: [
+          for (final tick in [0.0, 0.2, 0.6, 1.0])
+            if ((pos - tick).abs() >= 0.055)
+              Positioned(left: 18.25 + (limits.maxWidth - 40) * tick, top: 27, child: Container(width: 3.5, height: 3.5, decoration: BoxDecoration(color: c.muted.withValues(alpha: .42), borderRadius: BorderRadius.circular(2)))),
+          SliderTheme(data: SliderTheme.of(context).copyWith(
+            trackHeight: 4, activeTrackColor: c.primary, inactiveTrackColor: c.fillStrong, thumbColor: Colors.white,
+            overlayShape: SliderComponentShape.noOverlay, thumbShape: const _PillThumbShape(),
+          ), child: Slider(value: value.clamp(minScale, maxScale), min: minScale, max: maxScale,
+            semanticFormatterCallback: (v) => '${(v * 100).round()}%',
+            onChanged: (v) {
+              final next = _snap(v);
+              if (next == 1.0 && value != 1.0) HapticFeedback.selectionClick();
+              onChanged(next);
+            },
+            onChangeEnd: (v) => onChangeEnd?.call(_snap(v)),
+          )),
+        ])
+      ))),
+      const SizedBox(width: 12),
+      SizedBox(
+        width: 22,
+        child: Center(
+          child: Text(
+            'A',
+            textScaler: TextScaler.noScaling,
+            style: TextStyle(fontSize: 19, fontWeight: FontWeight.w500, color: c.muted),
+          ),
+        ),
+      ),
     ]);
   }
 }

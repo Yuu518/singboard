@@ -158,6 +158,7 @@ impl Overview {
                             .child("singboard"),
                     ),
             );
+        let nav_sel = crate::glass::nav_selection_style(palette, tint, cx);
         let mut nav = div().px_2().py_1().flex().flex_col().gap(px(2.)).flex_1();
         for (i, (page, label)) in PAGES.into_iter().enumerate() {
             let selected = page == active;
@@ -168,15 +169,15 @@ impl Overview {
                     .items_center()
                     .gap(px(12.))
                     .px_3()
-                    .h(px(35.))
+                    .h(crate::theme::text_px(35.))
                     .rounded(px(12.))
                     .text_size(crate::theme::text_px(13.))
                     .cursor_pointer()
                     .when(selected, |item| {
-                        item.bg(palette.primary_soft())
+                        item.bg(nav_sel.bg)
                             .border_1()
-                            .border_color(palette.selection_border().opacity(0.45))
-                            .text_color(palette.accent())
+                            .border_color(nav_sel.border)
+                            .text_color(nav_sel.ink)
                             .font_weight(FontWeight::SEMIBOLD)
                     })
                     .when(!selected, |item| item.hover(|s| s.bg(palette.hover())))
@@ -193,7 +194,7 @@ impl Overview {
                             })
                             .size(px(18.))
                             .text_color(if selected {
-                                palette.accent()
+                                nav_sel.ink
                             } else {
                                 palette.muted()
                             }),
