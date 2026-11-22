@@ -1,6 +1,7 @@
 #[cfg(target_os = "android")]
 #[path = "commands/android/config.rs"]
 pub mod config;
+pub mod ip_lookup;
 pub mod network;
 mod ruleset;
 #[cfg(target_os = "android")]

@@ -878,9 +878,24 @@ impl Workspace {
                     .child(section("网络信息", network));
                 if singboard_stream::tools::public_ip(&ip) {
                     body = body.child(match &self.geo {
-                        Some(Ok(v)) => section("IP 地理信息",vec![("IP",ip.clone()),("ASN", if v["asn"].is_null() {String::new()} else {format!("AS{}",field(v,"asn"))}),
-                            ("运营商",v["asn_organization"].as_str().or(v["organization"].as_str()).unwrap_or("").into()),
-                            ("位置",["city","region","country"].iter().filter_map(|key| v[key].as_str()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", "))]),
+                        Some(Ok(v)) => {
+                            let provider = ["asn_organization", "organization", "isp"]
+                                .iter()
+                                .filter_map(|key| v[key].as_str().map(str::trim))
+                                .find(|s| !s.is_empty())
+                                .unwrap_or("");
+                            let mut loc_parts: Vec<&str> = Vec::new();
+                            for key in ["city", "region", "country"] {
+                                if let Some(part) = v[key].as_str().map(str::trim).filter(|s| !s.is_empty())
+                                    && !loc_parts.iter().any(|existing| existing.eq_ignore_ascii_case(part))
+                                {
+                                    loc_parts.push(part);
+                                }
+                            }
+                            section("IP 地理信息",vec![("IP",ip.clone()),("ASN", if v["asn"].is_null() {String::new()} else {format!("AS{}",field(v,"asn"))}),
+                                ("运营商",provider.into()),
+                                ("位置",loc_parts.join(", "))])
+                        }
                         Some(Err(e)) => section("IP 地理信息",vec![("查询失败",e.clone())]).child(self.button("conn-geo-retry","重试",Action::Geo(ip.clone()),cx)),
                         None => section("IP 地理信息",vec![("", "正在查询…".into())])
                     });

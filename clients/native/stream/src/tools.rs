@@ -1,6 +1,6 @@
 use crate::{
     clash::{Clash, Command},
-    commands::{network, srs},
+    commands::{ip_lookup, network, srs},
     settings::{Endpoint, Settings},
 };
 use serde::{Deserialize, Serialize};
@@ -672,23 +672,26 @@ pub async fn run(
             )))
         }
         "exit_ip" => {
-            let (direct, proxy) = tokio::join!(
-                network::fetch_url("http://myip.ipip.net".into(), None),
-                network::fetch_url("https://api.ip.sb/geoip".into(), None)
+            let (direct, proxy, proxy_v4, proxy_v6) = tokio::join!(
+                ip_lookup::fetch_direct_ip(),
+                ip_lookup::fetch_exit_geo_with_fallback(),
+                ip_lookup::fetch_exit_ip_v4(),
+                ip_lookup::fetch_exit_ip_v6(),
             );
-            let proxy = proxy
-                .and_then(|s| serde_json::from_str::<Value>(&s).map_err(|e| e.to_string()))
-                .map(|p| {
-                    ["ip", "country", "organization"]
-                        .iter()
-                        .filter_map(|k| p[k].as_str())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                });
+            let direct_text = direct.map(|d| d.exit_line()).unwrap_or_else(|e| e);
+            let proxy_text = proxy.map(|g| g.exit_line()).unwrap_or_else(|e| e);
+            let v4_text = proxy_v4
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|e| format!("不可用（{e}）"));
+            let v6_text = proxy_v6
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|e| format!("不可用（{e}）"));
             Ok(Reply::text(format!(
-                "直连出口（IPIP） · {}\n代理出口（ip.sb） · {}",
-                direct.unwrap_or_else(|e| e).trim(),
-                proxy.unwrap_or_else(|e| e)
+                "直连出口（IPIP） · {}\n代理出口（ip.sb） · {}\n代理 IPv4（ip.sb） · {}\n代理 IPv6（ip.sb） · {}",
+                direct_text,
+                proxy_text,
+                v4_text,
+                v6_text,
             )))
         }
         "dns" => {
@@ -886,66 +889,21 @@ pub fn mask_ip(ip: &str) -> String {
         .collect()
 }
 
-pub fn parse_ipipnet(text: &str) -> (String, Vec<String>) {
-    let ip = text
-        .find("IP")
-        .and_then(|i| {
-            let rest = &text[i + 2..];
-            let rest = rest.strip_prefix('：').or_else(|| rest.strip_prefix(':'))?;
-            rest.split_whitespace().next()
-        })
-        .unwrap_or("")
-        .to_string();
-    let location = text
-        .find("来自于")
-        .and_then(|i| {
-            let rest = &text[i + "来自于".len()..];
-            let rest = rest.strip_prefix('：').or_else(|| rest.strip_prefix(':'))?;
-            Some(
-                rest.split_whitespace()
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .unwrap_or_default();
-    (ip, location)
-}
+pub use crate::commands::ip_lookup::parse_ipipnet;
 
 pub async fn network_overview() -> Value {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
     let domestic_fut = async {
-        match network::fetch_url(format!("http://myip.ipip.net?t={stamp}"), None).await {
-            Ok(text) => {
-                let (ip, location) = parse_ipipnet(&text);
-                if ip.is_empty() {
-                    json!({"status":"error","ip":"","location":[],"error":"返回内容里没有 IP"})
-                } else {
-                    json!({"status":"done","ip":ip,"location":location,"error":""})
-                }
-            }
+        match ip_lookup::fetch_direct_ip().await {
+            Ok(info) => json!({"status":"done","ip":info.ip,"location":info.location,"error":""}),
             Err(e) => json!({"status":"error","ip":"","location":[],"error":e}),
         }
     };
     let abroad_fut = async {
-        match network::fetch_url(format!("https://api.ip.sb/geoip?t={stamp}"), None).await {
-            Ok(text) => match serde_json::from_str::<Value>(&text) {
-                Ok(data) => {
-                    let ip = data["ip"].as_str().unwrap_or("").to_owned();
-                    let location = ["country", "organization"]
-                        .into_iter()
-                        .filter_map(|k| data[k].as_str().filter(|s| !s.is_empty()).map(str::to_owned))
-                        .collect::<Vec<_>>();
-                    if ip.is_empty() {
-                        json!({"status":"error","ip":"","location":[],"error":"返回内容里没有 IP"})
-                    } else {
-                        json!({"status":"done","ip":ip,"location":location,"error":""})
-                    }
-                }
-                Err(_) => json!({"status":"error","ip":"","location":[],"error":"返回内容无法识别"}),
-            },
+        match ip_lookup::fetch_exit_geo_with_fallback().await {
+            Ok(geo) => {
+                let location = geo.overview_location();
+                json!({"status":"done","ip":geo.ip,"location":location,"error":""})
+            }
             Err(e) => json!({"status":"error","ip":"","location":[],"error":e}),
         }
     };
@@ -977,24 +935,12 @@ pub fn public_ip(ip: &str) -> bool {
 }
 
 pub async fn geo_details(ip: &str) -> Result<Value, String> {
-    let ip: std::net::IpAddr = ip.parse().map_err(|_| "无效的 IP 地址")?;
-    let body = network::fetch_url(format!("https://api.ip.sb/geoip/{ip}"), None).await?;
-    serde_json::from_str(&body).map_err(|e| e.to_string())
+    let geo = ip_lookup::lookup_geo(ip).await?;
+    serde_json::to_value(geo).map_err(|e| e.to_string())
 }
 
 pub async fn geo(ip: &str) -> Result<String, String> {
-    let item = geo_details(ip).await?;
-    Ok([
-        "country",
-        "region",
-        "city",
-        "organization",
-        "asn_organization",
-    ]
-    .iter()
-    .filter_map(|k| item[k].as_str())
-    .collect::<Vec<_>>()
-    .join(" "))
+    Ok(ip_lookup::lookup_geo(ip).await?.summary())
 }
 
 #[cfg(test)]

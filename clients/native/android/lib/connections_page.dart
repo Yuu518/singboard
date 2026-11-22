@@ -522,23 +522,40 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                                 final data = state.data;
                                 if (data == null)
                                   return const SizedBox.shrink();
+                                final provider = [
+                                  data['asn_organization'],
+                                  data['organization'],
+                                  data['isp'],
+                                ]
+                                    .whereType<String>()
+                                    .map((v) => v.trim())
+                                    .firstWhere(
+                                      (v) => v.isNotEmpty,
+                                      orElse: () => '',
+                                    );
+                                final locationParts = <String>[];
+                                for (final raw in [
+                                  data['city'],
+                                  data['region'],
+                                  data['country'],
+                                ]) {
+                                  if (raw is! String) continue;
+                                  final part = raw.trim();
+                                  if (part.isEmpty) continue;
+                                  final lower = part.toLowerCase();
+                                  if (!locationParts.any(
+                                    (e) => e.toLowerCase() == lower,
+                                  )) {
+                                    locationParts.add(part);
+                                  }
+                                }
                                 return section('IP 地理信息', {
                                   'IP': ip,
                                   'ASN': data['asn'] == null
                                       ? null
                                       : 'AS${data['asn']}',
-                                  '运营商':
-                                      data['asn_organization'] ??
-                                      data['organization'],
-                                  '位置':
-                                      [
-                                            data['city'],
-                                            data['region'],
-                                            data['country'],
-                                          ]
-                                          .whereType<String>()
-                                          .where((v) => v.isNotEmpty)
-                                          .join(', '),
+                                  '运营商': provider.isEmpty ? null : provider,
+                                  '位置': locationParts.join(', '),
                                 });
                               },
                             ),
