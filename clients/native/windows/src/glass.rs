@@ -166,9 +166,88 @@ pub struct Wallpaper {
     prewarmed: Option<Arc<RenderImage>>,
     thumb: Option<Arc<RenderImage>>,
     tone_light: bool,
+    header_tone_light: bool,
     contrast: bool,
+    busy: bool,
     nav_backdrop: [f32; 3],
     material_key: Option<(u16, u16)>,
+}
+
+#[derive(Clone, Copy)]
+struct BackdropMetrics {
+    tone_light: bool,
+    header_tone_light: bool,
+    contrast: bool,
+    busy: bool,
+}
+
+fn analyze_backdrop(sample: &RgbaImage, dark: bool) -> BackdropMetrics {
+    let w = sample.width();
+    let h = sample.height();
+    let total = (w * h) as usize;
+    if total == 0 {
+        return BackdropMetrics {
+            tone_light: !dark,
+            header_tone_light: !dark,
+            contrast: false,
+            busy: false,
+        };
+    }
+    let mut lumas = Vec::with_capacity(total);
+    let mut sum = 0.0f32;
+    for p in sample.pixels() {
+        let l = relative_luminance([
+            f32::from(p[0]) / 255.,
+            f32::from(p[1]) / 255.,
+            f32::from(p[2]) / 255.,
+        ]);
+        lumas.push(l);
+        sum += l;
+    }
+    let mean = sum / total as f32;
+    let var = lumas
+        .iter()
+        .map(|&l| {
+            let d = l - mean;
+            d * d
+        })
+        .sum::<f32>()
+        / total as f32;
+    let std_dev = var.sqrt();
+    lumas.sort_by(|a, b| a.total_cmp(b));
+    let p20 = lumas[(total * 20 / 100).min(total - 1)];
+    let p80 = lumas[(total * 80 / 100).min(total - 1)];
+
+    let hx0 = (w * 18 / 100).min(w - 1);
+    let hx1 = (w * 60 / 100).clamp(hx0 + 1, w);
+    let hy0 = (h * 2 / 100).min(h - 1);
+    let hy1 = (h * 20 / 100).clamp(hy0 + 1, h);
+    let mut header_sum = 0.0f32;
+    let mut header_count = 0u32;
+    for y in hy0..hy1 {
+        for x in hx0..hx1 {
+            let p = sample.get_pixel(x, y);
+            header_sum += relative_luminance([
+                f32::from(p[0]) / 255.,
+                f32::from(p[1]) / 255.,
+                f32::from(p[2]) / 255.,
+            ]);
+            header_count += 1;
+        }
+    }
+    let header_mean = header_sum / header_count.max(1) as f32;
+
+    let tone_light = mean > 0.179;
+    let header_tone_light = header_mean > 0.179;
+    let contrast = tone_light == dark;
+    let high_spread = (p80 - p20) >= 0.16 || std_dev >= 0.11;
+    let opposing_patch = if dark { p80 > 0.24 } else { p20 < 0.28 };
+    BackdropMetrics {
+        tone_light,
+        header_tone_light,
+        contrast,
+        busy: high_spread || opposing_patch,
+    }
 }
 
 fn material_sigma(source: &RgbaImage, tint: f32, viewport: Size<Pixels>) -> (f32, (u16, u16)) {
@@ -230,7 +309,9 @@ impl Wallpaper {
             prewarmed: None,
             thumb: None,
             tone_light: true,
+            header_tone_light: true,
             contrast: false,
+            busy: false,
             nav_backdrop: [0.91, 0.94, 0.99],
             material_key: None,
         };
@@ -267,24 +348,16 @@ impl Wallpaper {
         let sample = image::imageops::thumbnail(&self.clear, 32, 32);
         self.nav_backdrop = sample_region_rgb(&sample, 0, (sample.width() * 22 / 100).max(1), sample.height() * 8 / 100, (sample.height() * 65 / 100).max(1));
         if self.custom {
-            let linear = |v: u8| {
-                let c = f32::from(v) / 255.;
-                if c <= 0.04045 {
-                    c / 12.92
-                } else {
-                    ((c + 0.055) / 1.055).powf(2.4)
-                }
-            };
-            let luminance = sample
-                .pixels()
-                .map(|v| 0.2126 * linear(v[0]) + 0.7152 * linear(v[1]) + 0.0722 * linear(v[2]))
-                .sum::<f32>()
-                / (sample.width() * sample.height()).max(1) as f32;
-            self.tone_light = luminance > 0.179;
-            self.contrast = self.tone_light == dark;
+            let metrics = analyze_backdrop(&sample, dark);
+            self.tone_light = metrics.tone_light;
+            self.header_tone_light = metrics.header_tone_light;
+            self.contrast = metrics.contrast;
+            self.busy = metrics.busy;
         } else {
             self.tone_light = !dark;
+            self.header_tone_light = !dark;
             self.contrast = false;
+            self.busy = false;
         }
         let factor = (1280. / self.clear.width().max(self.clear.height()) as f32).min(1.);
         let scaled = image::imageops::resize(
@@ -329,7 +402,9 @@ pub struct CardBackdrop {
     owner: Option<AnyWindowHandle>,
     custom: bool,
     tone_light: bool,
+    header_tone_light: bool,
     contrast: bool,
+    busy: bool,
     nav_backdrop: [f32; 3],
     tint: f32,
 }
@@ -368,7 +443,9 @@ impl crate::Overview {
                 owner: Some(owner),
                 custom: self.wallpaper.custom,
                 tone_light: self.wallpaper.tone_light,
+                header_tone_light: self.wallpaper.header_tone_light,
                 contrast: self.wallpaper.contrast,
+                busy: self.wallpaper.busy,
                 nav_backdrop: self.wallpaper.nav_backdrop,
                 tint,
                 image: initial,
@@ -383,7 +460,9 @@ impl crate::Overview {
             (b.tint - tint).abs() > 1e-4
                 || b.custom != self.wallpaper.custom
                 || b.tone_light != self.wallpaper.tone_light
+                || b.header_tone_light != self.wallpaper.header_tone_light
                 || b.contrast != self.wallpaper.contrast
+                || b.busy != self.wallpaper.busy
                 || b.nav_backdrop != self.wallpaper.nav_backdrop
         }) {
             let backdrop = cx.global_mut::<CardBackdrop>();
@@ -391,7 +470,9 @@ impl crate::Overview {
             backdrop.thumb = self.wallpaper.thumb.clone();
             backdrop.custom = self.wallpaper.custom;
             backdrop.tone_light = self.wallpaper.tone_light;
+            backdrop.header_tone_light = self.wallpaper.header_tone_light;
             backdrop.contrast = self.wallpaper.contrast;
+            backdrop.busy = self.wallpaper.busy;
             backdrop.nav_backdrop = self.wallpaper.nav_backdrop;
         }
         let Some(source) = source else { return };
@@ -945,9 +1026,22 @@ pub fn backdrop_ink(palette: crate::theme::Palette, cx: &App) -> gpui::Rgba {
         && backdrop.custom
     {
         return if backdrop.tone_light {
-            rgb(0x1f2026)
+            rgb(0x16171d)
         } else {
-            rgb(0xfafafc)
+            rgb(0xffffff)
+        };
+    }
+    palette.ink()
+}
+
+pub fn backdrop_header_ink(palette: crate::theme::Palette, cx: &App) -> gpui::Rgba {
+    if let Some(backdrop) = cx.try_global::<CardBackdrop>()
+        && backdrop.custom
+    {
+        return if backdrop.header_tone_light {
+            rgb(0x16171d)
+        } else {
+            rgb(0xffffff)
         };
     }
     palette.ink()
@@ -958,49 +1052,218 @@ pub fn backdrop_muted(palette: crate::theme::Palette, cx: &App) -> gpui::Rgba {
         && backdrop.custom
     {
         return if backdrop.tone_light {
-            rgba(0x1f2026de)
+            rgba(0x16171de6)
         } else {
-            rgba(0xfafafce0)
+            rgba(0xffffffeb)
         };
     }
     palette.muted()
 }
 
-pub fn backdrop_text(
-    text: impl Into<SharedString>,
+fn backdrop_scrim_sprite(light: bool) -> &'static Arc<RenderImage> {
+    static LIGHT: OnceLock<Arc<RenderImage>> = OnceLock::new();
+    static DARK: OnceLock<Arc<RenderImage>> = OnceLock::new();
+    let slot = if light { &LIGHT } else { &DARK };
+    slot.get_or_init(|| {
+        const W: u32 = 128;
+        const H: u32 = 64;
+        let cx = (W - 1) as f32 * 0.5;
+        let cy = (H - 1) as f32 * 0.5;
+        let (rgb, peak) = if light {
+            ([255u8, 255, 255], 0.52f32)
+        } else {
+            ([12u8, 14, 22], 0.46f32)
+        };
+        let image = RgbaImage::from_fn(W, H, |x, y| {
+            let dx = (x as f32 - cx) / cx;
+            let dy = (y as f32 - cy) / cy;
+            let r2 = dx * dx + dy * dy;
+            let alpha = if r2 >= 1.0 {
+                0.0
+            } else {
+                let t = 1.0 - r2;
+                t * t * t * peak
+            };
+            Rgba([rgb[0], rgb[1], rgb[2], (alpha * 255.).round().clamp(0., 255.) as u8])
+        });
+        render_image(image)
+    })
+}
+
+fn heading_scrim_layer(light: bool) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let pad_x = px(24.);
+            let pad_y = px(10.);
+            let sprite_bounds = Bounds::new(
+                point(bounds.origin.x - pad_x, bounds.origin.y - pad_y),
+                size(bounds.size.width + pad_x * 2., bounds.size.height + pad_y * 2.),
+            );
+            let _ = window.paint_image(
+                sprite_bounds,
+                sprite_bounds,
+                Corners::all(px(0.)),
+                backdrop_scrim_sprite(light).clone(),
+                0,
+                false,
+            );
+        },
+    )
+    .absolute()
+    .inset_0()
+    .size_full()
+}
+
+fn pill_shadows(dark: bool) -> Vec<BoxShadow> {
+    if dark {
+        vec![
+            BoxShadow {
+                color: hsla(0., 0., 0., 0.30),
+                offset: point(px(0.), px(2.)),
+                blur_radius: px(10.),
+                spread_radius: px(-2.),
+                inset: false,
+            },
+            BoxShadow {
+                color: hsla(0., 0., 1., 0.14),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(1.5),
+                spread_radius: px(0.),
+                inset: true,
+            },
+        ]
+    } else {
+        vec![
+            BoxShadow {
+                color: hsla(0., 0., 0., 0.08),
+                offset: point(px(0.), px(2.)),
+                blur_radius: px(8.),
+                spread_radius: px(-2.),
+                inset: false,
+            },
+            BoxShadow {
+                color: hsla(0., 0., 1., 0.65),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(1.5),
+                spread_radius: px(0.),
+                inset: true,
+            },
+        ]
+    }
+}
+
+fn pill_layer(palette: crate::theme::Palette) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, cx| {
+            let backdrop = cx.try_global::<CardBackdrop>();
+            let tint = backdrop.map_or(0.5, |b| b.tint);
+            let mut alpha = (0.48 + 0.24 * tint).max(if palette.0 { 0.56 } else { 0.60 });
+            if let Some(b) = backdrop {
+                if b.contrast {
+                    alpha = alpha.max(0.72);
+                } else if b.busy {
+                    alpha = alpha.max(0.66);
+                }
+            }
+            let wash = if palette.0 {
+                rgba(0x24252c00 | ((alpha * 255.).round() as u32))
+            } else {
+                rgba(0xffffff00 | ((alpha * 255.).round() as u32))
+            };
+            let r = (bounds.size.width * 0.5)
+                .min(bounds.size.height * 0.5)
+                .max(px(0.));
+            let bevel = if palette.0 {
+                rgba(0xffffff26)
+            } else {
+                rgba(0xffffff8c)
+            };
+            if let Some(b) = backdrop
+                && b.owner == Some(window.window_handle())
+                && let Some(image) = b.image.as_ref()
+            {
+                let viewport = Bounds::new(point(px(0.), px(0.)), window.viewport_size());
+                let cover = ObjectFit::Cover.get_bounds(viewport, image.size(0));
+                let _ = window.paint_image(bounds, cover, r.into(), image.clone(), 0, false);
+            }
+            window.paint_quad(quad(
+                bounds,
+                r,
+                wash,
+                px(1.),
+                bevel,
+                BorderStyle::Solid,
+            ));
+        },
+    )
+    .absolute()
+    .inset_0()
+    .size_full()
+}
+
+fn build_backdrop_pill(
+    content: impl IntoElement,
+    muted: bool,
+    pad_x: Pixels,
+    pad_y: Pixels,
+    palette: crate::theme::Palette,
+    cx: &App,
+) -> Div {
+    let custom = cx.try_global::<CardBackdrop>().is_some_and(|b| b.custom);
+    if !custom {
+        let ink = if muted { palette.muted() } else { palette.ink() };
+        return div().text_color(ink).child(content);
+    }
+    let ink = if muted {
+        if palette.0 {
+            rgba(0xf2f2f7ea)
+        } else {
+            rgba(0x1c1c1ee6)
+        }
+    } else {
+        palette.ink()
+    };
+    div().flex().items_center().child(
+        div()
+            .relative()
+            .max_w_full()
+            .min_w_0()
+            .overflow_hidden()
+            .rounded_full()
+            .px(pad_x)
+            .py(pad_y)
+            .shadow(pill_shadows(palette.0))
+            .child(pill_layer(palette))
+            .child(div().relative().min_w_0().text_color(ink).child(content)),
+    )
+}
+
+pub fn backdrop_pill(
+    content: impl IntoElement,
     muted: bool,
     palette: crate::theme::Palette,
     cx: &App,
 ) -> Div {
-    let text: SharedString = text.into();
-    let ink = if muted {
-        backdrop_muted(palette, cx)
-    } else {
-        backdrop_ink(palette, cx)
-    };
-    let halo = cx
-        .try_global::<CardBackdrop>()
-        .filter(|b| b.custom)
-        .map(|b| {
-            if b.tone_light {
-                rgba(0xffffffcc)
-            } else {
-                rgba(0x00000099)
-            }
-        });
-    div()
-        .relative()
-        .when_some(halo, |el, shadow| {
-            el.child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top(px(1.))
-                    .text_color(shadow)
-                    .child(text.clone()),
-            )
-        })
-        .child(div().relative().text_color(ink).child(text))
+    build_backdrop_pill(content, muted, px(10.), px(3.), palette, cx)
+}
+
+pub fn backdrop_title_pill(
+    content: impl IntoElement,
+    palette: crate::theme::Palette,
+    cx: &App,
+) -> Div {
+    build_backdrop_pill(content, false, px(12.), px(4.), palette, cx)
+}
+
+pub fn backdrop_text(
+    content: impl IntoElement,
+    muted: bool,
+    palette: crate::theme::Palette,
+    cx: &App,
+) -> Div {
+    backdrop_pill(content, muted, palette, cx)
 }
 
 pub fn backdrop_heading(
@@ -1008,7 +1271,18 @@ pub fn backdrop_heading(
     palette: crate::theme::Palette,
     cx: &App,
 ) -> Div {
-    backdrop_text(text, false, palette, cx)
+    let text: SharedString = text.into();
+    let ink = backdrop_header_ink(palette, cx);
+    let scrim = cx
+        .try_global::<CardBackdrop>()
+        .filter(|b| b.custom)
+        .map(|b| b.header_tone_light);
+    div().flex().items_center().child(
+        div()
+            .relative()
+            .when_some(scrim, |el, light| el.child(heading_scrim_layer(light)))
+            .child(div().relative().text_color(ink).child(text)),
+    )
 }
 
 pub fn card_layer(wash: gpui::Rgba, radius: Pixels, minimum_alpha: f32) -> impl IntoElement {
@@ -1286,67 +1560,6 @@ pub fn glass_input(
         )
 }
 
-pub fn bar_layer(
-    palette: crate::theme::Palette,
-    tint: f32,
-    opacity: f32,
-) -> impl IntoElement {
-    canvas(
-        |_, _, _| (),
-        move |bounds, _, window, cx| {
-            if opacity <= 0.01 {
-                return;
-            }
-            let Some(backdrop) = cx.try_global::<CardBackdrop>() else {
-                return;
-            };
-            if backdrop.owner != Some(window.window_handle()) {
-                return;
-            }
-            let mut base_alpha = 0.56 + 0.30 * tint.clamp(0., 1.);
-            if backdrop.contrast {
-                base_alpha = base_alpha.max(0.72);
-            }
-            let rgb_bits = if palette.0 { 0x2c2c3000 } else { 0xffffff00 };
-            let total_h = f32::from(bounds.size.height);
-            let fade_h = 26.0f32.min(total_h);
-            let solid_h = (total_h - fade_h).max(0.);
-            if solid_h > 0. {
-                let mut wash = rgba(rgb_bits | 0xff);
-                wash.a = base_alpha * opacity;
-                window.paint_quad(quad(
-                    Bounds::new(bounds.origin, size(bounds.size.width, px(solid_h))),
-                    px(0.),
-                    wash,
-                    px(0.),
-                    transparent_black(),
-                    BorderStyle::Solid,
-                ));
-            }
-            const BANDS: usize = 13;
-            let band_h = fade_h / BANDS as f32;
-            for i in 0..BANDS {
-                let u = 1. - (i as f32 + 0.5) / BANDS as f32;
-                let smooth = u * u * (3. - 2. * u);
-                let mut wash = rgba(rgb_bits | 0xff);
-                wash.a = base_alpha * opacity * smooth;
-                let y = bounds.origin.y + px(solid_h + i as f32 * band_h);
-                window.paint_quad(quad(
-                    Bounds::new(point(bounds.origin.x, y), size(bounds.size.width, px(band_h + 0.5))),
-                    px(0.),
-                    wash,
-                    px(0.),
-                    transparent_black(),
-                    BorderStyle::Solid,
-                ));
-            }
-        },
-    )
-    .absolute()
-    .inset_0()
-    .size_full()
-}
-
 const GRAIN_TILE: u32 = 160;
 const GRAIN_SHEET: u32 = GRAIN_TILE * 6;
 
@@ -1461,5 +1674,28 @@ mod tests {
             let cr = super::contrast_ratio([style.ink.r, style.ink.g, style.ink.b], pill_rgb);
             assert!(cr >= 7.0, "contrast ratio {cr} too low for backdrop {backdrop:?} dark={dark}");
         }
+    }
+
+    #[test]
+    fn analyze_backdrop_flags_busy_split_tone_wallpapers() {
+        let calm_light = image::RgbaImage::from_pixel(32, 32, image::Rgba([230, 236, 246, 255]));
+        let calm = super::analyze_backdrop(&calm_light, false);
+        assert!(calm.tone_light);
+        assert!(calm.header_tone_light);
+        assert!(!calm.contrast);
+        assert!(!calm.busy);
+
+        let split = image::RgbaImage::from_fn(32, 32, |_, y| {
+            if y < 10 {
+                image::Rgba([40, 44, 72, 255])
+            } else {
+                image::Rgba([235, 238, 248, 255])
+            }
+        });
+        let mixed = super::analyze_backdrop(&split, false);
+        assert!(mixed.tone_light);
+        assert!(!mixed.header_tone_light);
+        assert!(!mixed.contrast);
+        assert!(mixed.busy);
     }
 }

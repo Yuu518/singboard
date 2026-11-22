@@ -838,20 +838,26 @@ impl Render for Editor {
                                 .font_weight(FontWeight::BOLD),
                         )
                         .child(
-                            div()
-                                .flex_none()
-                                .text_xs()
-                                .text_color(crate::glass::backdrop_muted(palette, cx))
-                                .child(if inline.remote { "远程副本" } else { "本地文件" }),
+                            crate::glass::backdrop_pill(
+                                if inline.remote { "远程副本" } else { "本地文件" },
+                                true,
+                                palette,
+                                cx,
+                            )
+                            .flex_none()
+                            .text_xs(),
                         ),
                 )
                 .when(inline.remote, |d| {
                     d.child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(crate::glass::backdrop_muted(palette, cx))
-                            .child("下次更新（手动或自动）会用订阅内容覆盖这里的改动。"),
+                        crate::glass::backdrop_pill(
+                            "下次更新（手动或自动）会用订阅内容覆盖这里的改动。",
+                            true,
+                            palette,
+                            cx,
+                        )
+                        .flex_none()
+                        .text_xs(),
                     )
                 })
             })

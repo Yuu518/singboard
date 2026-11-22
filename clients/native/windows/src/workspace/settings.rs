@@ -725,13 +725,11 @@ fn mode_option_label(mode: &str) -> String {
 }
 
 fn section_header(title: &'static str, palette: crate::theme::Palette, cx: &App) -> Div {
-    div()
+    crate::glass::backdrop_pill(title, true, palette, cx)
         .px_1()
         .pb_2()
         .text_xs()
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(crate::glass::backdrop_muted(palette, cx))
-        .child(title)
 }
 
 pub(super) fn setting_row(
@@ -2121,7 +2119,7 @@ impl Workspace {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.scroll_pane("settings-scroll", content.pt(px(48.)), cx))
+            .child(self.scroll_pane("settings-scroll", content, cx))
             .when_some(font_preview, |el, overlay| el.child(overlay))
     }
 }

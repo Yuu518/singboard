@@ -1457,7 +1457,7 @@ impl Workspace {
         match self.page {
             Page::Overview | Page::Settings => {
                 let scrolled = (-f32::from(self.page_scroll.offset().y)).max(0.);
-                scrolling::smoothstep(0., 32., scrolled)
+                scrolling::smoothstep(12., 36., scrolled)
             }
             _ => 0.,
         }
@@ -2643,13 +2643,13 @@ impl Render for Workspace {
             Page::Proxies | Page::Connections | Page::Logs | Page::Rules if service_down => {
                 self.service_notice(cx).pt(px(48.)).px(px(20.)).pb(px(16.))
             }
-            Page::Overview => self.overview_page(window, cx),
+            Page::Overview => self.overview_page(window, cx).pt(px(48.)),
             Page::Proxies => self.proxy_page(window, cx).pt(px(48.)),
             Page::Connections => self.connections_page(cx).pt(px(48.)).px(px(20.)).pb(px(16.)),
             Page::Logs => self.logs_page(window, cx).pt(px(48.)).px(px(20.)).pb(px(16.)),
             Page::Rules => self.rules_page(cx).pt(px(48.)).px(px(20.)).pb(px(16.)),
             Page::Config => self.config_page(window, cx).pt(px(48.)),
-            Page::Settings => self.settings_page(window, cx),
+            Page::Settings => self.settings_page(window, cx).pt(px(48.)),
         };
         div()
             .relative()

@@ -195,7 +195,7 @@ impl Workspace {
 
         let title_block = div()
             .flex()
-            .items_baseline()
+            .items_center()
             .gap_2()
             .child(
                 crate::glass::backdrop_heading("日志", palette, cx)

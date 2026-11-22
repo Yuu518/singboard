@@ -1996,21 +1996,17 @@ class _SettingsPageState extends State<SettingsPage>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 20),
-                  child: Builder(
-                    builder: (context) {
-                      final scope = GlassScope.of(context);
-                      return Text(
-                        '设置',
-                        style: TextStyle(
-                          fontSize: 26,
-                          fontWeight: FontWeight.bold,
-                          color: scope.backdropInk(c),
-                          shadows: scope.backdropShadows(),
-                        ),
-                      );
-                    },
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 20),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: GlassBackdropHeading(
+                      '设置',
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ),
                 const SettingsSectionHeader('核心与服务', first: true),

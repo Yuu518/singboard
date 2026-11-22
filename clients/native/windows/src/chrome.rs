@@ -349,15 +349,15 @@ impl Overview {
                     .flex()
                     .items_center()
                     .window_control_area(WindowControlArea::Drag)
-                    .child(
-                        div()
-                            .mt(px(6. * (1. - opacity)))
-                            .opacity(opacity)
-                            .text_size(crate::theme::text_px(15.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(palette.ink())
-                            .child(page_title),
-                    ),
+                    .when(opacity > 0.01, |el| {
+                        el.child(
+                            crate::glass::backdrop_title_pill(page_title, palette, cx)
+                                .mt(px(6. * (1. - opacity)))
+                                .opacity(opacity)
+                                .text_size(crate::theme::text_px(15.))
+                                .font_weight(FontWeight::SEMIBOLD),
+                        )
+                    }),
             );
         for (i, glyph) in ["minimize", "maximize", "close"].into_iter().enumerate() {
             let caption_shadows = vec![
@@ -431,17 +431,6 @@ impl Overview {
             .absolute()
             .inset_0()
             .size_full()
-            .when(opacity > 0.01, |root| {
-                root.child(
-                    div()
-                        .absolute()
-                        .left(px(216.))
-                        .right_0()
-                        .top_0()
-                        .h(px(66.))
-                        .child(crate::glass::bar_layer(palette, tint, opacity)),
-                )
-            })
             .child(sidebar)
             .child(bar)
     }

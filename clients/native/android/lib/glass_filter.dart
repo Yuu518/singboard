@@ -19,7 +19,9 @@ class GlassEnvironment extends StatefulWidget {
 
 class _GlassEnvironmentState extends State<GlassEnvironment> {
   bool _lightConflict = false, _darkConflict = false;
+  bool _lightBusy = false, _darkBusy = false;
   bool? _lightToneLight, _darkToneLight;
+  bool? _lightHeaderToneLight, _darkHeaderToneLight;
   Color? _lightNavRgb, _darkNavRgb;
   int _revision = 0;
   ui.Image? _sourceImage;
@@ -206,7 +208,9 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
   Future<void> _sample() async {
     final revision = ++_revision, path = widget.wallpaperPath;
     _lightConflict = _darkConflict = false;
+    _lightBusy = _darkBusy = false;
     _lightToneLight = _darkToneLight = null;
+    _lightHeaderToneLight = _darkHeaderToneLight = null;
     _lightNavRgb = _darkNavRgb = null;
     if (path == null || path.isEmpty) {
       final oldSource = _sourceImage;
@@ -250,7 +254,8 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
         decodedSource.dispose();
         return;
       }
-      double luminance(double veil, double alpha) {
+      ({double mean, double stdDev, double p20, double p80, double headerMean})
+      analyze(double veil, double alpha) {
         double linear(int channel) {
           final v = (channel * (1 - alpha) + veil * alpha) / 255;
           return v <= .04045
@@ -258,14 +263,59 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
               : math.pow((v + .055) / 1.055, 2.4).toDouble();
         }
 
-        var luma = 0.0;
-        for (var i = 0; i < bytes.lengthInBytes; i += 4) {
-          luma +=
-              .2126 * linear(bytes.getUint8(i)) +
-              .7152 * linear(bytes.getUint8(i + 1)) +
-              .0722 * linear(bytes.getUint8(i + 2));
+        final w = image!.width, h = image.height;
+        final total = w * h;
+        final lumas = <double>[];
+        var sum = 0.0;
+        final hx1 = (w * 65 ~/ 100).clamp(1, w);
+        final hy0 = (h * 6 ~/ 100).clamp(0, h - 1);
+        final hy1 = (h * 24 ~/ 100).clamp(hy0 + 1, h);
+        var headerSum = 0.0;
+        var headerCount = 0;
+        for (var y = 0; y < h; y++) {
+          for (var x = 0; x < w; x++) {
+            final idx = (y * w + x) * 4;
+            if (idx + 2 >= bytes.lengthInBytes) continue;
+            final l =
+                .2126 * linear(bytes.getUint8(idx)) +
+                .7152 * linear(bytes.getUint8(idx + 1)) +
+                .0722 * linear(bytes.getUint8(idx + 2));
+            lumas.add(l);
+            sum += l;
+            if (x < hx1 && y >= hy0 && y < hy1) {
+              headerSum += l;
+              headerCount++;
+            }
+          }
         }
-        return luma / (bytes.lengthInBytes / 4);
+        if (lumas.isEmpty || total == 0) {
+          final fallback = veil > 127 ? 1.0 : 0.0;
+          return (
+            mean: fallback,
+            stdDev: 0.0,
+            p20: fallback,
+            p80: fallback,
+            headerMean: fallback,
+          );
+        }
+        final mean = sum / lumas.length;
+        var sq = 0.0;
+        for (final l in lumas) {
+          final d = l - mean;
+          sq += d * d;
+        }
+        final stdDev = math.sqrt(sq / lumas.length);
+        lumas.sort();
+        final p20 = lumas[(lumas.length * 20 ~/ 100).clamp(0, lumas.length - 1)];
+        final p80 = lumas[(lumas.length * 80 ~/ 100).clamp(0, lumas.length - 1)];
+        final headerMean = headerCount > 0 ? headerSum / headerCount : mean;
+        return (
+          mean: mean,
+          stdDev: stdDev,
+          p20: p20,
+          p80: p80,
+          headerMean: headerMean,
+        );
       }
 
       Color sampleBottom(double veil, double alpha) {
@@ -297,8 +347,8 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
         );
       }
 
-      final lightLuma = luminance(255, .28);
-      final darkLuma = luminance(0, .38);
+      final light = analyze(255, .28);
+      final dark = analyze(0, .38);
       final lightNav = sampleBottom(255, .28);
       final darkNav = sampleBottom(0, .38);
       final oldSource = _sourceImage;
@@ -308,10 +358,20 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
       _builtScreen = null;
       _disposeLater(oldSource);
       setState(() {
-        _lightConflict = lightLuma <= .179;
-        _darkConflict = darkLuma > .179;
-        _lightToneLight = lightLuma > .179;
-        _darkToneLight = darkLuma > .179;
+        _lightConflict = light.mean <= .179;
+        _darkConflict = dark.mean > .179;
+        _lightToneLight = light.mean > .179;
+        _darkToneLight = dark.mean > .179;
+        _lightHeaderToneLight = light.headerMean > .179;
+        _darkHeaderToneLight = dark.headerMean > .179;
+        _lightBusy =
+            (light.p80 - light.p20) >= 0.16 ||
+            light.stdDev >= 0.11 ||
+            light.p20 < 0.28;
+        _darkBusy =
+            (dark.p80 - dark.p20) >= 0.16 ||
+            dark.stdDev >= 0.11 ||
+            dark.p80 > 0.24;
         _lightNavRgb = lightNav;
         _darkNavRgb = darkNav;
       });
@@ -336,7 +396,9 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
       wallpaperPath: widget.wallpaperPath,
       wallpaperRevision: widget.wallpaperRevision,
       contrastingBackdrop: dark ? _darkConflict : _lightConflict,
+      busyBackdrop: dark ? _darkBusy : _lightBusy,
       backdropToneLight: dark ? _darkToneLight : _lightToneLight,
+      headerToneLight: dark ? _darkHeaderToneLight : _lightHeaderToneLight,
       navBackdropRgb: dark ? _darkNavRgb : _lightNavRgb,
       blurredWallpaper: _blurredImage,
       child: widget.child,

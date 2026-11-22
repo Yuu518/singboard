@@ -34,10 +34,18 @@ double panelGutter(BuildContext context) => MediaQuery.sizeOf(context).width >= 
 
 class SingboardColors {
   final bool dark;
-  const SingboardColors(this.dark);
+  final bool wallpaper;
+  const SingboardColors(this.dark, {this.wallpaper = false});
 
-  static SingboardColors of(BuildContext context) =>
-      SingboardColors(Theme.of(context).brightness == Brightness.dark);
+  static SingboardColors of(BuildContext context) {
+    final hasWallpaper =
+        context.dependOnInheritedWidgetOfExactType<GlassScope>()?.hasWallpaper ??
+        false;
+    return SingboardColors(
+      Theme.of(context).brightness == Brightness.dark,
+      wallpaper: hasWallpaper,
+    );
+  }
 
   Color get page => dark ? const Color(0xFF0F0F11) : const Color(0xFFF2F2F7);
   Color get surface => dark ? const Color(0xFF20232D) : const Color(0xFFFFFFFF);
@@ -52,7 +60,9 @@ class SingboardColors {
       dark ? const Color(0xFF5E5CE6) : const Color(0xFF5856D6);
   Color get accent => dark ? const Color(0xFFBF5AF2) : const Color(0xFFAF52DE);
   Color get ink => dark ? const Color(0xFFF2F2F7) : const Color(0xFF1C1C1E);
-  Color get muted => dark ? const Color(0xFFB5B5BC) : const Color(0xFF64646A);
+  Color get muted => wallpaper
+      ? (dark ? const Color(0xFFD4D4DC) : const Color(0xFF3E3E44))
+      : (dark ? const Color(0xFFB5B5BC) : const Color(0xFF64646A));
   Color get success => dark ? const Color(0xFF30D158) : const Color(0xFF34C759);
   Color get successInk =>
       dark ? const Color(0xFF30D158) : const Color(0xFF1B7A34);
@@ -108,7 +118,9 @@ class GlassScope extends InheritedWidget {
   final String? wallpaperPath;
   final int wallpaperRevision;
   final bool contrastingBackdrop;
+  final bool busyBackdrop;
   final bool? backdropToneLight;
+  final bool? headerToneLight;
   final Color? navBackdropRgb;
   final ui.Image? blurredWallpaper;
   final bool inPopover;
@@ -119,7 +131,9 @@ class GlassScope extends InheritedWidget {
     required this.wallpaperPath,
     required this.wallpaperRevision,
     this.contrastingBackdrop = false,
+    this.busyBackdrop = false,
     this.backdropToneLight,
+    this.headerToneLight,
     this.navBackdropRgb,
     this.blurredWallpaper,
     this.inPopover = false,
@@ -140,27 +154,27 @@ class GlassScope extends InheritedWidget {
   Color backdropInk(SingboardColors c) {
     final light = backdropToneLight;
     if (!hasWallpaper || light == null) return c.ink;
-    return light ? const Color(0xFF1F2026) : const Color(0xFFFAFAFC);
+    return light ? const Color(0xFF16171D) : Colors.white;
+  }
+
+  Color backdropHeaderInk(SingboardColors c) {
+    final light = headerToneLight ?? backdropToneLight;
+    if (!hasWallpaper || light == null) return c.ink;
+    return light ? const Color(0xFF16171D) : Colors.white;
   }
 
   Color backdropMuted(SingboardColors c) {
     final light = backdropToneLight;
     if (!hasWallpaper || light == null) return c.muted;
-    return light ? const Color(0xDE1F2026) : const Color(0xE0FAFAFC);
+    return light ? const Color(0xE616171D) : const Color(0xEBFFFFFF);
   }
 
   List<Shadow>? backdropShadows() {
     final light = backdropToneLight;
-    if (!hasWallpaper || light == null) return null;
-    return light
-        ? const [
-            Shadow(color: Color(0xB3FFFFFF), offset: Offset(0, 1), blurRadius: 2),
-            Shadow(color: Color(0x66FFFFFF), blurRadius: 12),
-          ]
-        : const [
-            Shadow(color: Color(0x99000000), offset: Offset(0, 1), blurRadius: 2),
-            Shadow(color: Color(0x59000000), blurRadius: 12),
-          ];
+    if (!hasWallpaper || light == null || light) return null;
+    return const [
+      Shadow(color: Color(0x52000000), offset: Offset(0, 1), blurRadius: 8),
+    ];
   }
 
   ({Color bg, Color border, Color ink}) navSelectionStyle(
@@ -256,7 +270,9 @@ class GlassScope extends InheritedWidget {
   bool updateShouldNotify(GlassScope old) =>
       tint != old.tint ||
       contrastingBackdrop != old.contrastingBackdrop ||
+      busyBackdrop != old.busyBackdrop ||
       backdropToneLight != old.backdropToneLight ||
+      headerToneLight != old.headerToneLight ||
       navBackdropRgb != old.navBackdropRgb ||
       wallpaperPath != old.wallpaperPath ||
       wallpaperRevision != old.wallpaperRevision ||
@@ -565,7 +581,9 @@ class GlassCard extends StatelessWidget {
             wallpaperPath: scope.wallpaperPath,
             wallpaperRevision: scope.wallpaperRevision,
             contrastingBackdrop: scope.contrastingBackdrop,
+            busyBackdrop: scope.busyBackdrop,
             backdropToneLight: scope.backdropToneLight,
+            headerToneLight: scope.headerToneLight,
             navBackdropRgb: scope.navBackdropRgb,
             blurredWallpaper: scope.blurredWallpaper,
             inPopover: true,
@@ -1229,6 +1247,169 @@ class _PillThumbShape extends SliderComponentShape {
   }
 }
 
+class _BackdropScrimPainter extends CustomPainter {
+  final bool light;
+  const _BackdropScrimPainter(this.light);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final rx = size.width * 0.5 + 24.0;
+    final ry = size.height * 0.5 + 10.0;
+    final base = light ? Colors.white : const Color(0xFF0C0E16);
+    final peak = light ? 0.52 : 0.46;
+    canvas.save();
+    canvas.translate(size.width * 0.5, size.height * 0.5);
+    canvas.scale(rx, ry);
+    canvas.drawCircle(
+      Offset.zero,
+      1.0,
+      Paint()
+        ..shader = ui.Gradient.radial(
+          Offset.zero,
+          1.0,
+          [
+            base.withValues(alpha: peak),
+            base.withValues(alpha: peak * 0.42),
+            base.withValues(alpha: 0.0),
+          ],
+          const [0.0, 0.55, 1.0],
+        ),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_BackdropScrimPainter old) => old.light != light;
+}
+
+class GlassBackdropHeading extends StatelessWidget {
+  final String text;
+  final TextStyle style;
+  final int? maxLines;
+  final TextOverflow? overflow;
+
+  const GlassBackdropHeading(
+    this.text, {
+    super.key,
+    required this.style,
+    this.maxLines,
+    this.overflow,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SingboardColors.of(context);
+    final scope = GlassScope.of(context);
+    final ink = scope.backdropHeaderInk(c);
+    final label = Text(
+      text,
+      maxLines: maxLines,
+      overflow: overflow,
+      style: style.copyWith(color: ink, shadows: null),
+    );
+    if (!scope.hasWallpaper) return label;
+    final light = scope.headerToneLight ?? scope.backdropToneLight ?? !c.dark;
+    return CustomPaint(painter: _BackdropScrimPainter(light), child: label);
+  }
+}
+
+class GlassBackdropPill extends StatelessWidget {
+  final String text;
+  final TextStyle style;
+  final bool muted;
+  final Color? colorOverride;
+  final EdgeInsetsGeometry padding;
+  final int? maxLines;
+  final TextOverflow? overflow;
+  final TextAlign? textAlign;
+
+  const GlassBackdropPill(
+    this.text, {
+    super.key,
+    required this.style,
+    this.muted = false,
+    this.colorOverride,
+    this.padding = const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+    this.maxLines,
+    this.overflow,
+    this.textAlign,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SingboardColors.of(context);
+    final scope = GlassScope.of(context);
+    if (!scope.hasWallpaper) {
+      return Text(
+        text,
+        maxLines: maxLines,
+        overflow: overflow,
+        textAlign: textAlign,
+        style: style.copyWith(
+          color: colorOverride ?? (muted ? c.muted : c.ink),
+          shadows: null,
+        ),
+      );
+    }
+    final t = scope.tint.clamp(0.0, 1.0);
+    var alpha = math.max(0.48 + 0.24 * t, c.dark ? 0.56 : 0.60);
+    if (scope.contrastingBackdrop) {
+      alpha = math.max(alpha, 0.72);
+    } else if (scope.busyBackdrop) {
+      alpha = math.max(alpha, 0.66);
+    }
+    final fill = (c.dark ? const Color(0xFF24252C) : Colors.white).withValues(
+      alpha: alpha,
+    );
+    final rim = Colors.white.withValues(alpha: c.dark ? 0.16 : 0.55);
+    final ink =
+        colorOverride ??
+        (muted
+            ? (c.dark ? const Color(0xEAF2F2F7) : const Color(0xE61C1C1E))
+            : c.ink);
+    final shape = BorderRadius.circular(999);
+    final box = Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: shape,
+        border: Border.all(color: rim, width: 0.75),
+      ),
+      child: Text(
+        text,
+        maxLines: maxLines,
+        overflow: overflow,
+        textAlign: textAlign,
+        style: style.copyWith(color: ink, shadows: null),
+      ),
+    );
+    final wallpaper = scope.blurredWallpaper;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: shape,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: c.dark ? 0.28 : 0.08),
+            blurRadius: 8,
+            spreadRadius: -2,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: wallpaper != null
+          ? _WallpaperGlass(
+              image: wallpaper,
+              radius: 999,
+              tint: t,
+              refract: false,
+              child: box,
+            )
+          : box,
+    );
+  }
+}
+
 class SettingsSectionHeader extends StatelessWidget {
   final String title;
   final bool first;
@@ -1236,17 +1417,14 @@ class SettingsSectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = SingboardColors.of(context);
-    final scope = GlassScope.of(context);
     return Padding(
       padding: EdgeInsets.fromLTRB(4, first ? 0 : 24, 4, 8),
-      child: Text(
-        title,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: scope.backdropMuted(c),
-          shadows: scope.backdropShadows(),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: GlassBackdropPill(
+          title,
+          muted: true,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
         ),
       ),
     );

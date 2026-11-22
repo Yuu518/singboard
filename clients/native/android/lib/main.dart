@@ -2184,23 +2184,26 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
           },
         ),
     ];
-    final scope = GlassScope.of(context);
     return ListView(
       padding: EdgeInsets.fromLTRB(inset.left, 4, inset.right, 96 + MediaQuery.viewPaddingOf(context).bottom),
       children: [
         Padding(
           padding: const EdgeInsets.only(bottom: 12),
-          child: Transform.translate(offset: const Offset(0, -3), child: Text(
-            '概览',
-            style: TextStyle(
-              fontSize: 26,
-              height: 1.25,
-              fontWeight: FontWeight.w700,
-              letterSpacing: -0.4,
-              color: scope.backdropInk(c),
-              shadows: scope.backdropShadows(),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Transform.translate(
+              offset: const Offset(0, -3),
+              child: const GlassBackdropHeading(
+                '概览',
+                style: TextStyle(
+                  fontSize: 26,
+                  height: 1.25,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.4,
+                ),
+              ),
             ),
-          )),
+          ),
         ),
         GlassCard(
           radius: 22,
@@ -2458,27 +2461,22 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
           padding: const EdgeInsets.fromLTRB(6, 0, 6, 9),
           child: Row(
             children: [
-              Text(
+              const GlassBackdropPill(
                 '网络',
                 style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
-                  color: scope.backdropInk(c),
-                  shadows: scope.backdropShadows(),
                 ),
               ),
               if (!_networkRunning) ...[
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
+                const SizedBox(width: 10),
+                Flexible(
+                  child: const GlassBackdropPill(
                     'sing-box 未运行，启动后自动检测',
+                    muted: true,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: scope.backdropMuted(c),
-                      shadows: scope.backdropShadows(),
-                    ),
+                    style: TextStyle(fontSize: 12),
                   ),
                 ),
               ],
@@ -2563,13 +2561,11 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
             children: [
               Row(
                 children: [
-                  Text(
+                  const GlassBackdropPill(
                     '连接拓扑',
                     style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
-                      color: scope.backdropInk(c),
-                      shadows: scope.backdropShadows(),
                     ),
                   ),
                   const Spacer(),
@@ -2609,16 +2605,13 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
               ),
               if (connectionsLive)
                 Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: GlassBackdropPill(
                     topoSummary,
+                    muted: true,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: scope.backdropMuted(c),
-                      shadows: scope.backdropShadows(),
-                    ),
+                    style: const TextStyle(fontSize: 12),
                   ),
                 ),
             ],
@@ -2826,25 +2819,25 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
             children: [
               Row(
                 children: [
-                  Transform.translate(offset: const Offset(0, -3), child: Text(
-                    '日志',
-                    style: TextStyle(
-                      fontSize: 26,
-                      height: 1.25,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -0.4,
-                      color: scope.backdropInk(c),
-                      shadows: scope.backdropShadows(),
+                  Transform.translate(
+                    offset: const Offset(0, -3),
+                    child: const GlassBackdropHeading(
+                      '日志',
+                      style: TextStyle(
+                        fontSize: 26,
+                        height: 1.25,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.4,
+                      ),
                     ),
-                  )),
+                  ),
                   const SizedBox(width: 8),
-                  Text(
+                  GlassBackdropPill(
                     countText,
-                    style: TextStyle(
+                    muted: true,
+                    style: const TextStyle(
                       fontSize: 14,
-                      color: scope.backdropMuted(c),
-                      shadows: scope.backdropShadows(),
-                      fontFeatures: const [FontFeature.tabularFigures()],
+                      fontFeatures: [FontFeature.tabularFigures()],
                     ),
                   ),
                   const Spacer(),
@@ -2900,21 +2893,16 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                               );
                             }
                           },
-                    child: Padding(
+                    child: GlassBackdropPill(
+                      '清空',
+                      muted: entries.isEmpty && frozen == null,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 14,
                         vertical: 6,
                       ),
-                      child: Text(
-                        '清空',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: entries.isEmpty && frozen == null
-                              ? scope.backdropMuted(c)
-                              : scope.backdropInk(c),
-                          shadows: scope.backdropShadows(),
-                        ),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ),

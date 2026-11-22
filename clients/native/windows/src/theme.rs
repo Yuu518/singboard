@@ -213,7 +213,7 @@ impl Appearance {
         theme.font_family = system_ui_font().into();
         theme.font_size = px(16. * scale);
         theme.mono_font_size = px(13. * scale);
-        let palette = Palette(dark);
+        let palette = Palette(dark, wallpaper);
         let highlight = std::sync::Arc::make_mut(&mut theme.highlight_theme);
         highlight.style.editor_background = Some(transparent_black());
         highlight.style.editor_gutter_background = Some(transparent_black());
@@ -229,11 +229,12 @@ impl Appearance {
 }
 
 #[derive(Clone, Copy)]
-pub struct Palette(pub bool);
+pub struct Palette(pub bool, bool);
 
 impl Palette {
     pub fn get(cx: &App) -> Self {
-        Self(cx.global::<Appearance>().dark)
+        let appearance = cx.global::<Appearance>();
+        Self(appearance.dark, appearance.wallpaper)
     }
     pub fn choose(self, light: u32, dark: u32) -> u32 {
         if self.0 { dark } else { light }
@@ -245,7 +246,11 @@ impl Palette {
         rgb(self.choose(0x1c1c1e, 0xf2f2f7))
     }
     pub fn muted(self) -> Rgba {
-        rgba(self.choose(0x1c1c1ec4, 0xf2f2f7c8))
+        if self.1 {
+            rgba(self.choose(0x1c1c1ee0, 0xf2f2f7e2))
+        } else {
+            rgba(self.choose(0x1c1c1ec4, 0xf2f2f7c8))
+        }
     }
     pub fn accent(self) -> Rgba {
         rgb(self.choose(0x0057bd, 0x62afff))

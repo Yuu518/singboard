@@ -450,10 +450,6 @@ impl Workspace {
         body: impl IntoElement,
         cx: &Context<Self>,
     ) -> Div {
-        let top_inset = match self.page {
-            Page::Overview | Page::Settings => px(48.),
-            _ => px(0.),
-        };
         div()
             .relative()
             .flex_1()
@@ -486,10 +482,7 @@ impl Workspace {
             .child(
                 div()
                     .absolute()
-                    .top(top_inset)
-                    .bottom_0()
-                    .left_0()
-                    .right_0()
+                    .inset_0()
                     .vertical_scrollbar(&self.page_scroll),
             )
     }

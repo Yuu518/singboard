@@ -1632,11 +1632,11 @@ impl Workspace {
                     .child(
                         div()
                             .flex()
-                            .items_baseline()
+                            .items_center()
                             .gap_3()
                             .min_w_0()
                             .child(
-                                crate::glass::backdrop_heading("网络", palette, cx)
+                                crate::glass::backdrop_pill("网络", false, palette, cx)
                                     .flex_none()
                                     .text_size(crate::theme::text_px(15.))
                                     .line_height(crate::theme::text_px(22.5))
@@ -1644,14 +1644,14 @@ impl Workspace {
                             )
                             .when(!running_net, |el| {
                                 el.child(
-                                    crate::glass::backdrop_text(
+                                    crate::glass::backdrop_pill(
                                         "sing-box 未运行，启动后自动检测",
                                         true,
                                         palette,
                                         cx,
                                     )
-                                    .text_size(crate::theme::text_px(12.))
-                                    .truncate(),
+                                    .min_w_0()
+                                    .text_size(crate::theme::text_px(12.)),
                                 )
                             }),
                     ),
@@ -1776,22 +1776,24 @@ impl Workspace {
                     .flex_1()
                     .min_w_0()
                     .flex()
-                    .items_baseline()
+                    .items_center()
                     .gap_3()
                     .child(
-                        crate::glass::backdrop_heading("连接拓扑", palette, cx)
+                        crate::glass::backdrop_pill("连接拓扑", false, palette, cx)
                             .flex_none()
                             .text_size(crate::theme::text_px(15.))
                             .font_weight(FontWeight::SEMIBOLD),
                     )
                     .when(connections_live, |el| {
                         el.child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(crate::theme::text_px(12.))
-                                .text_color(crate::glass::backdrop_muted(palette, cx))
-                                .child(node_label(topo_summary_text)),
+                            crate::glass::backdrop_pill(
+                                node_label(topo_summary_text),
+                                true,
+                                palette,
+                                cx,
+                            )
+                            .min_w_0()
+                            .text_size(crate::theme::text_px(12.)),
                         )
                     }),
             )
@@ -2101,19 +2103,17 @@ impl Workspace {
             .child(topology_section);
         if !self.load_error.is_empty() {
             body = body.child(
-                div()
+                crate::glass::backdrop_pill(self.load_error.clone(), true, palette, cx)
                     .mt_3()
                     .px_2()
-                    .text_xs()
-                    .text_color(crate::glass::backdrop_muted(palette, cx))
-                    .child(self.load_error.clone()),
+                    .text_xs(),
             );
         }
         div()
             .size_full()
             .flex()
             .flex_col()
-            .child(self.scroll_pane("overview-scroll", body.pt(px(48.)), cx))
+            .child(self.scroll_pane("overview-scroll", body, cx))
     }
 }
 

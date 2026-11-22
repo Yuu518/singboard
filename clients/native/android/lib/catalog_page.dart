@@ -1543,20 +1543,17 @@ class _CatalogPageState extends State<CatalogPage> {
     }).toList();
     final usageMap = !widget.proxies && providers ? _ruleProviderUsage() : const <String, List<(int, String)>>{};
 
-    final scope = GlassScope.of(context);
     final header = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Text(
+            GlassBackdropHeading(
               widget.proxies ? '代理' : '规则',
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 26,
                 fontWeight: FontWeight.w700,
                 letterSpacing: -0.4,
-                color: scope.backdropInk(c),
-                shadows: scope.backdropShadows(),
               ),
             ),
             const SizedBox(width: 10),
@@ -1707,38 +1704,28 @@ class _CatalogPageState extends State<CatalogPage> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
+                          const GlassBackdropPill(
                             '当前配置里没有规则提供商',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: scope.backdropInk(c),
-                              shadows: scope.backdropShadows(),
-                            ),
+                            style: TextStyle(fontSize: 14),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
+                          const SizedBox(height: 6),
+                          const GlassBackdropPill(
                             '在 config.json 的 route.rule_set 中添加规则集后，这里会列出它们。',
+                            muted: true,
                             textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: scope.backdropMuted(c),
-                              shadows: scope.backdropShadows(),
-                            ),
+                            style: TextStyle(fontSize: 12),
                           ),
                         ],
                       ),
                     )
-                  : Text(
+                  : GlassBackdropPill(
                       busy
                           ? '正在读取…'
                           : query.isEmpty
                               ? '暂无记录'
                               : '没有找到匹配项',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: scope.backdropMuted(c),
-                        shadows: scope.backdropShadows(),
-                      ),
+                      muted: true,
+                      style: const TextStyle(fontSize: 14),
                     ),
             ),
           );

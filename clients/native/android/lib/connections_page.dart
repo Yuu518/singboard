@@ -639,15 +639,13 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
             final title = Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
+                const GlassBackdropHeading(
                   '连接',
                   style: TextStyle(
                     fontSize: 26,
                     height: 1.25,
                     fontWeight: FontWeight.w700,
                     letterSpacing: -.65,
-                    color: scope.backdropInk(c),
-                    shadows: scope.backdropShadows(),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -882,13 +880,10 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Center(
-              child: Text(
+              child: GlassBackdropPill(
                 widget.status,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: scope.backdropMuted(c),
-                  shadows: scope.backdropShadows(),
-                ),
+                muted: true,
+                style: const TextStyle(fontSize: 12),
               ),
             ),
           ),
@@ -922,15 +917,12 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                 return Padding(
                   padding: const EdgeInsets.only(top: 72),
                   child: Center(
-                    child: Text(
+                    child: GlassBackdropPill(
                       query.isEmpty
                           ? (closed ? '暂无已关闭的连接' : '暂无活跃连接')
                           : '没有找到匹配的连接',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: scope.backdropMuted(c),
-                        shadows: scope.backdropShadows(),
-                      ),
+                      muted: true,
+                      style: const TextStyle(fontSize: 14),
                     ),
                   ),
                 );

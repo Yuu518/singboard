@@ -1533,9 +1533,15 @@ impl Workspace {
                         .flex()
                         .gap_2()
                         .items_center()
-                        .text_xs()
-                        .text_color(crate::glass::backdrop_muted(palette, cx))
-                        .child(self.load_error.clone())
+                        .child(
+                            crate::glass::backdrop_pill(
+                                self.load_error.clone(),
+                                true,
+                                palette,
+                                cx,
+                            )
+                            .text_xs(),
+                        )
                         .child(self.button("retry", "刷新", Action::Refresh, cx)),
                 )
             })

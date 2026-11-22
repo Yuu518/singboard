@@ -326,13 +326,11 @@ class _ConfigPageState extends State<ConfigPage> {
           foregroundColor: scope.backdropInk(c),
           elevation: 0,
           scrolledUnderElevation: 0,
-          title: Text(
+          title: const GlassBackdropHeading(
             '配置',
             style: TextStyle(
               fontSize: 26,
               fontWeight: FontWeight.w700,
-              color: scope.backdropInk(c),
-              shadows: scope.backdropShadows(),
             ),
           ),
           actions: [
@@ -856,29 +854,25 @@ class _ConfigEditorState extends State<ConfigEditor> {
             title: Row(
               children: [
                 Flexible(
-                  child: Text(
+                  child: GlassBackdropHeading(
                     headerTitle,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w700,
-                      color: scope.backdropInk(c),
-                      shadows: scope.backdropShadows(),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                Text(
+                GlassBackdropPill(
                   dirty
                       ? '未保存'
                       : widget.type == 'profile'
                           ? '远程副本'
                           : '本地文件',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: dirty ? c.warningInk : scope.backdropMuted(c),
-                    shadows: scope.backdropShadows(),
-                  ),
+                  muted: !dirty,
+                  colorOverride: dirty ? c.warningInk : null,
+                  style: const TextStyle(fontSize: 12),
                 ),
               ],
             ),
