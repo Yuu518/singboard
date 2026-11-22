@@ -128,14 +128,14 @@ impl Workspace {
                     .gap(px(2.))
                     .child(
                         div()
-                            .text_size(crate::theme::text_px(13.)).line_height(px(18.))
+                            .text_size(crate::theme::text_px(13.)).line_height(crate::theme::text_px(18.))
                             .font_weight(FontWeight::MEDIUM)
                             .child(label),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .line_height(px(17.))
+                            .line_height(crate::theme::text_px(17.))
                             .text_color(p.muted())
                             .child(summary),
                     ),
@@ -1893,7 +1893,7 @@ impl Workspace {
                     .child(
                         div()
                             .text_xs()
-                            .line_height(px(17.))
+                            .line_height(crate::theme::text_px(17.))
                             .text_color(p.muted())
                             .child(desc),
                     ),
@@ -1930,8 +1930,8 @@ impl Workspace {
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .line_height(px(19.))
+                        .text_sm()
+                        .line_height(crate::theme::text_px(20.))
                         .text_color(p.muted())
                         .child("代理会中断，直到再次启动核心。"),
                 )
@@ -1948,7 +1948,7 @@ impl Workspace {
                                 .py(px(6.))
                                 .rounded_lg()
                                 .hover(|s| s.bg(p.hover()))
-                                .text_xs()
+                                .text_sm()
                                 .child("取消")
                                 .on_click(cx.listener(|v, _, _, cx| {
                                     v.close_settings_dialog(cx);
@@ -1963,7 +1963,7 @@ impl Workspace {
                                 .py(px(6.))
                                 .rounded_lg()
                                 .bg(p.danger_fill())
-                                .text_xs()
+                                .text_sm()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(rgb(0xffffff))
                                 .child("停止核心")
@@ -1986,8 +1986,8 @@ impl Workspace {
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .line_height(px(19.))
+                        .text_sm()
+                        .line_height(crate::theme::text_px(20.))
                         .text_color(p.muted())
                         .child(if *running {
                             "核心将停止，代理会中断。之后要在后台运行核心，需要重新安装服务。"
@@ -2008,7 +2008,7 @@ impl Workspace {
                                 .py(px(6.))
                                 .rounded_lg()
                                 .hover(|s| s.bg(p.hover()))
-                                .text_xs()
+                                .text_sm()
                                 .child("取消")
                                 .on_click(cx.listener(|v, _, _, cx| {
                                     v.close_settings_dialog(cx);
@@ -2023,7 +2023,7 @@ impl Workspace {
                                 .py(px(6.))
                                 .rounded_lg()
                                 .bg(p.danger_fill())
-                                .text_xs()
+                                .text_sm()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(rgb(0xffffff))
                                 .child("卸载服务")
@@ -2056,8 +2056,8 @@ impl Workspace {
                     )
                     .child(
                         div()
-                            .text_xs()
-                            .line_height(px(19.))
+                            .text_sm()
+                            .line_height(crate::theme::text_px(20.))
                             .text_color(p.muted())
                             .child(format!("面板会改为连接「{next_name}」。")),
                     )
@@ -2074,7 +2074,7 @@ impl Workspace {
                                     .py(px(6.))
                                     .rounded_lg()
                                     .hover(|s| s.bg(p.hover()))
-                                    .text_xs()
+                                    .text_sm()
                                     .child("取消")
                                     .on_click(cx.listener(|v, _, _, cx| {
                                         v.close_settings_dialog(cx);
@@ -2089,7 +2089,7 @@ impl Workspace {
                                     .py(px(6.))
                                     .rounded_lg()
                                     .bg(p.danger_fill())
-                                    .text_xs()
+                                    .text_sm()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(0xffffff))
                                     .child("删除端点")
@@ -2129,8 +2129,8 @@ impl Workspace {
                     )
                     .child(
                         div()
-                            .text_xs()
-                            .line_height(px(19.))
+                            .text_sm()
+                            .line_height(crate::theme::text_px(20.))
                             .text_color(p.muted())
                             .child("填写后，检查核心和面板更新都会带上这个 Token，不受匿名限流影响；下载面板更新也会优先通过 GitHub API，失败时再改走 Release 直链。Token 只保存在本机，只发给 api.github.com。"),
                     )
@@ -2209,7 +2209,7 @@ impl Workspace {
                                     .py(px(6.))
                                     .rounded_lg()
                                     .hover(|s| s.bg(p.hover()))
-                                    .text_xs()
+                                    .text_sm()
                                     .child("取消")
                                     .on_click(cx.listener(|v, _, _, cx| {
                                         v.close_settings_dialog(cx);
@@ -2286,8 +2286,8 @@ impl Workspace {
                     )
                     .child(
                         div()
-                            .text_xs()
-                            .line_height(px(19.))
+                            .text_sm()
+                            .line_height(crate::theme::text_px(20.))
                             .text_color(p.muted())
                             .child(if is_busy {
                                 crate::core_actions::progress()
@@ -2312,7 +2312,7 @@ impl Workspace {
                                         .py(px(6.))
                                         .rounded_lg()
                                         .hover(|s| s.bg(p.hover()))
-                                        .text_xs()
+                                        .text_sm()
                                         .child("稍后")
                                         .on_click(cx.listener(|v, _, _, cx| {
                                             v.close_settings_dialog(cx);

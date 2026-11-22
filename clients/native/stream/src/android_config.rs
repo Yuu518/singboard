@@ -47,6 +47,9 @@ enum Command {
     SetGlassTint {
         tint: f32,
     },
+    SetFontScale {
+        scale: f32,
+    },
     Format {
         text: String,
     },
@@ -530,6 +533,10 @@ pub async fn request(dir: PathBuf, input: &str) -> Result<Value, String> {
         }
         Command::SetGlassTint{tint}=>{
             crate::settings::Settings::set_glass_tint(&dir,tint)?;
+            Value::Null
+        }
+        Command::SetFontScale{scale}=>{
+            crate::settings::Settings::set_font_scale(&dir,scale)?;
             Value::Null
         }
         Command::Tools=>json!(crate::tools::forms(&crate::settings::Settings::load(&dir)?)),

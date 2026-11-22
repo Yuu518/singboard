@@ -114,6 +114,27 @@ impl Render for Overview {
             self.modal_fade = modal_target;
         }
         let modal_eased = self.modal_fade * self.modal_fade * (3. - 2. * self.modal_fade);
+        let font_reveal = if cx.reduce_motion() {
+            if cx.global::<theme::Appearance>().font_transition_at.is_some() {
+                cx.global_mut::<theme::Appearance>().font_transition_at = None;
+            }
+            1.
+        } else if let Some(started) = cx.global::<theme::Appearance>().font_transition_at {
+            let elapsed = started.elapsed().as_secs_f32();
+            let duration = 0.22;
+            if elapsed < duration {
+                window.request_animation_frame();
+                let u = 1. - elapsed / duration;
+                let eased = 1. - u * u * u;
+                0.62 + 0.38 * eased
+            } else {
+                cx.global_mut::<theme::Appearance>().font_transition_at = None;
+                1.
+            }
+        } else {
+            1.
+        };
+        let content_opacity = (1. - 0.40 * modal_eased) * font_reveal;
         let blurred_bg = (modal_eased > 0.002)
             .then(|| glass::backdrop_image(cx))
             .flatten();
@@ -140,7 +161,7 @@ impl Render for Overview {
                     .absolute()
                     .inset_0()
                     .size_full()
-                    .when(modal_eased > 0.002, |el| el.opacity(1. - 0.40 * modal_eased))
+                    .when(content_opacity < 0.999, |el| el.opacity(content_opacity))
                     .child(
                         div()
                             .absolute()
@@ -400,6 +421,12 @@ fn run() -> Result<(), String> {
                                 theme::Appearance::apply(window, view.wallpaper.custom, cx);
                             })
                             .detach();
+                            cx.observe_window_activation(window, |view: &mut Overview, window, cx| {
+                                if window.is_window_active() {
+                                    theme::Appearance::sync_text_scale(window, view.wallpaper.custom, cx);
+                                }
+                            })
+                            .detach();
                             cx.observe(&workspace, |_, _, cx| cx.notify()).detach();
                             cx.observe(&wizard, |_, _, cx| cx.notify()).detach();
                             Overview {
@@ -539,8 +566,13 @@ fn run() -> Result<(), String> {
                                         }
                                     });
                                     let appearance = theme::Appearance::load();
-                                    if appearance.mode != cx.global::<theme::Appearance>().mode {
-                                        cx.global_mut::<theme::Appearance>().mode = appearance.mode;
+                                    let current_appearance = cx.global::<theme::Appearance>();
+                                    if appearance.mode != current_appearance.mode
+                                        || (appearance.font_scale - current_appearance.font_scale).abs() > 0.001
+                                    {
+                                        let state = cx.global_mut::<theme::Appearance>();
+                                        state.mode = appearance.mode;
+                                        state.font_scale = appearance.font_scale;
                                         theme::Appearance::apply(window, panel.wallpaper.custom, cx);
                                     }
                                     let tint_val = prefs.glass_tint.unwrap_or(0.5);

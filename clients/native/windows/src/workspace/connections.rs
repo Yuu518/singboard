@@ -296,7 +296,7 @@ impl Workspace {
                 div()
                     .id("conn-tab-active")
                     .relative()
-                    .h(px(24.))
+                    .h(crate::theme::text_px(24.))
                     .flex()
                     .items_center()
                     .cursor_pointer()
@@ -323,7 +323,7 @@ impl Workspace {
                 div()
                     .id("conn-tab-closed")
                     .relative()
-                    .h(px(24.))
+                    .h(crate::theme::text_px(24.))
                     .flex()
                     .items_center()
                     .cursor_pointer()
@@ -355,7 +355,7 @@ impl Workspace {
                 div()
                     .relative()
                     .overflow_hidden()
-                    .h(px(28.))
+                    .h(crate::theme::text_px(28.))
                     .px_3()
                     .rounded_full()
                     .bg(palette.fill())
@@ -429,7 +429,7 @@ impl Workspace {
                             .rounded_full()
                             .bg(palette.danger_soft())
                             .hover(|s| s.bg(palette.danger_soft()))
-                            .text_xs()
+                            .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(palette.danger())
                             .child(if query.is_empty() {
@@ -587,10 +587,11 @@ impl Workspace {
                                         let id_str = r["id"].as_str().unwrap_or("").to_owned();
                                         let row_detail = r.clone();
 
+                                        let row_h = (56. * crate::theme::effective_text_scale(cx) + 16.).ceil();
                                         let mut row = div()
                                             .id(("conn-row", idx))
                                             .w_full()
-                                            .h(px(72.))
+                                            .h(px(row_h))
                                             .px_4()
                                             .flex()
                                             .items_center()
@@ -614,7 +615,7 @@ impl Workspace {
                                                         div()
                                                             .flex()
                                                             .items_center()
-                                                            .h(px(20.))
+                                                            .h(crate::theme::text_px(20.))
                                                             .gap(px(6.))
                                                             .min_w_0()
                                                             .when(!badge.is_empty(), |el| {
@@ -629,7 +630,7 @@ impl Workspace {
                                                                             p.tcp_soft()
                                                                         })
                                                                         .text_xs()
-                                                                        .line_height(px(20.))
+                                                                        .line_height(crate::theme::text_px(20.))
                                                                         .font_weight(FontWeight::MEDIUM)
                                                                         .text_color(if is_udp {
                                                                             p.udp()
@@ -642,7 +643,7 @@ impl Workspace {
                                                             .child(
                                                                 div()
                                                                     .text_sm()
-                                                                    .line_height(px(20.))
+                                                                    .line_height(crate::theme::text_px(20.))
                                                                     .truncate()
                                                                     .child(target),
                                                             )
@@ -660,7 +661,7 @@ impl Workspace {
                                                         el.child(
                                                             div()
                                                                 .text_xs()
-                                                                .line_height(px(16.))
+                                                                .line_height(crate::theme::text_px(16.))
                                                                 .text_color(p.muted())
                                                                 .truncate()
                                                                 .child(rule_line),
@@ -670,7 +671,7 @@ impl Workspace {
                                                         el.child(
                                                             div()
                                                                 .text_xs()
-                                                                .line_height(px(16.))
+                                                                .line_height(crate::theme::text_px(16.))
                                                                 .text_color(p.ink().opacity(0.80))
                                                                 .truncate()
                                                                 .child(crate::emoji::text(chains)),
@@ -679,7 +680,7 @@ impl Workspace {
                                             )
                                             .child(
                                                 div()
-                                                    .w(px(208.))
+                                                    .w(crate::theme::text_px(208.))
                                                     .flex_none()
                                                     .flex()
                                                     .flex_col()

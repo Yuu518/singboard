@@ -184,7 +184,7 @@ pub struct Workspace {
     log_list: ListState,
     log_list_len: usize,
     log_list_head: Option<u64>,
-    log_list_filter: (String, usize, String, bool),
+    log_list_filter: (String, usize, String, bool, u32),
     log_auto_scroll: bool,
     log_scroll_bound: bool,
     log_subscribed_level: String,
@@ -577,7 +577,7 @@ impl Workspace {
             log_list,
             log_list_len: 0,
             log_list_head: None,
-            log_list_filter: (String::new(), 0, "info".into(), false),
+            log_list_filter: (String::new(), 0, "info".into(), false, 26),
             log_auto_scroll: true,
             log_scroll_bound: false,
             log_subscribed_level: "info".into(),
@@ -1404,13 +1404,13 @@ impl Workspace {
                             div()
                                 .id("service-notice-start")
                                 .cursor_pointer()
-                                .h(px(32.))
+                                .h(crate::theme::text_px(32.))
                                 .px_5()
                                 .rounded(px(10.))
                                 .bg(palette.primary_fill())
                                 .flex()
                                 .items_center()
-                                .text_xs()
+                                .text_sm()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(rgb(0xffffff))
                                 .child("启动服务")
@@ -1425,7 +1425,7 @@ impl Workspace {
                                 .relative()
                                 .overflow_hidden()
                                 .cursor_pointer()
-                                .h(px(32.))
+                                .h(crate::theme::text_px(32.))
                                 .rounded(px(10.))
                                 .bg(palette.fill())
                                 .border_1()
@@ -1440,7 +1440,7 @@ impl Workspace {
                                         .hover(|s| s.bg(palette.fill_strong()))
                                         .flex()
                                         .items_center()
-                                        .text_xs()
+                                        .text_sm()
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(palette.accent())
                                         .child("前往设置"),
@@ -2261,7 +2261,7 @@ impl Workspace {
             .hover(|s| s.bg(palette.fill_strong()))
             .px_3()
             .py(px(5.))
-            .text_xs()
+            .text_sm()
             .font_weight(FontWeight::MEDIUM)
             .child(title)
             .on_click(cx.listener(move |this, _, _, cx| this.apply(action.clone(), cx)));
@@ -2520,7 +2520,7 @@ impl RenderOnce for DropdownBox {
             .when_some(self.width, |d, w| d.w(w))
             .when(self.full_width, |d| d.w_full())
             .when_some(self.min_width, |d, w| d.min_w(w))
-            .h(px(32.))
+            .h(crate::theme::text_px(32.))
             .rounded(px(10.))
             .bg(self.palette.fill())
             .border_1()
@@ -2533,7 +2533,7 @@ impl RenderOnce for DropdownBox {
                 Button::new(self.id)
                     .ghost()
                     .w_full()
-                    .h(px(32.))
+                    .h(crate::theme::text_px(32.))
                     .px(self.padding_x)
                     .rounded(px(10.))
                     .text_color(self.palette.ink())

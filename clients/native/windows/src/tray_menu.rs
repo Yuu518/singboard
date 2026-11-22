@@ -29,7 +29,11 @@ struct TrayMenu {
     error: String,
 }
 
-fn place(window: &Window, x: i32, y: i32) -> bool {
+fn popup_size(scale: f32) -> (f32, f32) {
+    ((144. * scale).round(), (76. + 56. * scale).round())
+}
+
+fn place(window: &Window, x: i32, y: i32, scale: f32) -> bool {
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
         return false;
     };
@@ -49,8 +53,9 @@ fn place(window: &Window, x: i32, y: i32) -> bool {
             dy = 96;
         }
         let screen = info.rcWork;
-        let w = ((144 * dx + 48) / 96) as i32;
-        let h = ((132 * dy + 48) / 96) as i32;
+        let (bw, bh) = popup_size(scale);
+        let w = ((bw as u32 * dx + 48) / 96) as i32;
+        let h = ((bh as u32 * dy + 48) / 96) as i32;
         let left = if x + w <= screen.right { x } else { x - w };
         let top = if y - h >= screen.top { y - h } else { y };
         let hwnd = handle.hwnd.get() as _;
@@ -84,7 +89,8 @@ pub fn open(x: i32, y: i32, panel: AnyWindowHandle, workspace: Entity<Workspace>
     {
         return;
     }
-    let bounds = Bounds::centered(None, size(px(144.), px(132.)), cx);
+    let (bw, bh) = popup_size(crate::theme::effective_text_scale(cx));
+    let bounds = Bounds::centered(None, size(px(bw), px(bh)), cx);
     if let Ok(handle) = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -127,9 +133,11 @@ impl TrayMenu {
     fn present(&mut self, x: i32, y: i32, window: &mut Window, cx: &mut Context<Self>) {
         self.selected = None;
         self.error.clear();
+        let scale = crate::theme::effective_text_scale(cx);
+        window.set_rem_size(px(16. * scale));
         self.workspace
             .update(cx, |ws, cx| ws.refresh_local_state(cx));
-        let focused = place(window, x, y);
+        let focused = place(window, x, y, scale);
         window.focus(&self.focus, cx);
         if !focused {
             let handle = gpui::Window::window_handle(window);
@@ -192,7 +200,8 @@ impl TrayMenu {
 }
 
 impl Render for TrayMenu {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        window.set_rem_size(px(16. * crate::theme::effective_text_scale(cx)));
         let p = Palette::get(cx);
         let running = self.workspace.read(cx).local_state.contains("运行中");
         let item = |i: usize, label: &'static str| {
@@ -304,14 +313,14 @@ impl Render for TrayMenu {
                     })
                     .child(
                         item(2, "打开面板")
-                            .h(px(28.))
+                            .h(crate::theme::text_px(28.))
                             .rounded(px(12.))
                             .hover(|s| s.bg(p.hover()))
                             .child("打开面板"),
                     )
                     .child(
                         item(3, "退出")
-                            .h(px(28.))
+                            .h(crate::theme::text_px(28.))
                             .rounded(px(12.))
                             .text_color(p.danger())
                             .hover(|s| s.bg(p.danger_soft()))

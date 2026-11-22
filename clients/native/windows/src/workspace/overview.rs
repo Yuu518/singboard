@@ -639,7 +639,7 @@ impl Workspace {
                 .child(
                     div()
                         .text_size(crate::theme::text_px(13.))
-                        .line_height(px(19.5))
+                        .line_height(crate::theme::text_px(19.5))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(palette.ink())
                         .child(title),
@@ -660,7 +660,7 @@ impl Workspace {
                         .child(
                             div()
                                 .text_size(crate::theme::text_px(13.))
-                                .line_height(px(19.5))
+                                .line_height(crate::theme::text_px(19.5))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(palette.ink())
                                 .child(state_text),
@@ -669,7 +669,7 @@ impl Workspace {
                             el.child(
                                 div()
                                     .text_size(crate::theme::text_px(13.))
-                                    .line_height(px(19.5))
+                                    .line_height(crate::theme::text_px(19.5))
                                     .text_color(palette.muted())
                                     .child("·"),
                             )
@@ -681,7 +681,7 @@ impl Workspace {
                                     .px(px(4.))
                                     .hover(|s| s.bg(palette.hover()))
                                     .text_size(crate::theme::text_px(13.))
-                                    .line_height(px(19.5))
+                                    .line_height(crate::theme::text_px(19.5))
                                     .text_color(palette.muted())
                                     .child(mode_text)
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -695,7 +695,7 @@ impl Workspace {
                         div()
                             .pl(px(22.))
                             .text_size(crate::theme::text_px(12.))
-                            .line_height(px(18.))
+                            .line_height(crate::theme::text_px(18.))
                             .text_color(palette.muted())
                             .truncate()
                             .child(version_text),
@@ -726,7 +726,7 @@ impl Workspace {
                     .rounded_full()
                     .hover(|s| s.bg(palette.fill()))
                     .text_size(crate::theme::text_px(13.))
-                    .line_height(px(19.5))
+                    .line_height(crate::theme::text_px(19.5))
                     .text_color(palette.muted())
                     .child(div().truncate().child(node_label(profile_label)))
                     .when(self.active_profile_failed, |el| {
@@ -763,7 +763,7 @@ impl Workspace {
                 .child(
                     div()
                         .text_size(crate::theme::text_px(13.))
-                        .line_height(px(21.))
+                        .line_height(crate::theme::text_px(21.))
                         .text_color(palette.muted())
                         .child(detail_text),
                 )
@@ -776,8 +776,8 @@ impl Workspace {
                             .py(px(7.))
                             .rounded_lg()
                             .bg(palette.primary_fill())
-                            .text_size(crate::theme::text_px(13.))
-                            .line_height(px(19.5))
+                            .text_size(crate::theme::text_px(14.))
+                            .line_height(crate::theme::text_px(20.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(rgb(0xffffff))
                             .child("启动服务")
@@ -792,8 +792,8 @@ impl Workspace {
                             .rounded_lg()
                             .bg(palette.fill())
                             .hover(|s| s.bg(palette.fill_strong()))
-                            .text_size(crate::theme::text_px(13.))
-                            .line_height(px(19.5))
+                            .text_size(crate::theme::text_px(14.))
+                            .line_height(crate::theme::text_px(20.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(palette.ink())
                             .child("前往设置")
@@ -808,8 +808,8 @@ impl Workspace {
                             .rounded_lg()
                             .bg(palette.fill())
                             .hover(|s| s.bg(palette.fill_strong()))
-                            .text_size(crate::theme::text_px(13.))
-                            .line_height(px(19.5))
+                            .text_size(crate::theme::text_px(14.))
+                            .line_height(crate::theme::text_px(20.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(palette.ink())
                             .child("检查 API 配置")
@@ -837,7 +837,7 @@ impl Workspace {
                 .child(
                     div()
                         .text_size(crate::theme::text_px(12.))
-                        .line_height(px(18.))
+                        .line_height(crate::theme::text_px(18.))
                         .text_color(palette.muted())
                         .child(exit_heading(&mode_raw)),
                 )
@@ -852,7 +852,7 @@ impl Workspace {
                                 .min_w_0()
                                 .truncate()
                                 .text_size(crate::theme::text_px(if narrow { 26. } else { 28. }))
-                                .line_height(px(if narrow { 31. } else { 34. }))
+                                .line_height(crate::theme::text_px(if narrow { 31. } else { 34. }))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(if has_exit {
                                     palette.ink()
@@ -870,7 +870,7 @@ impl Workspace {
                                     .gap(px(6.))
                                     .pb(px(2.))
                                     .text_size(crate::theme::text_px(13.))
-                                    .line_height(px(19.5))
+                                    .line_height(crate::theme::text_px(19.5))
                                     .text_color(palette.muted())
                                     .child(
                                         div()
@@ -887,7 +887,7 @@ impl Workspace {
                         div()
                             .mt(px(1.))
                             .text_size(crate::theme::text_px(13.))
-                            .line_height(px(19.5))
+                            .line_height(crate::theme::text_px(19.5))
                             .text_color(palette.muted())
                             .truncate()
                             .child(node_label(via_display)),
@@ -921,7 +921,7 @@ impl Workspace {
                     .child(
                         div()
                             .text_size(crate::theme::text_px(12.))
-                            .line_height(px(18.))
+                            .line_height(crate::theme::text_px(18.))
                             .text_color(palette.muted())
                             .flex().items_center().gap(px(4.))
                             .child(svg().path("download").size(px(12.)).text_color(palette.muted())).child("下载"),
@@ -934,7 +934,7 @@ impl Workspace {
                             .child(
                                 div()
                                     .text_size(crate::theme::text_px(rate_size))
-                                    .line_height(px(rate_lh))
+                                    .line_height(crate::theme::text_px(rate_lh))
                                     .font_weight(FontWeight::LIGHT)
                                     .text_color(if latest.is_some() {
                                         palette.ink()
@@ -947,7 +947,7 @@ impl Workspace {
                                 el.child(
                                     div()
                                         .text_size(crate::theme::text_px(14.))
-                                        .line_height(px(21.))
+                                        .line_height(crate::theme::text_px(21.))
                                         .text_color(palette.muted())
                                         .child(dl_unit),
                                 )
@@ -956,7 +956,7 @@ impl Workspace {
                     .child(
                         div()
                             .text_size(crate::theme::text_px(12.))
-                            .line_height(px(18.))
+                            .line_height(crate::theme::text_px(18.))
                             .text_color(palette.muted())
                             .child(format!(
                                 "总计 {}",
@@ -974,7 +974,7 @@ impl Workspace {
                     .child(
                         div()
                             .text_size(crate::theme::text_px(12.))
-                            .line_height(px(18.))
+                            .line_height(crate::theme::text_px(18.))
                             .text_color(palette.muted())
                             .flex().items_center().gap(px(4.))
                             .child(svg().path("upload").size(px(12.)).text_color(palette.muted())).child("上传"),
@@ -987,7 +987,7 @@ impl Workspace {
                             .child(
                                 div()
                                     .text_size(crate::theme::text_px(rate_size))
-                                    .line_height(px(rate_lh))
+                                    .line_height(crate::theme::text_px(rate_lh))
                                     .font_weight(FontWeight::LIGHT)
                                     .text_color(if latest.is_some() {
                                         palette.ink()
@@ -1000,7 +1000,7 @@ impl Workspace {
                                 el.child(
                                     div()
                                         .text_size(crate::theme::text_px(14.))
-                                        .line_height(px(21.))
+                                        .line_height(crate::theme::text_px(21.))
                                         .text_color(palette.muted())
                                         .child(ul_unit),
                                 )
@@ -1009,7 +1009,7 @@ impl Workspace {
                     .child(
                         div()
                             .text_size(crate::theme::text_px(12.))
-                            .line_height(px(18.))
+                            .line_height(crate::theme::text_px(18.))
                             .text_color(palette.muted())
                             .child(format!(
                                 "总计 {}",
@@ -1089,7 +1089,7 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .child(
-                                div().text_size(crate::theme::text_px(12.)).line_height(px(18.))
+                                div().text_size(crate::theme::text_px(12.)).line_height(crate::theme::text_px(18.))
                                     .text_color(palette.muted()).child("连接"),
                             )
                             .child(
@@ -1111,8 +1111,8 @@ impl Workspace {
                             )
                             .child(
                                 div()
-                                    .min_h(px(if narrow && connections_live { 34. } else { 17.4 }))
-                                    .line_height(px(17.4))
+                                    .min_h(crate::theme::text_px(if narrow && connections_live { 34. } else { 17.4 }))
+                                    .line_height(crate::theme::text_px(17.4))
                                     .text_size(crate::theme::text_px(12.))
                                     .text_color(palette.muted())
                                     .when(connections_live, |d| if narrow { d.flex().flex_col().child(format!("TCP {tcp}")).child(format!("UDP {udp}")) } else { d.child(format!("TCP {tcp} · UDP {udp}")) }),
@@ -1135,7 +1135,7 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .child(
-                                div().text_size(crate::theme::text_px(12.)).line_height(px(18.))
+                                div().text_size(crate::theme::text_px(12.)).line_height(crate::theme::text_px(18.))
                                     .text_color(palette.muted()).child("内存"),
                             )
                             .child(
@@ -1167,8 +1167,8 @@ impl Workspace {
                             )
                             .child(
                                 div()
-                                    .min_h(px(if narrow && connections_live { 34. } else { 17.4 }))
-                                    .line_height(px(17.4))
+                                    .min_h(crate::theme::text_px(if narrow && connections_live { 34. } else { 17.4 }))
+                                    .line_height(crate::theme::text_px(17.4))
                                     .text_size(crate::theme::text_px(12.))
                                     .text_color(palette.muted())
                                     .when(mem_bytes.is_some(), |d| d.child("运行时占用")),
@@ -1237,14 +1237,14 @@ impl Workspace {
                         .child(
                             div()
                                 .text_size(crate::theme::text_px(13.))
-                                .line_height(px(19.5))
+                                .line_height(crate::theme::text_px(19.5))
                                 .text_color(palette.muted())
                                 .child(label),
                         )
                         .child(
                             div()
                                 .text_size(crate::theme::text_px(11.))
-                                .line_height(px(16.5))
+                                .line_height(crate::theme::text_px(16.5))
                                 .text_color(palette.muted())
                                 .child(source),
                         ),
@@ -1262,7 +1262,7 @@ impl Workspace {
                         .child(
                             div()
                                 .text_size(crate::theme::text_px(location_size))
-                                .line_height(px(location_size * 1.5))
+                                .line_height(crate::theme::text_px(location_size * 1.5))
                                 .font_weight(if err || pending {
                                     FontWeight::NORMAL
                                 } else {
@@ -1467,7 +1467,7 @@ impl Workspace {
                     .px(pad_x)
                     .py(if narrow { px(8.) } else { px(7.) })
                     .text_size(crate::theme::text_px(13.))
-                    .line_height(px(19.5))
+                    .line_height(crate::theme::text_px(19.5))
                     .child(
                         div()
                             .flex_none()
@@ -1639,7 +1639,7 @@ impl Workspace {
                                 crate::glass::backdrop_heading("网络", palette, cx)
                                     .flex_none()
                                     .text_size(crate::theme::text_px(15.))
-                                    .line_height(px(22.5))
+                                    .line_height(crate::theme::text_px(22.5))
                                     .font_weight(FontWeight::SEMIBOLD),
                             )
                             .when(!running_net, |el| {
@@ -1878,9 +1878,9 @@ impl Workspace {
                             .left(px(left_x))
                             .top(px(mid_y))
                             .w(px(label_w))
-                            .h(px(16.))
+                            .h(crate::theme::text_px(16.))
                             .text_size(crate::theme::text_px(12.))
-                            .line_height(px(16.))
+                            .line_height(crate::theme::text_px(16.))
                             .text_color(if !selected.is_empty() && !selected.contains(&i) {
                                 palette.chart_ink(0x33)
                             } else if merged {
@@ -2092,7 +2092,7 @@ impl Workspace {
                 crate::glass::backdrop_heading("概览", palette, cx)
                     .mb_3()
                     .text_size(crate::theme::text_px(26.))
-                    .line_height(px(32.))
+                    .line_height(crate::theme::text_px(32.))
                     .font_weight(FontWeight::BOLD),
             )
             .child(hero_card)

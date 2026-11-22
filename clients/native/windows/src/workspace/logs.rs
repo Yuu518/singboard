@@ -87,7 +87,14 @@ impl Workspace {
             .count();
         let shown = rows.len();
 
-        let filter_key = (query.clone(), self.log_level, self.core_level.clone(), paused);
+        let log_row_h = (26. * crate::theme::effective_text_scale(cx)).ceil();
+        let filter_key = (
+            query.clone(),
+            self.log_level,
+            self.core_level.clone(),
+            paused,
+            log_row_h as u32,
+        );
         let row_focus = self.log_focus.get_or_insert_with(|| cx.focus_handle()).clone();
         let head_seq = rows
             .first()
@@ -98,7 +105,7 @@ impl Workspace {
         let prev_len = self.log_list_len;
         if filter_key != self.log_list_filter || shown == 0 || prev_len == 0 {
             self.cancel_scroll(scrolling::ScrollTarget::Logs);
-            self.log_list.reset_with_uniform_height(shown, px(26.));
+            self.log_list.reset_with_uniform_height(shown, px(log_row_h));
             self.log_auto_scroll = true;
             self.log_list.set_follow_mode(FollowMode::Tail);
         } else if head_seq == prev_head {
@@ -107,7 +114,7 @@ impl Workspace {
                     .splice(prev_len..prev_len, shown - prev_len);
             } else if shown < prev_len {
                 self.cancel_scroll(scrolling::ScrollTarget::Logs);
-                self.log_list.reset_with_uniform_height(shown, px(26.));
+                self.log_list.reset_with_uniform_height(shown, px(log_row_h));
                 self.log_auto_scroll = true;
                 self.log_list.set_follow_mode(FollowMode::Tail);
             }
@@ -125,14 +132,14 @@ impl Workspace {
                 }
             } else {
                 self.cancel_scroll(scrolling::ScrollTarget::Logs);
-                self.log_list.reset_with_uniform_height(shown, px(26.));
+                self.log_list.reset_with_uniform_height(shown, px(log_row_h));
                 if self.log_auto_scroll {
                     self.log_list.set_follow_mode(FollowMode::Tail);
                 }
             }
         } else {
             self.cancel_scroll(scrolling::ScrollTarget::Logs);
-            self.log_list.reset_with_uniform_height(shown, px(26.));
+            self.log_list.reset_with_uniform_height(shown, px(log_row_h));
             if self.log_auto_scroll {
                 self.log_list.set_follow_mode(FollowMode::Tail);
             }
@@ -214,7 +221,7 @@ impl Workspace {
                     .id("logs-clear")
                     .relative()
                     .overflow_hidden()
-                    .h(px(32.))
+                    .h(crate::theme::text_px(32.))
                     .rounded_full()
                     .bg(palette.fill())
                     .border_1()
@@ -231,7 +238,7 @@ impl Workspace {
                             .when(!clear_disabled, |d| d.hover(|s| s.bg(palette.fill_strong())))
                             .flex()
                             .items_center()
-                            .text_xs()
+                            .text_sm()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(if clear_disabled {
                                 palette.muted()
@@ -425,14 +432,14 @@ impl Workspace {
                                     div()
                                         .id("logs-empty-clear-search")
                                         .cursor_pointer()
-                                        .h(px(32.))
+                                        .h(crate::theme::text_px(32.))
                                         .px_5()
                                         .rounded(px(10.))
                                         .bg(palette.fill())
                                         .hover(|s| s.bg(palette.fill_strong()))
                                         .flex()
                                         .items_center()
-                                        .text_xs()
+                                        .text_sm()
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(palette.accent())
                                         .child("清除搜索")
@@ -449,14 +456,14 @@ impl Workspace {
                                     div()
                                         .id("logs-empty-reset-level")
                                         .cursor_pointer()
-                                        .h(px(32.))
+                                        .h(crate::theme::text_px(32.))
                                         .px_5()
                                         .rounded(px(10.))
                                         .bg(palette.fill())
                                         .hover(|s| s.bg(palette.fill_strong()))
                                         .flex()
                                         .items_center()
-                                        .text_xs()
+                                        .text_sm()
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(palette.accent())
                                         .child("跟随核心级别")
@@ -532,14 +539,14 @@ impl Workspace {
                                     div()
                                         .id("logs-empty-api-settings")
                                         .cursor_pointer()
-                                        .h(px(32.))
+                                        .h(crate::theme::text_px(32.))
                                         .px_5()
                                         .rounded(px(10.))
                                         .bg(palette.fill())
                                         .hover(|s| s.bg(palette.fill_strong()))
                                         .flex()
                                         .items_center()
-                                        .text_xs()
+                                        .text_sm()
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(palette.accent())
                                         .child("检查 API 配置")
@@ -609,7 +616,7 @@ impl Workspace {
                 if entry.marker {
                     return div()
                         .w_full()
-                        .h(px(26.))
+                        .h(px(log_row_h))
                         .px(px(14.))
                         .flex()
                         .items_center()
@@ -645,7 +652,7 @@ impl Workspace {
                     .border_b(px(0.5))
                     .border_color(p.line())
                     .when(expanded, |el| el.items_start().py_1())
-                    .when(!expanded, |el| el.h(px(26.)).items_center())
+                    .when(!expanded, |el| el.h(px(log_row_h)).items_center())
                     .when_some(row_bg, |el, bg| el.bg(bg))
                     .when(this.log_active_row == Some(seq) && this.log_focus.as_ref().is_some_and(|f| f.is_focused(window)), |el| el.bg(p.fill_strong()))
                     .on_click(move |_, window, cx| {
@@ -664,7 +671,7 @@ impl Workspace {
                     })
                     .child(
                         div()
-                            .w(px(62.))
+                            .w(crate::theme::text_px(62.))
                             .flex_none()
                             .font_family("Consolas")
                             .text_size(crate::theme::text_px(11.5))
@@ -674,8 +681,8 @@ impl Workspace {
                     )
                     .child(
                         div()
-                            .w(px(52.))
-                            .h(px(18.))
+                            .w(crate::theme::text_px(52.))
+                            .h(crate::theme::text_px(18.))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -693,7 +700,7 @@ impl Workspace {
                             .min_w_0()
                             .font_family("Consolas")
                             .text_xs()
-                            .line_height(px(18.))
+                            .line_height(crate::theme::text_px(18.))
                             .text_color(p.ink())
                             .when(!expanded, |el| el.truncate())
                             .child(crate::emoji::text(entry.payload.clone())),
@@ -746,14 +753,14 @@ impl Workspace {
                         .child(
                             div()
                                 .relative()
-                                .h(px(32.))
+                                .h(crate::theme::text_px(32.))
                                 .px_3()
                                 .rounded_full()
                                 .hover(|s| s.bg(palette.fill_strong()))
                                 .flex()
                                 .items_center()
                                 .gap(px(6.))
-                                .text_xs()
+                                .text_sm()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(palette.accent())
                                 .child(

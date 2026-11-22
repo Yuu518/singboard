@@ -48,6 +48,7 @@ pub struct Settings {
     pub clash_apis: Vec<Endpoint>,
     pub active_clash_api_id: String,
     pub theme: Option<String>,
+    pub font_scale: Option<f32>,
     pub start_page: String,
     pub glass_tint: Option<f32>,
     pub close_to_tray: Option<bool>,
@@ -144,6 +145,12 @@ impl Settings {
     pub fn set_glass_tint(dir: &Path, tint: f32) -> Result<(), String> {
         Self::edit(dir, |s| {
             s.glass_tint = Some(tint.clamp(0., 1.));
+            Ok(())
+        })
+    }
+    pub fn set_font_scale(dir: &Path, scale: f32) -> Result<(), String> {
+        Self::edit(dir, |s| {
+            s.font_scale = Some(scale.clamp(0.9, 1.4));
             Ok(())
         })
     }

@@ -925,8 +925,8 @@ class GlassSearchField extends StatelessWidget {
     final c = SingboardColors.of(context);
     return GlassControl(
       radius: 10,
-      child: SizedBox(
-        height: 32,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 32),
         child: TextField(
           controller: controller,
           focusNode: focusNode,
@@ -1096,12 +1096,14 @@ class GlassTintSliderWidget extends StatelessWidget {
 
 class GlassFontScaleSliderWidget extends StatelessWidget {
   final double value;
+  final ValueChanged<double>? onChangeStart;
   final ValueChanged<double> onChanged;
   final ValueChanged<double>? onChangeEnd;
 
   const GlassFontScaleSliderWidget({
     super.key,
     required this.value,
+    this.onChangeStart,
     required this.onChanged,
     this.onChangeEnd,
   });
@@ -1110,9 +1112,10 @@ class GlassFontScaleSliderWidget extends StatelessWidget {
   static const double maxScale = 1.4;
 
   static double _snap(double v) {
-    final clamped = v.clamp(minScale, maxScale);
-    if ((clamped - 1.0).abs() <= 0.012) return 1.0;
-    return (clamped * 100).round() / 100;
+    final pos = ((v - minScale) / (maxScale - minScale)).clamp(0.0, 1.0);
+    if ((pos - 0.2).abs() <= 0.012) return 1.0;
+    final smooth = (pos * 200).round() / 200;
+    return minScale + (maxScale - minScale) * smooth;
   }
 
   @override
@@ -1141,6 +1144,7 @@ class GlassFontScaleSliderWidget extends StatelessWidget {
             overlayShape: SliderComponentShape.noOverlay, thumbShape: const _PillThumbShape(),
           ), child: Slider(value: value.clamp(minScale, maxScale), min: minScale, max: maxScale,
             semanticFormatterCallback: (v) => '${(v * 100).round()}%',
+            onChangeStart: (v) => onChangeStart?.call(_snap(v)),
             onChanged: (v) {
               final next = _snap(v);
               if (next == 1.0 && value != 1.0) HapticFeedback.selectionClick();

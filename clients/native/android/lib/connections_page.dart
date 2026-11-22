@@ -821,20 +821,25 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
               ],
               child: GlassControl(
                 radius: 10,
-                child: SizedBox(
-                  height: 32,
-                  width: 102,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: 32,
+                    minWidth: MediaQuery.textScalerOf(context).scale(102).clamp(102.0, 148.0),
+                  ),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 11),
+                    padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Expanded(
+                        Flexible(
                           child: Text(
                             sorts[effectiveSort] ?? '最新',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(fontSize: 14, color: c.ink),
                           ),
                         ),
+                        const SizedBox(width: 4),
                         PanelIcon('select-caret', size: 16, color: c.ink),
                       ],
                     ),
@@ -994,8 +999,11 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                                     Container(
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 6,
+                                        vertical: 1,
                                       ),
-                                      height: 18,
+                                      constraints: const BoxConstraints(
+                                        minHeight: 18,
+                                      ),
                                       decoration: BoxDecoration(
                                         color: udp ? c.udpSoft : c.tcpSoft,
                                         borderRadius: BorderRadius.circular(

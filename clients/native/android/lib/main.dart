@@ -16,6 +16,7 @@ import 'setup_wizard.dart';
 import 'tools_page.dart';
 
 final _theme = ValueNotifier(ThemeMode.system);
+final _fontScale = ValueNotifier<double>(1.0);
 final _glassTint = ValueNotifier<double>(0.5);
 final _wallpaper = ValueNotifier<String?>(null);
 final _wallpaperRev = ValueNotifier<int>(0);
@@ -57,12 +58,88 @@ class _GentlePageScrollPhysics extends PageScrollPhysics {
   );
 }
 
+class _MultipliedTextScaler extends TextScaler {
+  final TextScaler base;
+  final double factor;
+  const _MultipliedTextScaler(this.base, this.factor);
+
+  @override
+  double scale(double fontSize) => base.scale(fontSize) * factor;
+
+  @override
+  double get textScaleFactor => scale(14) / 14;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is _MultipliedTextScaler &&
+          other.base == base &&
+          other.factor == factor;
+
+  @override
+  int get hashCode => Object.hash(base, factor);
+}
+
+class _FontScaleTransition extends StatefulWidget {
+  final double scale;
+  final Widget child;
+  const _FontScaleTransition({required this.scale, required this.child});
+
+  @override
+  State<_FontScaleTransition> createState() => _FontScaleTransitionState();
+}
+
+class _FontScaleTransitionState extends State<_FontScaleTransition>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+    value: 1.0,
+  );
+  late final Animation<double> _curved = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOutCubic,
+  );
+  late final Animation<double> _opacity = Tween<double>(
+    begin: 0.62,
+    end: 1.0,
+  ).animate(_curved);
+  late final Animation<double> _scale = Tween<double>(
+    begin: 0.992,
+    end: 1.0,
+  ).animate(_curved);
+
+  @override
+  void didUpdateWidget(_FontScaleTransition old) {
+    super.didUpdateWidget(old);
+    if ((old.scale - widget.scale).abs() > 0.001) {
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _controller.value = 1.0;
+      } else {
+        _controller.forward(from: 0.0);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FadeTransition(
+    opacity: _opacity,
+    child: ScaleTransition(scale: _scale, child: widget.child),
+  );
+}
+
 class Panel extends StatelessWidget {
   const Panel({super.key});
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([_theme, _glassTint, _wallpaper, _wallpaperRev]),
+    listenable: Listenable.merge([_theme, _fontScale, _glassTint, _wallpaper, _wallpaperRev]),
     builder: (_, __) => MaterialApp(
       title: 'Singboard',
       debugShowCheckedModeBanner: false,
@@ -94,15 +171,29 @@ class Panel extends StatelessWidget {
           systemNavigationBarIconBrightness: dark ? Brightness.light : Brightness.dark,
           statusBarBrightness: dark ? Brightness.dark : Brightness.light,
         );
-        return AnnotatedRegion<SystemUiOverlayStyle>(
+        final factor = _fontScale.value;
+        final mq = MediaQuery.of(ctx);
+        Widget content = AnnotatedRegion<SystemUiOverlayStyle>(
           value: overlay,
           child: GlassEnvironment(
             tint: _glassTint.value,
             wallpaperPath: _wallpaper.value,
             wallpaperRevision: _wallpaperRev.value,
-            child: GlassToastHost(child: navigator ?? const SizedBox.shrink()),
+            child: _FontScaleTransition(
+              scale: factor,
+              child: GlassToastHost(child: navigator ?? const SizedBox.shrink()),
+            ),
           ),
         );
+        if ((factor - 1.0).abs() > 0.001) {
+          content = MediaQuery(
+            data: mq.copyWith(
+              textScaler: _MultipliedTextScaler(mq.textScaler, factor),
+            ),
+            child: content,
+          );
+        }
+        return content;
       },
       home: const Dashboard(),
     ),
@@ -816,6 +907,9 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       };
       final tint = prefs['glassTint'];
       _glassTint.value = tint is num ? tint.toDouble().clamp(0.0, 1.0) : 0.5;
+      final fontScale = prefs['fontScale'];
+      _fontScale.value =
+          fontScale is num ? fontScale.toDouble().clamp(0.9, 1.4) : 1.0;
       final startPage = prefs['startPage'] as String? ?? '/home';
       final start = const ['/home', '/proxies', '/connections', '/logs', '/rules', '/settings']
           .indexOf(startPage == '/overview' ? '/home' : startPage);
@@ -3384,6 +3478,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       probing: probing,
       rootAction: _rootAction,
       themeMode: _theme.value,
+      fontScale: _fontScale.value,
       glassTint: _glassTint.value,
       wallpaperPath: _wallpaper.value,
       onReload: () => loadPreferences(),
@@ -3392,6 +3487,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       onRootAction: rootOperation,
       onOpenTools: openTools,
       onThemeChanged: (m) => _theme.value = m,
+      onFontScaleChanged: (s) => _fontScale.value = s,
       onTintChanged: (t) => _glassTint.value = t,
       onWallpaperChanged: (p) {
         final prev = _wallpaper.value;
@@ -3734,6 +3830,7 @@ class _FlowChartState extends State<_FlowChart>
                 size,
                 pointer,
                 Theme.of(context).textTheme.bodyMedium?.fontFamily,
+                MediaQuery.textScalerOf(context),
               );
               return Stack(
                 children: [
@@ -3792,6 +3889,7 @@ class _FlowPainter extends CustomPainter {
     this.chartSize,
     Offset? pointer,
     this.fontFamily,
+    this.textScaler,
   ) : nodes = (flow['nodes'] as List).cast<Item>(),
       edges = (flow['edges'] as List).cast<List>() {
     final oldNodes = (previous['nodes'] as List? ?? const []).cast<Item>();
@@ -3809,6 +3907,7 @@ class _FlowPainter extends CustomPainter {
   final SingboardColors colors;
   final Size chartSize;
   final String? fontFamily;
+  final TextScaler textScaler;
   final oldPositions = <(int, String), Item>{};
   final oldLinks = <((int, String), (int, String)), List>{};
   final selected = <int>{};
@@ -3959,6 +4058,7 @@ class _FlowPainter extends CustomPainter {
         maxLines: 1,
         ellipsis: '…',
         textDirection: TextDirection.ltr,
+        textScaler: textScaler,
       )..layout(maxWidth: labelWidth);
       label.paint(
         canvas,

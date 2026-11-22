@@ -415,7 +415,14 @@ impl Workspace {
         let filter = self.filter.as_ref().expect("搜索框已初始化");
         let query = filter.read(cx).text.trim().to_lowercase();
         let width = f32::from(window.viewport_size().width) - 256.;
-        let cols = (((width - 40. + 8.) / 188.).floor() as usize).max(1);
+        let text_scale = crate::theme::effective_text_scale(cx);
+        let min_col_w = 180. * text_scale.max(1.0);
+        let cols = (((width - 40. + 8.) / (min_col_w + 8.)).floor() as usize).max(1);
+        let tile_line_h = (18. * text_scale).ceil();
+        let tile_title_h = tile_line_h * 2.;
+        let tile_bottom_h = (16. * text_scale + 2.).ceil();
+        let tile_h = 20. + 4. + tile_title_h + tile_bottom_h;
+        let row_stride = tile_h + 8.;
 
         let mut tabs = div()
             .relative()
@@ -433,7 +440,7 @@ impl Workspace {
                 div()
                     .id("proxy-tab-groups")
                     .relative()
-                    .h(px(24.))
+                    .h(crate::theme::text_px(24.))
                     .flex()
                     .items_center()
                     .cursor_pointer()
@@ -461,7 +468,7 @@ impl Workspace {
                 div()
                     .id("proxy-tab-providers")
                     .relative()
-                    .h(px(24.))
+                    .h(crate::theme::text_px(24.))
                     .flex()
                     .items_center()
                     .cursor_pointer()
@@ -854,11 +861,11 @@ impl Workspace {
                     );
                     if fraction > 0. && !proxies_arr.is_empty() {
                         let total_rows = proxies_arr.len().div_ceil(cols);
-                        let full_height = total_rows as f32 * 84. + 8.;
+                        let full_height = total_rows as f32 * row_stride + 8.;
                         let animating = fraction < 0.999;
                         let clip_height = full_height * fraction;
                         let shown_rows = if animating {
-                            ((clip_height / 84.).ceil() as usize + 1).min(total_rows)
+                            ((clip_height / row_stride).ceil() as usize + 1).min(total_rows)
                         } else {
                             total_rows
                         };
@@ -873,7 +880,7 @@ impl Workspace {
                         for (row_idx, chunk) in proxies_arr.chunks(cols).take(shown_rows).enumerate() {
                             let mut row = div()
                                 .w_full()
-                                .h(px(76.))
+                                .h(px(tile_h))
                                 .flex_none()
                                 .grid()
                                 .grid_cols(cols as u16)
@@ -915,7 +922,7 @@ impl Workspace {
                                     div()
                                         .w_full()
                                         .min_w_0()
-                                        .h(px(76.))
+                                        .h(px(tile_h))
                                         .p(px(10.))
                                         .rounded(px(12.))
                                         .bg(palette.tile())
@@ -924,24 +931,30 @@ impl Workspace {
                                         .flex()
                                         .flex_col()
                                         .justify_between()
+                                        .gap(px(4.))
                                         .overflow_hidden()
                                         .child(
                                             div()
-                                                .flex_1()
-                                                .min_h_0()
+                                                .h(px(tile_title_h))
+                                                .flex_none()
                                                 .overflow_hidden()
                                                 .text_sm()
-                                                .line_height(rems(18. / 16.))
+                                                .line_height(px(tile_line_h))
                                                 .child(crate::emoji::text(n_name)),
                                         )
                                         .child(
                                             div()
+                                                .h(px(tile_bottom_h))
+                                                .w_full()
+                                                .flex_none()
                                                 .flex()
                                                 .items_center()
                                                 .justify_between()
                                                 .gap_2()
                                                 .child(
                                                     div()
+                                                        .flex_1()
+                                                        .min_w_0()
                                                         .text_xs()
                                                         .text_color(palette.muted())
                                                         .truncate()
@@ -1270,13 +1283,13 @@ impl Workspace {
                 )
                 .child(
                     div()
-                        .min_w(px(80.))
+                        .min_w(crate::theme::text_px(80.))
                         .flex()
                         .flex_col()
                         .items_end()
                         .pr_1()
                         .text_xs()
-                        .line_height(px(16.))
+                        .line_height(crate::theme::text_px(16.))
                         .whitespace_nowrap()
                         .text_color(palette.muted())
                         .when(!has_speed, |el| el.opacity(0.))
@@ -1303,11 +1316,11 @@ impl Workspace {
 
             if fraction > 0. && !nodes.is_empty() {
                 let total_rows = nodes.len().div_ceil(cols);
-                let full_height = total_rows as f32 * 84. + 12.;
+                let full_height = total_rows as f32 * row_stride + 12.;
                 let animating = fraction < 0.999;
                 let clip_height = full_height * fraction;
                 let shown_rows = if animating {
-                    ((clip_height / 84.).ceil() as usize + 1).min(total_rows)
+                    ((clip_height / row_stride).ceil() as usize + 1).min(total_rows)
                 } else {
                     total_rows
                 };
@@ -1323,7 +1336,7 @@ impl Workspace {
                 for chunk in nodes.chunks(cols).take(shown_rows) {
                     let mut row = div()
                         .w_full()
-                        .h(px(76.))
+                        .h(px(tile_h))
                         .flex_none()
                         .grid()
                         .grid_cols(cols as u16)
@@ -1363,12 +1376,12 @@ impl Workspace {
                             })
                             .w_full()
                             .min_w_0()
-                            .h(px(76.))
+                            .h(px(tile_h))
                             .p(px(10.))
                             .flex()
                             .flex_col()
                             .justify_between()
-                            .gap_1()
+                            .gap(px(4.))
                             .rounded(px(12.))
                             .overflow_hidden()
                             .border_1()
@@ -1392,11 +1405,11 @@ impl Workspace {
                             })
                             .child(
                                 div()
-                                    .flex_1()
-                                    .min_h_0()
+                                    .h(px(tile_title_h))
+                                    .flex_none()
                                     .overflow_hidden()
                                     .text_sm()
-                                    .line_height(rems(18. / 16.))
+                                    .line_height(px(tile_line_h))
                                     .font_weight(if selected {
                                         FontWeight::MEDIUM
                                     } else {
@@ -1418,7 +1431,7 @@ impl Workspace {
                                 }));
                         }
                         let mut bottom = div()
-                            .h(px(18.))
+                            .h(px(tile_bottom_h))
                             .w_full()
                             .flex_none()
                             .flex()

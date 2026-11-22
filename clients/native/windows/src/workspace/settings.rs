@@ -87,6 +87,14 @@ pub(super) struct SettingsLayout {
     pub(super) tint_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     pub(super) tint_drag: Option<Pixels>,
     pub(super) tint_focus: Option<FocusHandle>,
+    pub(super) font_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
+    pub(super) font_drag: Option<Pixels>,
+    pub(super) font_focus: Option<FocusHandle>,
+    pub(super) font_draft: Option<f32>,
+    pub(super) font_anchor_y: Option<Pixels>,
+    pub(super) font_preview_alpha: f32,
+    pub(super) font_preview_tick: Option<std::time::Instant>,
+    pub(super) font_preview_last: f32,
     pub(super) results: HashMap<&'static str, String>,
     pub(super) pending: HashSet<&'static str>,
     pub(super) service_action: Option<&'static str>,
@@ -152,7 +160,7 @@ pub(super) fn route_btn(
     div()
         .id(id)
         .px_3()
-        .h(px(32.)).flex().items_center().justify_center()
+        .h(crate::theme::text_px(32.)).flex().items_center().justify_center()
         .rounded_full()
         .text_sm()
         .font_weight(FontWeight::MEDIUM)
@@ -176,7 +184,7 @@ pub(super) fn action_btn(
     div()
         .id(id)
         .px_3()
-        .h(px(32.))
+        .h(crate::theme::text_px(32.))
         .flex()
         .items_center()
         .justify_center()
@@ -205,7 +213,7 @@ pub(super) fn danger_btn(
     div()
         .id(id)
         .px_3()
-        .h(px(32.))
+        .h(crate::theme::text_px(32.))
         .flex()
         .items_center()
         .justify_center()
@@ -664,6 +672,31 @@ const START_PAGES: [(&str, &str); 7] = [
     ("/settings", "设置"),
 ];
 
+const FONT_SCALE_MIN: f32 = 0.9;
+const FONT_SCALE_MAX: f32 = 1.4;
+
+fn font_scale_pos(scale: f32) -> f32 {
+    ((scale - FONT_SCALE_MIN) / (FONT_SCALE_MAX - FONT_SCALE_MIN)).clamp(0., 1.)
+}
+
+fn snap_font_scale(pos: f32) -> f32 {
+    let clamped = pos.clamp(0., 1.);
+    if (clamped - 0.2).abs() <= 0.012 {
+        return 1.0;
+    }
+    let smooth = (clamped * 200.).round() / 200.;
+    FONT_SCALE_MIN + (FONT_SCALE_MAX - FONT_SCALE_MIN) * smooth
+}
+
+fn font_scale_label(scale: f32) -> String {
+    let pct = (scale * 100.).round() as u32;
+    if pct == 100 {
+        "标准 · 100%".into()
+    } else {
+        format!("{pct}%")
+    }
+}
+
 fn snap_tint(value: f32) -> f32 {
     let clamped = value.clamp(0., 1.);
     if (clamped - 0.5).abs() <= 0.012 {
@@ -734,7 +767,7 @@ pub(super) fn setting_row(
                     el.child(
                         div()
                             .text_xs()
-                            .line_height(px(17.))
+                            .line_height(crate::theme::text_px(17.))
                             .text_color(palette.muted())
                             .child(desc_str),
                     )
@@ -771,6 +804,11 @@ impl Workspace {
         let tint = self.glass_tint;
         let prefs = crate::maintenance::preferences().unwrap_or_default();
         let current_theme = cx.global::<crate::theme::Appearance>().mode;
+        let current_font_scale = self
+            .settings_layout
+            .font_draft
+            .unwrap_or_else(|| cx.global::<crate::theme::Appearance>().font_scale)
+            .clamp(FONT_SCALE_MIN, FONT_SCALE_MAX);
         let auto_launch = cached_auto_launch();
         let close_to_tray = prefs.close_to_tray.unwrap_or(false);
         let vp = window.viewport_size();
@@ -823,7 +861,7 @@ impl Workspace {
                 div()
                     .id("set-svc-start")
                     .px_3()
-                    .h(px(32.))
+                    .h(crate::theme::text_px(32.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -852,7 +890,7 @@ impl Workspace {
                 div()
                     .id("set-svc-restart")
                     .px_3()
-                    .h(px(32.))
+                    .h(crate::theme::text_px(32.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -882,7 +920,7 @@ impl Workspace {
                 div()
                     .id("set-svc-stop")
                     .px_3()
-                    .h(px(32.))
+                    .h(crate::theme::text_px(32.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1000,13 +1038,13 @@ impl Workspace {
                                     .flex_col()
                                     .child(
                                         div()
-                                            .text_size(crate::theme::text_px(14.)).line_height(px(20.))
+                                            .text_size(crate::theme::text_px(14.)).line_height(crate::theme::text_px(20.))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child(svc_text),
                                     )
                                     .child(
                                         div()
-                                            .text_xs().line_height(px(17.))
+                                            .text_xs().line_height(crate::theme::text_px(17.))
                                             .text_color(palette.muted())
                                             .truncate()
                                             .child(
@@ -1047,7 +1085,7 @@ impl Workspace {
                         div()
                             .id("install-service")
                             .px_3()
-                            .h(px(32.))
+                            .h(crate::theme::text_px(32.))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -1079,7 +1117,7 @@ impl Workspace {
                         div()
                             .id("uninstall-service")
                             .px_3()
-                            .h(px(32.))
+                            .h(crate::theme::text_px(32.))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -1164,6 +1202,403 @@ impl Workspace {
             );
         }
 
+        let font_focus = self
+            .settings_layout
+            .font_focus
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone();
+        let font_bounds = self.settings_layout.font_bounds.clone();
+        let font_dragging = self.settings_layout.font_drag.is_some();
+        let font_anchor_y = self.settings_layout.font_anchor_y;
+        let font_scroll = self.page_scroll.clone();
+        let font_pos = font_scale_pos(current_font_scale);
+        let font_move_ws = cx.entity().downgrade();
+        let font_up_ws = cx.entity().downgrade();
+        let font_anchor_ws = cx.entity().downgrade();
+        if font_dragging {
+            self.settings_layout.font_preview_last = current_font_scale;
+        }
+        let preview_target = if font_dragging { 1. } else { 0. };
+        let preview_dt = self
+            .settings_layout
+            .font_preview_tick
+            .map(|t| t.elapsed().as_secs_f32().min(0.05))
+            .unwrap_or(0.016);
+        self.settings_layout.font_preview_tick = Some(std::time::Instant::now());
+        if cx.reduce_motion() {
+            self.settings_layout.font_preview_alpha = preview_target;
+        } else if (preview_target - self.settings_layout.font_preview_alpha).abs() > 0.002 {
+            let step = preview_dt / if font_dragging { 0.14 } else { 0.16 };
+            self.settings_layout.font_preview_alpha = if font_dragging {
+                (self.settings_layout.font_preview_alpha + step).min(1.)
+            } else {
+                (self.settings_layout.font_preview_alpha - step).max(0.)
+            };
+            if (preview_target - self.settings_layout.font_preview_alpha).abs() > 0.002 {
+                window.request_animation_frame();
+            } else {
+                self.settings_layout.font_preview_alpha = preview_target;
+            }
+        } else {
+            self.settings_layout.font_preview_alpha = preview_target;
+        }
+        let font_preview_alpha = self.settings_layout.font_preview_alpha;
+
+        let font_scale_row = div()
+            .px_4()
+            .py_3()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_size(crate::theme::text_px(13.))
+                                    .line_height(crate::theme::text_px(18.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("字体大小"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(palette.muted())
+                                    .child(font_scale_label(current_font_scale)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .line_height(crate::theme::text_px(17.))
+                            .text_color(palette.muted())
+                            .child("拖动滑条预览字号，松开后应用到整个界面，与系统文本缩放叠加。"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .w(px(22.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.muted())
+                            .child("A"),
+                    )
+                    .child(
+                        div()
+                            .id("font-scale-slider")
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(36.))
+                            .cursor_pointer()
+                            .track_focus(&font_focus)
+                            .role(Role::Slider)
+                            .aria_label(format!(
+                                "字体大小 {}",
+                                font_scale_label(current_font_scale)
+                            ))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |v, event: &MouseDownEvent, window, cx| {
+                                    let area = v.settings_layout.font_bounds.get();
+                                    let left = area.origin.x + px(20.);
+                                    let range = (area.size.width - px(40.)).max(px(1.));
+                                    let cur = v
+                                        .settings_layout
+                                        .font_draft
+                                        .unwrap_or_else(|| {
+                                            cx.global::<crate::theme::Appearance>().font_scale
+                                        });
+                                    let thumb_x = left + range * font_scale_pos(cur);
+                                    if (event.position.x - thumb_x).abs() <= px(20.) {
+                                        v.settings_layout.font_drag =
+                                            Some(event.position.x - thumb_x);
+                                        v.settings_layout.font_draft = Some(cur);
+                                    } else {
+                                        v.settings_layout.font_drag = Some(px(0.));
+                                        let next = snap_font_scale(
+                                            f32::from(event.position.x - left) / f32::from(range),
+                                        );
+                                        v.settings_layout.font_draft = Some(next);
+                                    }
+                                    if let Some(focus) = v.settings_layout.font_focus.clone() {
+                                        window.focus(&focus, cx);
+                                    }
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }),
+                            )
+                            .capture_key_down(cx.listener(|v, event: &KeyDownEvent, window, cx| {
+                                let cur = v.settings_layout.font_draft.unwrap_or_else(|| {
+                                    cx.global::<crate::theme::Appearance>().font_scale
+                                });
+                                let next = match event.keystroke.key.as_str() {
+                                    "left" | "down" => cur - 0.02,
+                                    "right" | "up" => cur + 0.02,
+                                    "pageup" => cur + 0.10,
+                                    "pagedown" => cur - 0.10,
+                                    "home" => FONT_SCALE_MIN,
+                                    "end" => FONT_SCALE_MAX,
+                                    _ => return,
+                                };
+                                let value = snap_font_scale(font_scale_pos(next));
+                                let area = v.settings_layout.font_bounds.get();
+                                if area.size.height > px(0.) {
+                                    v.settings_layout.font_anchor_y = Some(area.origin.y);
+                                }
+                                v.settings_layout.font_draft = None;
+                                if let Err(error) = crate::theme::Appearance::select_font_scale(
+                                    value,
+                                    window,
+                                    v.custom_wallpaper,
+                                    cx,
+                                ) {
+                                    v.message(error, true, cx);
+                                }
+                                window.prevent_default();
+                                cx.stop_propagation();
+                                cx.notify();
+                            }))
+                            .child(
+                                canvas(
+                                    |_, _, _| (),
+                                    move |area, _, window, cx| {
+                                        font_bounds.set(area);
+                                        if let Some(target_y) = font_anchor_y {
+                                            let delta = area.origin.y - target_y;
+                                            if delta.abs() > px(0.5) {
+                                                let off = font_scroll.offset();
+                                                font_scroll.set_offset(point(
+                                                    off.x,
+                                                    (off.y - delta).min(px(0.)),
+                                                ));
+                                                window.request_animation_frame();
+                                            }
+                                            let font_anchor_ws = font_anchor_ws.clone();
+                                            cx.defer(move |cx| {
+                                                let _ = font_anchor_ws.update(cx, |v, _| {
+                                                    v.settings_layout.font_anchor_y = None;
+                                                });
+                                            });
+                                        }
+                                        let range = (area.size.width - px(40.)).max(px(0.));
+                                        let left = area.origin.x + px(20.);
+                                        let center = area.origin.y + area.size.height * 0.5;
+                                        let x = left + range * font_pos;
+                                        let track = |start, end, color| {
+                                            quad(
+                                                Bounds::new(
+                                                    point(start, center - px(2.)),
+                                                    size(end - start, px(4.)),
+                                                ),
+                                                px(2.),
+                                                color,
+                                                px(0.),
+                                                color,
+                                                BorderStyle::default(),
+                                            )
+                                        };
+                                        window.paint_quad(track(
+                                            area.origin.x,
+                                            area.origin.x + area.size.width,
+                                            palette.fill_strong(),
+                                        ));
+                                        window.paint_quad(track(
+                                            area.origin.x,
+                                            x,
+                                            palette.primary_fill(),
+                                        ));
+                                        for tick in [0., 0.2, 0.6, 1.] {
+                                            if (font_pos - tick).abs() >= 0.055 {
+                                                window.paint_quad(quad(
+                                                    Bounds::new(
+                                                        point(
+                                                            left + range * tick - px(1.75),
+                                                            center + px(9.),
+                                                        ),
+                                                        size(px(3.5), px(3.5)),
+                                                    ),
+                                                    px(1.75),
+                                                    palette.muted().opacity(0.42),
+                                                    px(0.),
+                                                    transparent_black(),
+                                                    BorderStyle::default(),
+                                                ));
+                                            }
+                                        }
+                                        let (tw, th, tr) = if font_dragging {
+                                            (px(44.), px(28.), px(14.))
+                                        } else {
+                                            (px(40.), px(26.), px(13.))
+                                        };
+                                        let thumb = Bounds::new(
+                                            point(x - tw * 0.5, center - th * 0.5),
+                                            size(tw, th),
+                                        );
+                                        window.paint_drop_shadows(
+                                            thumb,
+                                            tr.into(),
+                                            &[BoxShadow {
+                                                color: hsla(
+                                                    0.,
+                                                    0.,
+                                                    0.,
+                                                    if palette.0 {
+                                                        0.36
+                                                    } else if font_dragging {
+                                                        0.14
+                                                    } else {
+                                                        0.18
+                                                    },
+                                                ),
+                                                offset: point(px(0.), px(2.)),
+                                                blur_radius: px(if font_dragging { 8. } else { 6. }),
+                                                spread_radius: px(-1.),
+                                                inset: false,
+                                            }],
+                                        );
+                                        if font_dragging {
+                                            window.paint_quad(quad(
+                                                thumb,
+                                                tr,
+                                                rgba(0xffffff38),
+                                                px(1.2),
+                                                rgba(0xffffffd8),
+                                                BorderStyle::Solid,
+                                            ));
+                                            window.paint_quad(quad(
+                                                thumb,
+                                                tr,
+                                                transparent_black(),
+                                                px(0.6),
+                                                rgba(0x00000022),
+                                                BorderStyle::Solid,
+                                            ));
+                                        } else {
+                                            window.paint_quad(quad(
+                                                thumb,
+                                                tr,
+                                                rgb(0xffffff),
+                                                px(0.5),
+                                                rgba(0x00000018),
+                                                BorderStyle::Solid,
+                                            ));
+                                        }
+                                        if font_dragging {
+                                            let font_move_ws = font_move_ws.clone();
+                                            window.on_mouse_event(
+                                                move |event: &MouseMoveEvent, phase, window, cx| {
+                                                    if phase != DispatchPhase::Bubble {
+                                                        return;
+                                                    }
+                                                    let _ = font_move_ws.update(cx, |v, cx| {
+                                                        let Some(grab) =
+                                                            v.settings_layout.font_drag
+                                                        else {
+                                                            return;
+                                                        };
+                                                        if event.pressed_button
+                                                            != Some(MouseButton::Left)
+                                                        {
+                                                            v.settings_layout.font_drag = None;
+                                                            if let Some(value) =
+                                                                v.settings_layout.font_draft.take()
+                                                            {
+                                                                v.settings_layout.font_anchor_y =
+                                                                    Some(area.origin.y);
+                                                                if let Err(error) = crate::theme::Appearance::select_font_scale(
+                                                                    value,
+                                                                    window,
+                                                                    v.custom_wallpaper,
+                                                                    cx,
+                                                                ) {
+                                                                    v.message(error, true, cx);
+                                                                }
+                                                            }
+                                                            cx.notify();
+                                                            return;
+                                                        }
+                                                        let range =
+                                                            (area.size.width - px(40.)).max(px(1.));
+                                                        let left = area.origin.x + px(20.);
+                                                        v.settings_layout.font_draft =
+                                                            Some(snap_font_scale(
+                                                                f32::from(
+                                                                    event.position.x - grab - left,
+                                                                ) / f32::from(range),
+                                                            ));
+                                                        cx.stop_propagation();
+                                                        cx.notify();
+                                                    });
+                                                },
+                                            );
+                                            let font_up_ws = font_up_ws.clone();
+                                            window.on_mouse_event(
+                                                move |event: &MouseUpEvent, phase, window, cx| {
+                                                    if phase != DispatchPhase::Bubble
+                                                        || event.button != MouseButton::Left
+                                                    {
+                                                        return;
+                                                    }
+                                                    let _ = font_up_ws.update(cx, |v, cx| {
+                                                        if v.settings_layout.font_drag.take().is_some()
+                                                        {
+                                                            if let Some(value) =
+                                                                v.settings_layout.font_draft.take()
+                                                            {
+                                                                v.settings_layout.font_anchor_y =
+                                                                    Some(area.origin.y);
+                                                                if let Err(error) = crate::theme::Appearance::select_font_scale(
+                                                                    value,
+                                                                    window,
+                                                                    v.custom_wallpaper,
+                                                                    cx,
+                                                                ) {
+                                                                    v.message(error, true, cx);
+                                                                }
+                                                            }
+                                                            cx.notify();
+                                                        }
+                                                    });
+                                                },
+                                            );
+                                        }
+                                    },
+                                )
+                                .size_full(),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(22.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(19.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.muted())
+                            .child("A"),
+                    ),
+            );
+
         let start_idx = START_PAGES
             .iter()
             .position(|(p, _)| *p == prefs.start_page)
@@ -1208,7 +1643,7 @@ impl Workspace {
                             .child(
                                 div()
                                     .text_xs()
-                                    .line_height(px(17.))
+                                    .line_height(crate::theme::text_px(17.))
                                     .text_color(palette.muted())
                                     .child(
                                         "作用于顶部栏、侧栏、卡片和弹窗。往左更通透，偏通透时带折射；往右底色更重、文字更易读。",
@@ -1436,6 +1871,8 @@ impl Workspace {
         let app_card = card()
             .child(row("界面主题", String::new(), theme_seg.into_any_element()))
             .child(divider(palette))
+            .child(font_scale_row)
+            .child(divider(palette))
             .child(row(
                 "默认启动页",
                 "启动面板时首先打开的页面，下次启动生效。".into(),
@@ -1536,7 +1973,7 @@ impl Workspace {
                 crate::glass::backdrop_heading("设置", palette, cx)
                     .pb(px(20.))
                     .text_size(crate::theme::text_px(26.))
-                    .line_height(px(32.))
+                    .line_height(crate::theme::text_px(32.))
                     .font_weight(FontWeight::BOLD),
             )
             .child(section_header("核心与服务", palette, cx))
@@ -1553,10 +1990,138 @@ impl Workspace {
             .child(card().child(core_update))
             .child(card().mt(px(10.)).child(panel_update));
 
+        let font_preview = if font_preview_alpha > 0.002 {
+            let eased = font_preview_alpha * font_preview_alpha * (3. - 2. * font_preview_alpha);
+            let draft = self
+                .settings_layout
+                .font_draft
+                .unwrap_or(self.settings_layout.font_preview_last)
+                .clamp(FONT_SCALE_MIN, FONT_SCALE_MAX);
+            let target_scale = (crate::theme::text_scale() * draft).clamp(0.9, 2.25);
+            let area = self.settings_layout.font_bounds.get();
+            let base_bottom = if area.size.height > px(0.) {
+                (vp.height - area.origin.y + px(14.))
+                    .clamp(px(64.), (vp.height - px(180.)).max(px(64.)))
+            } else {
+                px(96.)
+            };
+            let bottom_offset = base_bottom - px(6. * (1. - eased));
+            Some(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(bottom_offset)
+                    .px(px(20.))
+                    .opacity(eased)
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(420.))
+                            .rounded(px(16.))
+                            .bg(palette.card(false))
+                            .border_1()
+                            .border_color(palette.rim())
+                            .shadow_xl()
+                            .p(px(14.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(10.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(palette.muted())
+                                            .child("字号预览"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px(px(8.))
+                                            .py(px(2.))
+                                            .rounded_full()
+                                            .bg(palette.primary_soft())
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(palette.accent())
+                                            .child(font_scale_label(draft)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .rounded(px(12.))
+                                    .bg(palette.fill())
+                                    .p(px(12.))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(6.))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(px(8.))
+                                                    .child(
+                                                        div()
+                                                            .size(px(7.))
+                                                            .rounded_full()
+                                                            .bg(palette.success_dot()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(14. * target_scale))
+                                                            .line_height(px(20. * target_scale))
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                            .text_color(palette.ink())
+                                                            .child("香港节点 01"),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(12. * target_scale))
+                                                    .line_height(px(18. * target_scale))
+                                                    .text_color(palette.muted())
+                                                    .child("42ms"),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(13. * target_scale))
+                                            .line_height(px(19. * target_scale))
+                                            .text_color(palette.ink())
+                                            .child("概览 · 代理 · 连接 · 规则 · 设置"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(12. * target_scale))
+                                            .line_height(px(17. * target_scale))
+                                            .text_color(palette.muted())
+                                            .child("松开滑块后应用到整个界面"),
+                                    ),
+                            ),
+                    ),
+            )
+        } else {
+            None
+        };
+
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
             .child(self.scroll_pane("settings-scroll", content.pt(px(48.)), cx))
+            .when_some(font_preview, |el, overlay| el.child(overlay))
     }
 }

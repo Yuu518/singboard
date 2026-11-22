@@ -16,7 +16,7 @@ pub fn text_scale() -> f32 {
         .open_subkey("Software\\Microsoft\\Accessibility")
         .and_then(|key| key.get_value::<u32, _>("TextScaleFactor"))
         .unwrap_or(100);
-    (raw as f32 / 100.).clamp(1., 1.25)
+    (raw as f32 / 100.).clamp(1., 2.25)
 }
 
 pub fn text_px(size: f32) -> Rems {
@@ -63,11 +63,31 @@ pub const MODES: [(Mode, &str); 3] = [
     (Mode::Auto, "跟随系统"),
 ];
 
-#[derive(Default)]
+pub fn effective_text_scale(cx: &App) -> f32 {
+    let user = cx.global::<Appearance>().font_scale.clamp(0.9, 1.4);
+    (text_scale() * user).clamp(0.9, 2.25)
+}
+
 pub struct Appearance {
     pub mode: Mode,
     pub dark: bool,
+    pub font_scale: f32,
+    pub font_transition_at: Option<std::time::Instant>,
     wallpaper: bool,
+    text_scale: f32,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            mode: Mode::default(),
+            dark: false,
+            font_scale: 1.0,
+            font_transition_at: None,
+            wallpaper: false,
+            text_scale: 0.0,
+        }
+    }
 }
 
 impl Global for Appearance {}
@@ -106,13 +126,19 @@ impl Appearance {
             .and_then(|path| std::fs::read(path).ok())
             .and_then(|data| serde_json::from_slice(&data).ok())
             .unwrap_or_default();
-        let mode = crate::maintenance::preferences()
-            .ok()
-            .and_then(|p| p.theme)
+        let prefs = crate::maintenance::preferences().ok();
+        let mode = prefs
+            .as_ref()
+            .and_then(|p| p.theme.clone())
             .and_then(|v| serde_json::from_value(serde_json::Value::String(v)).ok())
             .unwrap_or(previous);
+        let font_scale = prefs
+            .and_then(|p| p.font_scale)
+            .unwrap_or(1.0)
+            .clamp(0.9, 1.4);
         Self {
             mode,
+            font_scale,
             ..Default::default()
         }
     }
@@ -133,10 +159,39 @@ impl Appearance {
         Ok(())
     }
 
+    pub fn select_font_scale(
+        scale: f32,
+        window: &Window,
+        wallpaper: bool,
+        cx: &mut App,
+    ) -> Result<(), String> {
+        let scale = scale.clamp(0.9, 1.4);
+        let changed = (cx.global::<Self>().font_scale - scale).abs() > 0.001;
+        singboard_stream::settings::Settings::set_font_scale(&crate::service::data_dir()?, scale)?;
+        {
+            let state = cx.global_mut::<Self>();
+            state.font_scale = scale;
+            if changed {
+                state.font_transition_at = Some(std::time::Instant::now());
+            }
+        }
+        Self::apply(window, wallpaper, cx);
+        Ok(())
+    }
+
+    pub fn sync_text_scale(window: &Window, wallpaper: bool, cx: &mut App) {
+        let next = effective_text_scale(cx);
+        if (cx.global::<Self>().text_scale - next).abs() > 0.001 {
+            Self::apply(window, wallpaper, cx);
+        }
+    }
+
     pub fn apply(window: &Window, wallpaper: bool, cx: &mut App) {
+        let scale = effective_text_scale(cx);
         let dark = {
             let theme = cx.global_mut::<Self>();
             theme.wallpaper = wallpaper;
+            theme.text_scale = scale;
             theme.dark = match theme.mode {
                 Mode::Light => false,
                 Mode::Dark => true,
@@ -154,7 +209,6 @@ impl Appearance {
             ThemeMode::Light
         };
         Theme::change(mode, None, cx);
-        let scale = text_scale();
         let theme = Theme::global_mut(cx);
         theme.font_family = system_ui_font().into();
         theme.font_size = px(16. * scale);

@@ -264,7 +264,7 @@ impl Render for SetupWizard {
                                                     .id("wizard-browse")
                                                     .cursor_pointer()
                                                     .px_3()
-                                                    .h(px(32.))
+                                                    .h(crate::theme::text_px(32.))
                                                     .flex()
                                                     .items_center()
                                                     .justify_center()

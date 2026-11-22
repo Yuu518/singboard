@@ -19,6 +19,7 @@ class SettingsPage extends StatefulWidget {
   final bool probing;
   final String? rootAction;
   final ThemeMode themeMode;
+  final double fontScale;
   final double glassTint;
   final String? wallpaperPath;
   final Future<void> Function() onReload;
@@ -27,6 +28,7 @@ class SettingsPage extends StatefulWidget {
   final Future<void> Function(String action, String label) onRootAction;
   final Future<void> Function([int initial]) onOpenTools;
   final ValueChanged<ThemeMode> onThemeChanged;
+  final ValueChanged<double> onFontScaleChanged;
   final ValueChanged<double> onTintChanged;
   final ValueChanged<String?> onWallpaperChanged;
 
@@ -40,6 +42,7 @@ class SettingsPage extends StatefulWidget {
     required this.probing,
     this.rootAction,
     required this.themeMode,
+    required this.fontScale,
     required this.glassTint,
     required this.wallpaperPath,
     required this.onReload,
@@ -48,6 +51,7 @@ class SettingsPage extends StatefulWidget {
     required this.onRootAction,
     required this.onOpenTools,
     required this.onThemeChanged,
+    required this.onFontScaleChanged,
     required this.onTintChanged,
     required this.onWallpaperChanged,
   });
@@ -56,7 +60,8 @@ class SettingsPage extends StatefulWidget {
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
-class _SettingsPageState extends State<SettingsPage> {
+class _SettingsPageState extends State<SettingsPage>
+    with SingleTickerProviderStateMixin {
   String _startPage(Map<String, dynamic> prefs) {
     final value = prefs['startPage'];
     return _startPages.any((page) => page.$1 == value)
@@ -75,6 +80,21 @@ class _SettingsPageState extends State<SettingsPage> {
   ];
 
   late double _tint = widget.glassTint;
+  late double _fontScale = widget.fontScale;
+  final _scrollCtrl = ScrollController();
+  final _fontSliderKey = GlobalKey();
+  final _fontSliderLink = LayerLink();
+  OverlayEntry? _fontPreviewEntry;
+  late final AnimationController _fontPreviewAnim = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 140),
+    reverseDuration: const Duration(milliseconds: 160),
+  )..addStatusListener((status) {
+      if (status == AnimationStatus.dismissed) {
+        _fontPreviewEntry?.remove();
+        _fontPreviewEntry = null;
+      }
+    });
   bool _saving = false;
   final _inputs = <String, TextEditingController>{};
   final _focusNodes = <String, FocusNode>{};
@@ -109,6 +129,9 @@ class _SettingsPageState extends State<SettingsPage> {
     if (old.glassTint != widget.glassTint) {
       _tint = widget.glassTint;
     }
+    if (old.fontScale != widget.fontScale) {
+      _fontScale = widget.fontScale;
+    }
     for (final (key, pref) in [
       ('test_url', 'latencyTestUrl'),
       ('workdir', 'workingDir'),
@@ -136,6 +159,10 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   void dispose() {
+    _fontPreviewEntry?.remove();
+    _fontPreviewEntry = null;
+    _fontPreviewAnim.dispose();
+    _scrollCtrl.dispose();
     for (final c in _inputs.values) {
       c.dispose();
     }
@@ -413,6 +440,237 @@ class _SettingsPageState extends State<SettingsPage> {
       }
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  String _fontScaleLabel(double value) {
+    final pct = (value * 100).round();
+    return pct == 100 ? '标准 · 100%' : '$pct%';
+  }
+
+  void _showFontPreview(double val) {
+    setState(() => _fontScale = val);
+    if (_fontPreviewEntry != null) {
+      _fontPreviewEntry!.markNeedsBuild();
+      if (_fontPreviewAnim.status != AnimationStatus.forward &&
+          _fontPreviewAnim.status != AnimationStatus.completed) {
+        _fontPreviewAnim.forward();
+      }
+      return;
+    }
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) return;
+    final curved = CurvedAnimation(
+      parent: _fontPreviewAnim,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    final slide = Tween<Offset>(
+      begin: const Offset(0, 0.04),
+      end: Offset.zero,
+    ).animate(curved);
+    _fontPreviewEntry = OverlayEntry(
+      builder: (ctx) {
+        final c = SingboardColors.of(ctx);
+        final mq = MediaQuery.of(ctx);
+        final ratio = _fontScale / widget.fontScale.clamp(0.9, 1.4);
+        final previewScaler = TextScaler.linear(
+          (mq.textScaler.scale(14) / 14 * ratio).clamp(0.85, 2.25),
+        );
+        final maxW = (mq.size.width - 32).clamp(240.0, 380.0);
+        return Positioned(
+          width: maxW,
+          child: CompositedTransformFollower(
+            link: _fontSliderLink,
+            showWhenUnlinked: false,
+            targetAnchor: Alignment.topCenter,
+            followerAnchor: Alignment.bottomCenter,
+            offset: const Offset(0, -14),
+            child: IgnorePointer(
+              child: FadeTransition(
+                opacity: curved,
+                child: SlideTransition(
+                  position: slide,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: c.surface,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: c.hairline),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: c.dark ? 0.42 : 0.16),
+                            blurRadius: 24,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                '字号预览',
+                                textScaler: TextScaler.noScaling,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: c.muted,
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: c.primarySoft,
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  _fontScaleLabel(_fontScale),
+                                  textScaler: TextScaler.noScaling,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: c.selectionInk,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          MediaQuery(
+                            data: mq.copyWith(textScaler: previewScaler),
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: c.fill,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Container(
+                                            width: 7,
+                                            height: 7,
+                                            decoration: BoxDecoration(
+                                              color: c.success,
+                                              shape: BoxShape.circle,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            '香港节点 01',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                              color: c.ink,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      Text(
+                                        '42ms',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: c.muted,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    '概览 · 代理 · 连接 · 规则 · 设置',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: c.ink,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '松开滑块后应用到整个界面',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: c.muted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    overlay.insert(_fontPreviewEntry!);
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _fontPreviewAnim.value = 1.0;
+    } else {
+      _fontPreviewAnim.forward(from: 0.0);
+    }
+  }
+
+  void _hideFontPreview() {
+    if (_fontPreviewEntry == null) return;
+    if (!mounted || MediaQuery.disableAnimationsOf(context)) {
+      _fontPreviewEntry?.remove();
+      _fontPreviewEntry = null;
+      _fontPreviewAnim.value = 0.0;
+    } else {
+      _fontPreviewAnim.reverse();
+    }
+  }
+
+  Future<void> _saveFontScale(double val) async {
+    final box = _fontSliderKey.currentContext?.findRenderObject() as RenderBox?;
+    final anchorY = box?.localToGlobal(Offset.zero).dy;
+    _hideFontPreview();
+    setState(() => _fontScale = val);
+    widget.onFontScaleChanged(val);
+    if (anchorY != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollCtrl.hasClients) return;
+        final after =
+            _fontSliderKey.currentContext?.findRenderObject() as RenderBox?;
+        if (after == null) return;
+        final delta = after.localToGlobal(Offset.zero).dy - anchorY;
+        if (delta.abs() > 0.5) {
+          final target = (_scrollCtrl.offset + delta).clamp(
+            _scrollCtrl.position.minScrollExtent,
+            _scrollCtrl.position.maxScrollExtent,
+          );
+          _scrollCtrl.jumpTo(target);
+        }
+      });
+    }
+    try {
+      await configRequest(await configDirectory(), 'set_font_scale', {
+        'scale': val,
+      });
+    } catch (e) {
+      if (mounted) {
+        showGlassToast(context, e.toString());
+      }
     }
   }
 
@@ -1442,7 +1700,7 @@ class _SettingsPageState extends State<SettingsPage> {
                               child: Text(
                                 records[i]['record_type'] ?? '',
                                 style: TextStyle(
-                                  fontSize: 11,
+                                  fontSize: 12,
                                   color: c.primary,
                                 ),
                               ),
@@ -1463,7 +1721,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                     "TTL ${records[i]['ttl']}",
                                     style: TextStyle(
                                       color: c.muted,
-                                      fontSize: 11,
+                                      fontSize: 12,
                                     ),
                                   ),
                                   if ((records[i]['geo'] ?? '').isNotEmpty)
@@ -1471,7 +1729,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                       records[i]['geo'],
                                       style: TextStyle(
                                         color: c.muted,
-                                        fontSize: 11,
+                                        fontSize: 12,
                                       ),
                                     ),
                                 ],
@@ -1498,7 +1756,7 @@ class _SettingsPageState extends State<SettingsPage> {
                             : answer['source'] == 'fallback'
                                 ? "回退公共 DNS · ${answer['server']}"
                                 : '本机当前 DNS',
-                        style: TextStyle(fontSize: 11, color: c.muted),
+                        style: TextStyle(fontSize: 12, color: c.muted),
                       ),
                     ],
                   ),
@@ -1754,6 +2012,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final viewPad = MediaQuery.viewPaddingOf(context);
     final bottomPad = MediaQuery.paddingOf(context).bottom;
     return ListView(
+      controller: _scrollCtrl,
       padding: EdgeInsets.fromLTRB(
         panelGutter(context) + viewPad.left,
         0,
@@ -2005,6 +2264,56 @@ class _SettingsPageState extends State<SettingsPage> {
                       ],
                       value: widget.themeMode,
                       onChanged: (m) => _savePreference(theme: m),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              '字体大小',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: c.ink,
+                              ),
+                            ),
+                            Text(
+                              _fontScaleLabel(_fontScale),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: c.muted,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '拖动滑条预览字号，松开后应用到整个界面，与系统字体大小叠加。',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: c.muted,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        CompositedTransformTarget(
+                          link: _fontSliderLink,
+                          child: GlassFontScaleSliderWidget(
+                            key: _fontSliderKey,
+                            value: _fontScale,
+                            onChangeStart: _showFontPreview,
+                            onChanged: _showFontPreview,
+                            onChangeEnd: _saveFontScale,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   SettingsRow(

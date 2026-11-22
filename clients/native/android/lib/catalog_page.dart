@@ -898,8 +898,12 @@ class _CatalogPageState extends State<CatalogPage> {
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
               child: LayoutBuilder(
-                builder: (_, constraints) {
-                  final cols = ((constraints.maxWidth + 8) / 136).floor().clamp(1, 1000);
+                builder: (context, constraints) {
+                  final ts = MediaQuery.textScalerOf(context);
+                  final scale = ts.scale(14) / 14;
+                  final minColW = 128 * (1 + (scale - 1).clamp(0.0, 1.25) * 0.35);
+                  final cols = ((constraints.maxWidth + 8) / (minColW + 8)).floor().clamp(1, 1000);
+                  final tileHeight = (20.0 + 4.0 + ts.scale(14) * 1.25 * 2 + ts.scale(12) * 1.4 + 3.0).ceilToDouble();
                   var selectedKeyAssigned = false;
                   Widget buildTile(Item node) {
                     final nName = node['name'].toString();
@@ -918,7 +922,7 @@ class _CatalogPageState extends State<CatalogPage> {
                           ? () => selectNode(group, nName)
                           : null,
                       child: Container(
-                        height: 76,
+                        height: tileHeight,
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
                           color: selected
@@ -952,6 +956,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                 ),
                               ),
                             ),
+                            const SizedBox(height: 4),
                             Row(
                               children: [
                                 Expanded(
@@ -1133,15 +1138,19 @@ class _CatalogPageState extends State<CatalogPage> {
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
               child: LayoutBuilder(
-                builder: (_, constraints) {
-                  final cols = ((constraints.maxWidth + 8) / 136).floor().clamp(1, 1000);
+                builder: (context, constraints) {
+                  final ts = MediaQuery.textScalerOf(context);
+                  final scale = ts.scale(14) / 14;
+                  final minColW = 128 * (1 + (scale - 1).clamp(0.0, 1.25) * 0.35);
+                  final cols = ((constraints.maxWidth + 8) / (minColW + 8)).floor().clamp(1, 1000);
+                  final tileHeight = (20.0 + 4.0 + ts.scale(14) * 1.25 * 2 + ts.scale(12) * 1.4 + 3.0).ceilToDouble();
                   Widget buildTile(Item node) {
                     final nName = node['name'].toString();
                     final delay = _delayOf(node);
                     final testing = testingNodes.contains(nName);
                     final (latBg, latFg) = _latencyBadge(delay, c);
                     return Container(
-                      height: 76,
+                      height: tileHeight,
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
                         color: c.dark
@@ -1161,6 +1170,7 @@ class _CatalogPageState extends State<CatalogPage> {
                               style: TextStyle(fontSize: 14, height: 1.2, color: c.ink),
                             ),
                           ),
+                          const SizedBox(height: 4),
                           Row(
                             children: [
                               Expanded(
@@ -1245,8 +1255,8 @@ class _CatalogPageState extends State<CatalogPage> {
       };
       final fg = action.kind == 'reject' ? c.dangerInk : c.muted;
       destWidget = Container(
-        height: 24,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        constraints: const BoxConstraints(minHeight: 24),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(999),
@@ -1307,8 +1317,8 @@ class _CatalogPageState extends State<CatalogPage> {
                         'set' => GestureDetector(
                           onTap: readable && providerItems.any((p) => p['name'] == tok.full) ? () => rulesTool(tok.full) : null,
                           child: Container(
-                            height: 22,
-                            padding: const EdgeInsets.symmetric(horizontal: 9),
+                            constraints: const BoxConstraints(minHeight: 22),
+                            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
                             decoration: BoxDecoration(
                               color: matched.contains(tok.full) ? c.primarySoft : c.fill,
                               borderRadius: BorderRadius.circular(999),
@@ -1925,8 +1935,8 @@ class _RuleDetailState extends State<_RuleDetail> {
       GestureDetector(
         onTap: onTap,
         child: Container(
-          height: 26,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
+          constraints: const BoxConstraints(minHeight: 26),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
           decoration: BoxDecoration(
             color: active ? activeBg : c.fill,
             borderRadius: BorderRadius.circular(999),
@@ -2000,9 +2010,9 @@ class _RuleDetailState extends State<_RuleDetail> {
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                             child: Row(children: [
                               Container(
-                                width: 72,
-                                height: 20,
-                                padding: const EdgeInsets.symmetric(horizontal: 6),
+                                width: MediaQuery.textScalerOf(context).scale(72).clamp(72.0, 110.0),
+                                constraints: const BoxConstraints(minHeight: 20),
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                 alignment: Alignment.center,
                                 decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
                                 child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: fg)),

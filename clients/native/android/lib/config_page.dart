@@ -31,7 +31,7 @@ Future<bool> _confirm(
         final c = SingboardColors.of(ctx);
         return GlassConfirmDialog(
           title: Text(title, style: const TextStyle(fontSize: 17)),
-          content: Text(message, style: const TextStyle(fontSize: 13.5)),
+          content: Text(message, style: const TextStyle(fontSize: 14)),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -329,7 +329,7 @@ class _ConfigPageState extends State<ConfigPage> {
           title: Text(
             '配置',
             style: TextStyle(
-              fontSize: 22,
+              fontSize: 26,
               fontWeight: FontWeight.w700,
               color: scope.backdropInk(c),
               shadows: scope.backdropShadows(),
@@ -450,7 +450,7 @@ class _ConfigPageState extends State<ConfigPage> {
                     ),
                     child: Text(
                       message,
-                      style: TextStyle(fontSize: 12.5, color: c.ink),
+                      style: TextStyle(fontSize: 13, color: c.ink),
                     ),
                   ),
                 ),
@@ -471,7 +471,7 @@ class _ConfigPageState extends State<ConfigPage> {
                       const SizedBox(height: 4),
                       Text(
                         '点击上方「添加远程配置」填入订阅地址下载配置。',
-                        style: TextStyle(fontSize: 12.5, color: c.muted),
+                        style: TextStyle(fontSize: 13, color: c.muted),
                       ),
                     ],
                   ),

@@ -469,12 +469,12 @@ impl Editor {
 fn ghost_btn(id: &'static str, label: &'static str, palette: Palette) -> Stateful<Div> {
     div()
         .id(id)
-        .h(px(26.))
+        .h(crate::theme::text_px(28.))
         .px_2()
         .rounded(px(8.))
         .flex()
         .items_center()
-        .text_xs()
+        .text_sm()
         .font_weight(FontWeight::MEDIUM)
         .text_color(palette.ink())
         .hover(|s| s.bg(palette.fill()))
@@ -508,13 +508,13 @@ impl Render for Editor {
                 .child(
                     div()
                         .id("discard")
-                        .h(px(26.))
+                        .h(crate::theme::text_px(28.))
                         .px_3()
                         .rounded_full()
                         .bg(palette.danger_soft())
                         .flex()
                         .items_center()
-                        .text_xs()
+                        .text_sm()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(palette.danger())
                         .cursor_pointer()
@@ -568,12 +568,12 @@ impl Render for Editor {
                 .child(
                     div()
                         .id("save")
-                        .h(px(26.))
+                        .h(crate::theme::text_px(28.))
                         .px(px(if can_save { 10. } else { 8. }))
                         .rounded(px(if can_save { 999. } else { 8. }))
                         .flex()
                         .items_center()
-                        .text_xs()
+                        .text_sm()
                         .font_weight(FontWeight::MEDIUM)
                         .when(can_save, |d| {
                             d.cursor_pointer()
@@ -722,7 +722,7 @@ impl Render for Editor {
             .when(self.dirty, |row| {
                 row.child(
                     div()
-                        .h(px(20.))
+                        .min_h(crate::theme::text_px(20.))
                         .px_2()
                         .rounded_full()
                         .bg(palette.fill())
@@ -834,7 +834,7 @@ impl Render for Editor {
                         .child(
                             crate::glass::backdrop_heading(inline.name.clone(), palette, cx)
                                 .text_size(crate::theme::text_px(22.))
-                                .line_height(px(28.))
+                                .line_height(crate::theme::text_px(28.))
                                 .font_weight(FontWeight::BOLD),
                         )
                         .child(

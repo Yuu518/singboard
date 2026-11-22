@@ -1263,7 +1263,7 @@ pub fn glass_input(
         .overflow_hidden()
         .w_full()
         .min_w_0()
-        .h(px(32.))
+        .h(crate::theme::text_px(32.))
         .rounded(px(10.))
         .bg(p.fill())
         .border_1()

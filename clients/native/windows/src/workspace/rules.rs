@@ -669,7 +669,7 @@ impl Workspace {
                 div()
                     .id("rules-tab-rules")
                     .relative()
-                    .h(px(24.))
+                    .h(crate::theme::text_px(24.))
                     .flex()
                     .items_center()
                     .cursor_pointer()
@@ -697,7 +697,7 @@ impl Workspace {
                 div()
                     .id("rules-tab-providers")
                     .relative()
-                    .h(px(24.))
+                    .h(crate::theme::text_px(24.))
                     .flex()
                     .items_center()
                     .cursor_pointer()
@@ -737,7 +737,7 @@ impl Workspace {
                     .child(
                         crate::glass::backdrop_heading("规则", palette, cx)
                             .text_size(crate::theme::text_px(26.))
-                            .line_height(px(32.))
+                            .line_height(crate::theme::text_px(32.))
                             .font_weight(FontWeight::BOLD),
                     )
                     .child(tabs)
@@ -902,10 +902,12 @@ impl Workspace {
                                 let inspect_name = name.clone();
                                 let update_name = name.clone();
 
+                                let rp_row_h =
+                                    (36. * crate::theme::effective_text_scale(cx) + 18.).ceil();
                                 let mut line = div()
                                     .id(("rp-line", i))
                                     .w_full()
-                                    .h(px(54.))
+                                    .h(px(rp_row_h))
                                     .px(px(10.))
                                     .rounded(px(12.))
                                     .flex()
@@ -1085,9 +1087,11 @@ impl Workspace {
                                         .into_any_element(),
                                 };
 
+                                let rule_row_h =
+                                    (26. * crate::theme::effective_text_scale(cx) + 16.).ceil();
                                 let rail = div()
                                     .w(px(14.))
-                                    .h(px(42.))
+                                    .h(px(rule_row_h))
                                     .flex_none()
                                     .flex()
                                     .flex_col()
@@ -1144,7 +1148,7 @@ impl Workspace {
                                                     )))
                                                     .flex_none()
                                                     .cursor_pointer()
-                                                    .h(px(22.))
+                                                    .h(crate::theme::text_px(22.))
                                                     .px(px(9.))
                                                     .rounded_full()
                                                     .bg(
@@ -1226,7 +1230,7 @@ impl Workspace {
                                     }
                                     RuleAction::Reject(label) => div()
                                         .flex_none()
-                                        .h(px(24.))
+                                        .h(crate::theme::text_px(24.))
                                         .px(px(10.))
                                         .rounded_full()
                                         .bg(p.danger_soft())
@@ -1246,7 +1250,7 @@ impl Workspace {
                                         .into_any_element(),
                                     RuleAction::Stop(label) => div()
                                         .flex_none()
-                                        .h(px(24.))
+                                        .h(crate::theme::text_px(24.))
                                         .px(px(10.))
                                         .rounded_full()
                                         .bg(p.fill())
@@ -1266,7 +1270,7 @@ impl Workspace {
                                         .into_any_element(),
                                     RuleAction::Pass(label) => div()
                                         .flex_none()
-                                        .h(px(24.))
+                                        .h(crate::theme::text_px(24.))
                                         .px(px(10.))
                                         .rounded_full()
                                         .bg(p.hover())
@@ -1306,7 +1310,7 @@ impl Workspace {
                                         ))
                                     })
                                     .w_full()
-                                    .h(px(42.))
+                                    .h(px(rule_row_h))
                                     .pl(px(10.))
                                     .pr(px(12.))
                                     .rounded(px(12.))
@@ -1509,7 +1513,7 @@ impl Workspace {
                     chips = chips.child(
                         div()
                             .id("rule-detail-type-all")
-                            .h(px(24.))
+                            .h(crate::theme::text_px(24.))
                             .px(px(10.))
                             .rounded_full()
                             .cursor_pointer()
@@ -1546,7 +1550,7 @@ impl Workspace {
                         chips = chips.child(
                             div()
                                 .id(("rule-detail-type", idx))
-                                .h(px(24.))
+                                .h(crate::theme::text_px(24.))
                                 .px(px(10.))
                                 .rounded_full()
                                 .cursor_pointer()
@@ -1651,7 +1655,7 @@ impl Workspace {
                                                 Some(
                                                     div()
                                                         .w_full()
-                                                        .h(px(30.))
+                                                        .h(crate::theme::text_px(30.))
                                                         .when(group_break, |el| {
                                                             el.border_t_1().border_color(p.line())
                                                         })
@@ -1684,8 +1688,8 @@ impl Workspace {
                                                                 ))
                                                                 .child(
                                                                     div()
-                                                                        .w(px(72.))
-                                                                        .h(px(20.))
+                                                                        .w(crate::theme::text_px(72.))
+                                                                        .h(crate::theme::text_px(20.))
                                                                         .flex_none()
                                                                         .px(px(6.))
                                                                         .rounded(px(6.))

@@ -351,7 +351,7 @@ impl Render for Search {
             .items_center()
             .gap_2()
             .w_full()
-            .h(px(32.))
+            .h(crate::theme::text_px(32.))
             .px(px(10.))
             .rounded(px(10.))
             .bg(palette.fill())
