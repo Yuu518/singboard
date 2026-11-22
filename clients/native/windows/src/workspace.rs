@@ -223,12 +223,29 @@ pub struct Workspace {
     hovered_topology: Option<Value>,
     topology_pointer: Option<(f32, f32)>,
     topology_previous: Option<(Value, std::time::Instant)>,
-    network_info: Option<Value>,
-    network_busy: bool,
+    domestic_info: Option<Value>,
+    domestic_busy: bool,
+    domestic_checked: bool,
+    domestic_updated_at: Option<u64>,
+    domestic_gen: u64,
+    abroad_info: Option<Value>,
+    abroad_busy: bool,
+    abroad_checked: bool,
+    abroad_updated_at: Option<u64>,
+    abroad_fingerprint: String,
+    abroad_gen: u64,
+    sites_info: Option<Value>,
+    sites_busy: bool,
+    sites_checked: bool,
+    sites_updated_at: Option<u64>,
+    sites_gen: u64,
     show_ip: bool,
-    network_checked: bool,
-    network_due: Option<std::time::Instant>,
-    network_generation: u64,
+    exits_due: Option<std::time::Instant>,
+    sites_due: Option<std::time::Instant>,
+    proxy_dirty: bool,
+    proxy_due: Option<std::time::Instant>,
+    network_cache_loaded_for: String,
+    local_was_running: bool,
     log_status: &'static str,
     conn_status: &'static str,
     confirm: Option<Command>,
@@ -284,6 +301,7 @@ impl Workspace {
         self.log_failures = 0;
         self.has_traffic = false;
         self.traffic_samples.clear();
+        self.reset_network_state(false);
         self.preferences(prefs, cx);
         let page = self.page;
         self.open(page, cx);
@@ -612,12 +630,29 @@ impl Workspace {
             hovered_topology: None,
             topology_pointer: None,
             topology_previous: None,
-            network_info: None,
-            network_busy: false,
+            domestic_info: None,
+            domestic_busy: false,
+            domestic_checked: false,
+            domestic_updated_at: None,
+            domestic_gen: 0,
+            abroad_info: None,
+            abroad_busy: false,
+            abroad_checked: false,
+            abroad_updated_at: None,
+            abroad_fingerprint: String::new(),
+            abroad_gen: 0,
+            sites_info: None,
+            sites_busy: false,
+            sites_checked: false,
+            sites_updated_at: None,
+            sites_gen: 0,
             show_ip: false,
-            network_checked: false,
-            network_due: None,
-            network_generation: 0,
+            exits_due: None,
+            sites_due: None,
+            proxy_dirty: false,
+            proxy_due: None,
+            network_cache_loaded_for: String::new(),
+            local_was_running: false,
             log_status: initial_status,
             conn_status: initial_status,
             confirm: None,
@@ -718,6 +753,7 @@ impl Workspace {
                 this.service_uptime = uptime.map(|seconds| (seconds, std::time::Instant::now()));
                 this.uptime_tick = 0;
                 this.service_settled = true;
+                this.invalidate_if_core_restarted();
                 if !was_running && now_running {
                     this.reconnect_feeds(cx);
                     this.refresh(cx);
@@ -742,7 +778,8 @@ impl Workspace {
         self.hovered_topology = None;
         self.topology_pointer = None;
         self.topology_previous = None;
-        self.network_due = None;
+        self.exits_due = None;
+        self.sites_due = None;
         self.scroll_motion = None;
         self.log_gap_since = None;
         if self.api_enabled {
@@ -915,20 +952,58 @@ impl Workspace {
             self.topology_previous = None;
         }
         if !self.local_state.contains("运行中") {
-            if self.network_checked || self.network_due.is_some() {
-                self.network_due = None;
-                self.network_generation += 1;
-                self.network_busy = false;
-                self.network_checked = false;
-                self.network_info = None;
+            let had_running = self.local_was_running;
+            self.local_was_running = false;
+            if had_running
+                || self.domestic_checked
+                || self.abroad_checked
+                || self.sites_checked
+                || self.exits_due.is_some()
+                || self.sites_due.is_some()
+                || self.proxy_due.is_some()
+            {
+                self.reset_network_state(had_running);
                 cx.notify();
             }
-        } else if !self.network_checked {
-            if self.network_due.is_some_and(|due| std::time::Instant::now() >= due) {
-                self.refresh_network(cx);
-            } else if self.network_due.is_none() {
-                self.network_due = Some(std::time::Instant::now() + std::time::Duration::from_secs(3));
+        } else {
+            self.local_was_running = true;
+            if self.network_cache_loaded_for != self.endpoint {
+                self.restore_network_cache();
+                self.check_cached_proxy_fingerprint(cx);
                 cx.notify();
+            }
+            if self.invalidate_if_core_restarted() {
+                cx.notify();
+            }
+            if self.page == Page::Overview {
+                let now = std::time::Instant::now();
+                if !self.domestic_checked || !self.abroad_checked {
+                    if self.exits_due.is_some_and(|due| now >= due) {
+                        self.exits_due = None;
+                        if !self.domestic_checked {
+                            self.refresh_direct_exit(cx);
+                        }
+                        if !self.abroad_checked {
+                            self.refresh_proxy_exit(false, cx);
+                        }
+                    } else if self.exits_due.is_none() {
+                        self.exits_due = Some(now + std::time::Duration::from_secs(3));
+                        cx.notify();
+                    }
+                }
+                if !self.sites_checked {
+                    if self.sites_due.is_some_and(|due| now >= due) {
+                        self.refresh_sites(cx);
+                    } else if self.sites_due.is_none() {
+                        self.sites_due = Some(now + std::time::Duration::from_secs(3));
+                        cx.notify();
+                    }
+                }
+                if self.proxy_dirty && self.proxy_due.is_some_and(|due| now >= due) {
+                    self.proxy_dirty = false;
+                    self.proxy_due = None;
+                    self.refresh_proxy_exit(true, cx);
+                }
             }
         }
         for row in connections.closed.into_iter().rev() {
@@ -955,30 +1030,284 @@ impl Workspace {
         }
     }
 
-    fn refresh_network(&mut self, cx: &mut Context<Self>) {
-        if self.network_busy {
+    fn reset_network_state(&mut self, clear_disk: bool) {
+        self.domestic_gen += 1;
+        self.abroad_gen += 1;
+        self.sites_gen += 1;
+        self.domestic_info = None;
+        self.domestic_busy = false;
+        self.domestic_checked = false;
+        self.domestic_updated_at = None;
+        self.abroad_info = None;
+        self.abroad_busy = false;
+        self.abroad_checked = false;
+        self.abroad_updated_at = None;
+        self.abroad_fingerprint.clear();
+        self.sites_info = None;
+        self.sites_busy = false;
+        self.sites_checked = false;
+        self.sites_updated_at = None;
+        self.exits_due = None;
+        self.sites_due = None;
+        self.proxy_dirty = false;
+        self.proxy_due = None;
+        self.network_cache_loaded_for.clear();
+        if clear_disk && let Ok(dir) = crate::service::data_dir() {
+            singboard_stream::tools::clear_network_cache(&dir);
+        }
+    }
+
+    fn proxy_fingerprint(&self) -> String {
+        let mode = if !self.mode.trim().is_empty() {
+            self.mode.trim().to_ascii_lowercase()
+        } else {
+            self.summary["config"]["mode"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase()
+        };
+        let mut selections: Vec<(String, String)> = if !self.groups.is_empty() {
+            self.groups
+                .iter()
+                .filter(|g| !g.now.is_empty())
+                .map(|g| (g.name.clone(), g.now.clone()))
+                .collect()
+        } else if let Some(proxies) = self.summary["proxies"].as_object() {
+            proxies
+                .iter()
+                .filter_map(|(k, v)| {
+                    let now = v["now"].as_str().filter(|s| !s.is_empty())?;
+                    Some((k.clone(), now.to_owned()))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if mode.is_empty() && selections.is_empty() {
+            return String::new();
+        }
+        selections.sort_by(|a, b| a.0.cmp(&b.0));
+        let joined = selections
+            .into_iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(";");
+        format!("{mode}|{joined}")
+    }
+
+    fn core_started_at(&self) -> Option<u64> {
+        let (seconds, sampled) = self.service_uptime?;
+        let total = seconds.saturating_add(sampled.elapsed().as_secs());
+        Some(singboard_stream::tools::now_unix_secs().saturating_sub(total))
+    }
+
+    fn invalidate_if_core_restarted(&mut self) -> bool {
+        let Some(started) = self.core_started_at() else {
+            return false;
+        };
+        let stale = [
+            self.domestic_updated_at,
+            self.abroad_updated_at,
+            self.sites_updated_at,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|ts| ts.saturating_add(5) < started);
+        if stale {
+            self.reset_network_state(true);
+            return true;
+        }
+        false
+    }
+
+    fn restore_network_cache(&mut self) {
+        self.network_cache_loaded_for = self.endpoint.clone();
+        let Ok(dir) = crate::service::data_dir() else {
+            return;
+        };
+        let cached = singboard_stream::tools::load_network_cache(
+            &dir,
+            &self.endpoint,
+            self.core_started_at(),
+        );
+        if let Some(slot) = cached.domestic {
+            self.domestic_info = Some(slot.data);
+            self.domestic_updated_at = Some(slot.updated_at);
+            self.domestic_checked = true;
+        }
+        if let Some(slot) = cached.abroad {
+            self.abroad_info = Some(slot.data);
+            self.abroad_updated_at = Some(slot.updated_at);
+            self.abroad_fingerprint = slot.fingerprint;
+            self.abroad_checked = true;
+        }
+        if let Some(slot) = cached.sites {
+            self.sites_info = Some(slot.data);
+            self.sites_updated_at = Some(slot.updated_at);
+            self.sites_checked = true;
+        }
+    }
+
+    fn check_cached_proxy_fingerprint(&mut self, cx: &mut Context<Self>) {
+        if !self.abroad_checked || self.abroad_fingerprint.is_empty() || self.proxy_dirty {
             return;
         }
-        self.network_busy = true;
-        self.network_due = None;
-        let generation = self.network_generation;
-        self.network_checked = true;
-        let task = singboard_stream::runtime().spawn(singboard_stream::tools::network_overview());
+        let current = self.proxy_fingerprint();
+        if !current.is_empty() && current != self.abroad_fingerprint {
+            self.schedule_proxy_recheck(cx);
+        }
+    }
+
+    fn schedule_proxy_recheck(&mut self, cx: &mut Context<Self>) {
+        if !self.local_state.contains("运行中") {
+            return;
+        }
+        self.proxy_dirty = true;
+        self.proxy_due = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500));
+        cx.notify();
+    }
+
+    fn refresh_exits(&mut self, cx: &mut Context<Self>) {
+        self.exits_due = None;
+        self.proxy_dirty = false;
+        self.proxy_due = None;
+        self.refresh_direct_exit(cx);
+        self.refresh_proxy_exit(true, cx);
+    }
+
+    fn refresh_direct_exit(&mut self, cx: &mut Context<Self>) {
+        if self.domestic_busy {
+            return;
+        }
+        self.domestic_busy = true;
+        self.domestic_checked = true;
+        self.domestic_gen += 1;
+        let generation = self.domestic_gen;
+        let endpoint = self.endpoint.clone();
+        let task = singboard_stream::runtime().spawn(async move {
+            let data = singboard_stream::tools::direct_exit_info().await;
+            let updated_at = crate::service::data_dir()
+                .ok()
+                .and_then(|dir| {
+                    singboard_stream::tools::save_network_slot(
+                        &dir,
+                        &endpoint,
+                        "domestic",
+                        data.clone(),
+                        "",
+                    )
+                });
+            (data, updated_at)
+        });
         cx.spawn(async move |weak, cx| {
-            if let Ok(data) = task.await {
-                let _ = weak.update(cx, |this, cx| {
-                    if this.network_generation != generation { return; }
-                    this.network_busy = false;
-                    this.network_info = Some(data);
-                    cx.notify();
+            let outcome = task.await;
+            let _ = weak.update(cx, |this, cx| {
+                if this.domestic_gen != generation {
+                    return;
+                }
+                this.domestic_busy = false;
+                if let Ok((data, updated_at)) = outcome {
+                    this.domestic_info = Some(data);
+                    if let Some(ts) = updated_at {
+                        this.domestic_updated_at = Some(ts);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn refresh_proxy_exit(&mut self, reset_cooldown: bool, cx: &mut Context<Self>) {
+        if self.abroad_busy {
+            return;
+        }
+        self.abroad_busy = true;
+        self.abroad_checked = true;
+        self.proxy_dirty = false;
+        self.proxy_due = None;
+        self.abroad_gen += 1;
+        let generation = self.abroad_gen;
+        let endpoint = self.endpoint.clone();
+        let fingerprint = self.proxy_fingerprint();
+        let task = singboard_stream::runtime().spawn(async move {
+            let data = singboard_stream::tools::proxy_exit_info(reset_cooldown).await;
+            let updated_at = crate::service::data_dir()
+                .ok()
+                .and_then(|dir| {
+                    singboard_stream::tools::save_network_slot(
+                        &dir,
+                        &endpoint,
+                        "abroad",
+                        data.clone(),
+                        &fingerprint,
+                    )
                 });
-            } else {
-                let _ = weak.update(cx, |this, cx| {
-                    if this.network_generation != generation { return; }
-                    this.network_busy = false;
-                    cx.notify();
+            (data, updated_at, fingerprint)
+        });
+        cx.spawn(async move |weak, cx| {
+            let outcome = task.await;
+            let _ = weak.update(cx, |this, cx| {
+                if this.abroad_gen != generation {
+                    return;
+                }
+                this.abroad_busy = false;
+                if let Ok((data, updated_at, fp)) = outcome {
+                    this.abroad_info = Some(data);
+                    if let Some(ts) = updated_at {
+                        this.abroad_updated_at = Some(ts);
+                        this.abroad_fingerprint = fp;
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn refresh_sites(&mut self, cx: &mut Context<Self>) {
+        if self.sites_busy {
+            return;
+        }
+        self.sites_busy = true;
+        self.sites_checked = true;
+        self.sites_due = None;
+        self.sites_gen += 1;
+        let generation = self.sites_gen;
+        let endpoint = self.endpoint.clone();
+        let task = singboard_stream::runtime().spawn(async move {
+            let data = singboard_stream::tools::site_latencies_overview().await;
+            let updated_at = crate::service::data_dir()
+                .ok()
+                .and_then(|dir| {
+                    singboard_stream::tools::save_network_slot(
+                        &dir,
+                        &endpoint,
+                        "sites",
+                        data.clone(),
+                        "",
+                    )
                 });
-            }
+            (data, updated_at)
+        });
+        cx.spawn(async move |weak, cx| {
+            let outcome = task.await;
+            let _ = weak.update(cx, |this, cx| {
+                if this.sites_gen != generation {
+                    return;
+                }
+                this.sites_busy = false;
+                if let Ok((data, updated_at)) = outcome {
+                    this.sites_info = Some(data);
+                    if let Some(ts) = updated_at {
+                        this.sites_updated_at = Some(ts);
+                    }
+                }
+                cx.notify();
+            });
         })
         .detach();
         cx.notify();
@@ -1161,6 +1490,15 @@ impl Workspace {
             self.conn_detail_scroll = ScrollHandle::new();
         }
         self.page = page;
+        if page == Page::Overview
+            && self.local_state.contains("运行中")
+            && self.proxy_dirty
+            && self.proxy_due.is_some_and(|due| std::time::Instant::now() >= due)
+        {
+            self.proxy_dirty = false;
+            self.proxy_due = None;
+            self.refresh_proxy_exit(true, cx);
+        }
         if self.service_checked.is_none() {
             self.refresh_local_state(cx);
         }
@@ -1425,7 +1763,10 @@ impl Workspace {
                         }
                     }
                     Ok(data) => match command {
-                        Command::Proxies => this.apply_proxies(data),
+                        Command::Proxies => {
+                            this.apply_proxies(data);
+                            this.check_cached_proxy_fingerprint(cx);
+                        }
                         Command::Rules => {
                             this.rules = data["rules"].as_array().cloned().unwrap_or_default()
                         }
@@ -1467,6 +1808,12 @@ impl Workspace {
                                 let old = std::mem::replace(&mut g.now, name);
                                 this.undo = Some((group, old, std::time::Instant::now()));
                             }
+                            this.schedule_proxy_recheck(cx);
+                            this.refresh(cx);
+                        }
+                        Command::SetMode { mode } => {
+                            this.mode = mode;
+                            this.schedule_proxy_recheck(cx);
                             this.refresh(cx);
                         }
                         Command::Summary => {
@@ -1477,6 +1824,7 @@ impl Workspace {
                                 }
                             }
                             this.summary = data;
+                            this.check_cached_proxy_fingerprint(cx);
                         }
                         Command::Config => {
                             this.core_level =
@@ -1493,6 +1841,7 @@ impl Workspace {
                                 .filter_map(Value::as_str)
                                 .map(str::to_owned)
                                 .collect();
+                            this.check_cached_proxy_fingerprint(cx);
                         }
                         Command::Disconnect { .. }
                         | Command::DisconnectAll
@@ -2220,6 +2569,23 @@ impl RenderOnce for DropdownBox {
                         menu
                     }),
             )
+    }
+}
+
+fn format_relative_age(updated_at: Option<u64>) -> String {
+    let Some(ts) = updated_at else {
+        return String::new();
+    };
+    let now = singboard_stream::tools::now_unix_secs();
+    let diff = now.saturating_sub(ts);
+    if diff < 60 {
+        "刚刚".into()
+    } else if diff < 3600 {
+        format!("{} 分钟前", diff / 60)
+    } else if diff < 86400 {
+        format!("{} 小时前", diff / 3600)
+    } else {
+        format!("{} 天前", diff / 86400)
     }
 }
 

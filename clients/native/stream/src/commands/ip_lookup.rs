@@ -1,11 +1,14 @@
 use crate::commands::network;
-use reqwest::header::{ACCEPT, CACHE_CONTROL, USER_AGENT};
+use reqwest::header::{ACCEPT, CACHE_CONTROL, RETRY_AFTER, USER_AGENT};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::Notify;
 
 const USER_AGENT_VALUE: &str = concat!("singboard/", env!("CARGO_PKG_VERSION"));
 const GEOIP_URL: &str = "https://api.ip.sb/geoip";
@@ -20,6 +23,12 @@ const GEO_TIMEOUT: Duration = Duration::from_secs(10);
 const STACK_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
 const CACHE_TTL: Duration = Duration::from_secs(600);
 const CACHE_MAX_ENTRIES: usize = 256;
+const IPSB_MIN_INTERVAL: Duration = Duration::from_millis(250);
+const IPSB_DEFAULT_COOLDOWN_SECS: u64 = 45;
+const IPSB_MIN_COOLDOWN_SECS: u64 = 10;
+const IPSB_MAX_COOLDOWN_SECS: u64 = 120;
+const CORE_RESTART_SKEW_SECS: u64 = 5;
+const NETWORK_CACHE_FILE: &str = "network_cache.json";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DirectIp {
@@ -68,6 +77,26 @@ pub struct GeoIp {
     pub isp: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organization: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct CachedSlot {
+    pub data: Value,
+    pub updated_at: u64,
+    #[serde(default)]
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct NetworkCache {
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domestic: Option<CachedSlot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abroad: Option<CachedSlot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sites: Option<CachedSlot>,
 }
 
 #[derive(Deserialize)]
@@ -123,9 +152,104 @@ struct CacheEntry {
     cached_at: Instant,
 }
 
+struct InflightGuard {
+    ip: IpAddr,
+    notify: Arc<Notify>,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = inflight_geo().lock() {
+            guard.remove(&self.ip);
+        }
+        self.notify.notify_waiters();
+    }
+}
+
 fn cache() -> &'static Mutex<HashMap<IpAddr, CacheEntry>> {
     static CACHE: OnceLock<Mutex<HashMap<IpAddr, CacheEntry>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn inflight_geo() -> &'static Mutex<HashMap<IpAddr, Arc<Notify>>> {
+    static INFLIGHT: OnceLock<Mutex<HashMap<IpAddr, Arc<Notify>>>> = OnceLock::new();
+    INFLIGHT.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn ipsb_pace() -> &'static tokio::sync::Mutex<Option<Instant>> {
+    static PACE: OnceLock<tokio::sync::Mutex<Option<Instant>>> = OnceLock::new();
+    PACE.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+
+fn ipsb_cooldown() -> &'static Mutex<Option<Instant>> {
+    static COOLDOWN: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    COOLDOWN.get_or_init(|| Mutex::new(None))
+}
+
+fn cache_file_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+pub fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn parse_retry_after(header_value: Option<&str>) -> Duration {
+    let secs = header_value
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(IPSB_DEFAULT_COOLDOWN_SECS)
+        .clamp(IPSB_MIN_COOLDOWN_SECS, IPSB_MAX_COOLDOWN_SECS);
+    Duration::from_secs(secs)
+}
+
+fn cooldown_remaining(slot: &mut Option<Instant>, now: Instant) -> Option<u64> {
+    if let Some(until) = *slot {
+        if now < until {
+            let secs = until.saturating_duration_since(now).as_secs().max(1);
+            return Some(secs);
+        }
+        *slot = None;
+    }
+    None
+}
+
+fn check_ipsb_cooldown() -> Result<(), FetchError> {
+    if let Ok(mut guard) = ipsb_cooldown().lock()
+        && let Some(secs) = cooldown_remaining(&mut guard, Instant::now())
+    {
+        return Err(FetchError::Http {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: format!("ip.sb 触发频率限制，请约 {secs} 秒后再试"),
+        });
+    }
+    Ok(())
+}
+
+fn set_ipsb_cooldown(duration: Duration) {
+    if let Ok(mut guard) = ipsb_cooldown().lock() {
+        *guard = Some(Instant::now() + duration);
+    }
+}
+
+pub fn clear_ipsb_cooldown() {
+    if let Ok(mut guard) = ipsb_cooldown().lock() {
+        *guard = None;
+    }
+}
+
+async fn pace_ipsb_request() {
+    let mut last = ipsb_pace().lock().await;
+    if let Some(prev) = *last {
+        let elapsed = prev.elapsed();
+        if elapsed < IPSB_MIN_INTERVAL {
+            tokio::time::sleep(IPSB_MIN_INTERVAL - elapsed).await;
+        }
+    }
+    *last = Some(Instant::now());
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
@@ -208,7 +332,12 @@ fn describe_request_error(error: reqwest::Error, timeout: Duration) -> String {
     }
 }
 
-fn describe_http_error(status: StatusCode, body: &str, service: &str) -> String {
+fn describe_http_error(
+    status: StatusCode,
+    body: &str,
+    service: &str,
+    retry_after_secs: Option<u64>,
+) -> String {
     let parsed = serde_json::from_str::<ApiErrorBody>(body).ok();
     let message = parsed
         .as_ref()
@@ -224,7 +353,10 @@ fn describe_http_error(status: StatusCode, body: &str, service: &str) -> String 
             }
         }
         StatusCode::FORBIDDEN => format!("请求被 {service} 拒绝（HTTP 403）"),
-        StatusCode::TOO_MANY_REQUESTS => "请求过于频繁，请稍后再试（HTTP 429）".into(),
+        StatusCode::TOO_MANY_REQUESTS => match retry_after_secs {
+            Some(secs) => format!("{service} 触发频率限制，请约 {secs} 秒后再试（HTTP 429）"),
+            None => format!("{service} 触发频率限制，请稍后再试（HTTP 429）"),
+        },
         _ => match message {
             Some(msg) => format!("服务器返回 HTTP {}：{msg}", status.as_u16()),
             None => format!("服务器返回 HTTP {}", status.as_u16()),
@@ -238,6 +370,11 @@ async fn request_endpoint(
     timeout: Duration,
     service: &str,
 ) -> Result<String, FetchError> {
+    let is_ipsb = service == "ip.sb";
+    if is_ipsb {
+        check_ipsb_cooldown()?;
+        pace_ipsb_request().await;
+    }
     let client =
         network::build_client(Some(timeout)).map_err(|e| FetchError::Network(e.to_string()))?;
     let mut req = client
@@ -252,6 +389,19 @@ async fn request_endpoint(
         .await
         .map_err(|e| FetchError::Network(describe_request_error(e, timeout)))?;
     let status = resp.status();
+    let retry_after = if status == StatusCode::TOO_MANY_REQUESTS {
+        let dur = parse_retry_after(
+            resp.headers()
+                .get(RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+        );
+        if is_ipsb {
+            set_ipsb_cooldown(dur);
+        }
+        Some(dur.as_secs())
+    } else {
+        None
+    };
     let body = resp
         .text()
         .await
@@ -259,7 +409,7 @@ async fn request_endpoint(
     if !status.is_success() {
         return Err(FetchError::Http {
             status,
-            message: describe_http_error(status, &body, service),
+            message: describe_http_error(status, &body, service, retry_after),
         });
     }
     Ok(body)
@@ -377,6 +527,123 @@ fn cache_put(map: &mut HashMap<IpAddr, CacheEntry>, ip: IpAddr, geo: GeoIp, now:
     map.insert(ip, CacheEntry { geo, cached_at: now });
 }
 
+fn network_cache_path(dir: &Path) -> PathBuf {
+    dir.join(NETWORK_CACHE_FILE)
+}
+
+fn is_valid_slot(slot: &CachedSlot, core_started_at: Option<u64>) -> bool {
+    match core_started_at {
+        Some(started) => slot.updated_at.saturating_add(CORE_RESTART_SKEW_SECS) >= started,
+        None => true,
+    }
+}
+
+fn is_cacheable_slot(slot_name: &str, data: &Value) -> bool {
+    match slot_name {
+        "domestic" | "abroad" => {
+            data["status"].as_str() == Some("done")
+                && data["ip"].as_str().is_some_and(|ip| !ip.trim().is_empty())
+        }
+        "sites" => data
+            .as_array()
+            .is_some_and(|arr| arr.iter().any(|s| s["status"].as_str() == Some("done"))),
+        _ => false,
+    }
+}
+
+fn load_network_cache_inner(
+    dir: &Path,
+    endpoint: &str,
+    core_started_at: Option<u64>,
+) -> NetworkCache {
+    let path = network_cache_path(dir);
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return NetworkCache {
+            endpoint: endpoint.to_owned(),
+            ..Default::default()
+        };
+    };
+    let Ok(mut parsed) = serde_json::from_str::<NetworkCache>(&text) else {
+        return NetworkCache {
+            endpoint: endpoint.to_owned(),
+            ..Default::default()
+        };
+    };
+    if parsed.endpoint != endpoint {
+        return NetworkCache {
+            endpoint: endpoint.to_owned(),
+            ..Default::default()
+        };
+    }
+    parsed.domestic = parsed.domestic.filter(|s| is_valid_slot(s, core_started_at));
+    parsed.abroad = parsed.abroad.filter(|s| is_valid_slot(s, core_started_at));
+    parsed.sites = parsed.sites.filter(|s| is_valid_slot(s, core_started_at));
+    parsed
+}
+
+pub fn load_network_cache(
+    dir: &Path,
+    endpoint: &str,
+    core_started_at: Option<u64>,
+) -> NetworkCache {
+    let _guard = cache_file_lock().lock().ok();
+    load_network_cache_inner(dir, endpoint, core_started_at)
+}
+
+fn save_network_slot_at(
+    dir: &Path,
+    endpoint: &str,
+    slot_name: &str,
+    data: Value,
+    fingerprint: &str,
+    now: u64,
+) -> Option<u64> {
+    if endpoint.trim().is_empty() || !is_cacheable_slot(slot_name, &data) {
+        return None;
+    }
+    let mut current = load_network_cache_inner(dir, endpoint, None);
+    let slot = CachedSlot {
+        data,
+        updated_at: now,
+        fingerprint: fingerprint.to_owned(),
+    };
+    match slot_name {
+        "domestic" => current.domestic = Some(slot),
+        "abroad" => current.abroad = Some(slot),
+        "sites" => current.sites = Some(slot),
+        _ => return None,
+    }
+    if std::fs::create_dir_all(dir).is_ok()
+        && let Ok(serialized) = serde_json::to_vec(&current)
+    {
+        let path = network_cache_path(dir);
+        let tmp = dir.join(format!("{NETWORK_CACHE_FILE}.tmp"));
+        if std::fs::write(&tmp, serialized).is_ok() {
+            let _ = std::fs::rename(&tmp, &path).or_else(|_| {
+                let _ = std::fs::remove_file(&path);
+                std::fs::rename(&tmp, &path)
+            });
+        }
+    }
+    Some(now)
+}
+
+pub fn save_network_slot(
+    dir: &Path,
+    endpoint: &str,
+    slot_name: &str,
+    data: Value,
+    fingerprint: &str,
+) -> Option<u64> {
+    let _guard = cache_file_lock().lock().ok();
+    save_network_slot_at(dir, endpoint, slot_name, data, fingerprint, now_unix_secs())
+}
+
+pub fn clear_network_cache(dir: &Path) {
+    let _guard = cache_file_lock().lock().ok();
+    let _ = std::fs::remove_file(network_cache_path(dir));
+}
+
 async fn fetch_direct_json_inner() -> Result<DirectIp, FetchError> {
     let body = request_endpoint(IPIP_JSON_URL, true, GEO_TIMEOUT, "ipip.net").await?;
     parse_ipip_json(&body).map_err(FetchError::Parse)
@@ -456,27 +723,52 @@ pub async fn fetch_exit_ip_v6() -> Result<Ipv6Addr, String> {
         .map_err(|_| "未返回有效 IPv6 地址".to_owned())
 }
 
+fn acquire_inflight(addr: IpAddr) -> Result<InflightGuard, Arc<Notify>> {
+    let mut map = inflight_geo().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(existing) = map.get(&addr) {
+        return Err(existing.clone());
+    }
+    let notify = Arc::new(Notify::new());
+    map.insert(addr, notify.clone());
+    Ok(InflightGuard { ip: addr, notify })
+}
+
 pub async fn lookup_geo(ip: &str) -> Result<GeoIp, String> {
     let addr: IpAddr = ip.trim().parse().map_err(|_| "无效的 IP 地址".to_owned())?;
-    if let Ok(mut guard) = cache().lock()
-        && let Some(hit) = cache_get(&mut guard, addr, Instant::now())
-    {
-        return Ok(hit);
+    loop {
+        if let Ok(mut guard) = cache().lock()
+            && let Some(hit) = cache_get(&mut guard, addr, Instant::now())
+        {
+            return Ok(hit);
+        }
+        match acquire_inflight(addr) {
+            Ok(_guard) => {
+                let url = format!("{GEOIP_URL}/{addr}");
+                let body = request_endpoint(&url, true, GEO_TIMEOUT, "ip.sb")
+                    .await
+                    .map_err(FetchError::into_message)?;
+                let geo = parse_geoip_body(&body)?;
+                if let Ok(mut c) = cache().lock() {
+                    cache_put(&mut c, addr, geo.clone(), Instant::now());
+                }
+                return Ok(geo);
+            }
+            Err(notify) => {
+                notify.notified().await;
+                if let Ok(mut guard) = cache().lock()
+                    && let Some(hit) = cache_get(&mut guard, addr, Instant::now())
+                {
+                    return Ok(hit);
+                }
+            }
+        }
     }
-    let url = format!("{GEOIP_URL}/{addr}");
-    let body = request_endpoint(&url, true, GEO_TIMEOUT, "ip.sb")
-        .await
-        .map_err(FetchError::into_message)?;
-    let geo = parse_geoip_body(&body)?;
-    if let Ok(mut guard) = cache().lock() {
-        cache_put(&mut guard, addr, geo.clone(), Instant::now());
-    }
-    Ok(geo)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn parses_ipip_json_text_and_ip_only_responses() {
@@ -582,46 +874,44 @@ mod tests {
     }
 
     #[test]
-    fn translates_documented_http_errors_and_fallback_policy() {
+    fn translates_documented_http_errors_and_cooldown_logic() {
         assert_eq!(
             describe_http_error(
                 StatusCode::BAD_REQUEST,
                 r#"{"code":401,"message":"Input string is not a valid IP address"}"#,
                 "ip.sb",
+                None,
             ),
             "无效的 IP 地址"
         );
         assert_eq!(
-            describe_http_error(StatusCode::TOO_MANY_REQUESTS, "", "ip.sb"),
-            "请求过于频繁，请稍后再试（HTTP 429）"
+            describe_http_error(StatusCode::TOO_MANY_REQUESTS, "", "ip.sb", Some(30)),
+            "ip.sb 触发频率限制，请约 30 秒后再试（HTTP 429）"
         );
         assert_eq!(
-            describe_http_error(StatusCode::FORBIDDEN, "blocked", "ip.sb"),
+            describe_http_error(StatusCode::FORBIDDEN, "blocked", "ip.sb", None),
             "请求被 ip.sb 拒绝（HTTP 403）"
         );
         assert_eq!(
-            describe_http_error(StatusCode::FORBIDDEN, "blocked", "ipip.net"),
+            describe_http_error(StatusCode::FORBIDDEN, "blocked", "ipip.net", None),
             "请求被 ipip.net 拒绝（HTTP 403）"
         );
+        assert_eq!(parse_retry_after(Some("3")), Duration::from_secs(10));
+        assert_eq!(parse_retry_after(Some("60")), Duration::from_secs(60));
+        assert_eq!(parse_retry_after(Some("999")), Duration::from_secs(120));
+        assert_eq!(parse_retry_after(None), Duration::from_secs(45));
+
+        let now = Instant::now();
+        let mut slot = Some(now + Duration::from_secs(20));
+        assert_eq!(cooldown_remaining(&mut slot, now), Some(20));
+        assert_eq!(cooldown_remaining(&mut slot, now + Duration::from_secs(25)), None);
+        assert!(slot.is_none());
+
         assert!(FetchError::Parse("bad".into()).should_fallback());
-        assert!(
-            FetchError::Http {
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-                message: "500".into()
-            }
-            .should_fallback()
-        );
         assert!(
             !FetchError::Http {
                 status: StatusCode::TOO_MANY_REQUESTS,
                 message: "429".into()
-            }
-            .should_fallback()
-        );
-        assert!(
-            !FetchError::Http {
-                status: StatusCode::FORBIDDEN,
-                message: "403".into()
             }
             .should_fallback()
         );
@@ -656,5 +946,46 @@ mod tests {
         }
         assert_eq!(map.len(), CACHE_MAX_ENTRIES);
         assert!(!map.contains_key(&IpAddr::V4(Ipv4Addr::new(198, 51, 0, 0))));
+    }
+
+    #[test]
+    fn network_cache_persists_without_ttl_and_invalidates_on_restart_or_endpoint_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let ep = "http://127.0.0.1:9090";
+        let t0 = 1_700_000_000u64;
+
+        let ok_dom = json!({"status":"done","ip":"1.2.3.4","location":["中国"],"error":""});
+        let ok_abr = json!({"status":"done","ip":"8.8.8.8","location":["US"],"error":""});
+        let err_abr = json!({"status":"error","ip":"","location":[],"error":"timeout"});
+        let ok_sites = json!([{"key":"github","label":"GitHub","status":"done","ms":120,"error":""}]);
+
+        assert_eq!(save_network_slot_at(dir.path(), ep, "domestic", ok_dom.clone(), "", t0), Some(t0));
+        assert_eq!(save_network_slot_at(dir.path(), ep, "abroad", ok_abr.clone(), "rule|Proxy=HK", t0), Some(t0));
+        assert_eq!(save_network_slot_at(dir.path(), ep, "abroad", err_abr, "rule|Proxy=HK", t0 + 5), None);
+        assert_eq!(save_network_slot_at(dir.path(), ep, "sites", ok_sites.clone(), "", t0 + 10), Some(t0 + 10));
+
+        let loaded = load_network_cache_inner(dir.path(), ep, Some(t0 - 3600));
+        assert_eq!(loaded.domestic.as_ref().unwrap().data, ok_dom);
+        assert_eq!(loaded.abroad.as_ref().unwrap().data, ok_abr);
+        assert_eq!(loaded.abroad.as_ref().unwrap().fingerprint, "rule|Proxy=HK");
+        assert_eq!(loaded.sites.as_ref().unwrap().data, ok_sites);
+
+        let no_ttl = load_network_cache_inner(dir.path(), ep, None);
+        assert_eq!(no_ttl.domestic.as_ref().unwrap().data, ok_dom);
+        assert_eq!(no_ttl.sites.as_ref().unwrap().data, ok_sites);
+
+        let wrong_ep = load_network_cache_inner(dir.path(), "http://127.0.0.1:9091", Some(t0 - 3600));
+        assert!(wrong_ep.domestic.is_none());
+        assert!(wrong_ep.abroad.is_none());
+        assert!(wrong_ep.sites.is_none());
+
+        let restarted = load_network_cache_inner(dir.path(), ep, Some(t0 + 100));
+        assert!(restarted.domestic.is_none());
+        assert!(restarted.abroad.is_none());
+        assert!(restarted.sites.is_none());
+
+        clear_network_cache(dir.path());
+        let cleared = load_network_cache_inner(dir.path(), ep, None);
+        assert!(cleared.domestic.is_none());
     }
 }

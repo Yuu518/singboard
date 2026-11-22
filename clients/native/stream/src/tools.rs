@@ -889,33 +889,50 @@ pub fn mask_ip(ip: &str) -> String {
         .collect()
 }
 
-pub use crate::commands::ip_lookup::parse_ipipnet;
+pub use crate::commands::ip_lookup::{
+    CachedSlot, NetworkCache, clear_network_cache, load_network_cache, now_unix_secs,
+    parse_ipipnet, save_network_slot,
+};
 
-pub async fn network_overview() -> Value {
-    let domestic_fut = async {
-        match ip_lookup::fetch_direct_ip().await {
-            Ok(info) => json!({"status":"done","ip":info.ip,"location":info.location,"error":""}),
-            Err(e) => json!({"status":"error","ip":"","location":[],"error":e}),
+pub async fn direct_exit_info() -> Value {
+    match ip_lookup::fetch_direct_ip().await {
+        Ok(info) => json!({"status":"done","ip":info.ip,"location":info.location,"error":""}),
+        Err(e) => json!({"status":"error","ip":"","location":[],"error":e}),
+    }
+}
+
+pub async fn proxy_exit_info(reset_cooldown: bool) -> Value {
+    if reset_cooldown {
+        ip_lookup::clear_ipsb_cooldown();
+    }
+    match ip_lookup::fetch_exit_geo_with_fallback().await {
+        Ok(geo) => {
+            let location = geo.overview_location();
+            json!({"status":"done","ip":geo.ip,"location":location,"error":""})
         }
-    };
-    let abroad_fut = async {
-        match ip_lookup::fetch_exit_geo_with_fallback().await {
-            Ok(geo) => {
-                let location = geo.overview_location();
-                json!({"status":"done","ip":geo.ip,"location":location,"error":""})
-            }
-            Err(e) => json!({"status":"error","ip":"","location":[],"error":e}),
-        }
-    };
-    let sites_fut = futures_util::future::join_all(OVERVIEW_SITES.into_iter().map(
+        Err(e) => json!({"status":"error","ip":"","location":[],"error":e}),
+    }
+}
+
+pub async fn site_latencies_overview() -> Value {
+    let sites = futures_util::future::join_all(OVERVIEW_SITES.into_iter().map(
         |(key, label, url)| async move {
             match network::http_ping(url.into(), 3).await {
                 Ok(ms) => json!({"key":key,"label":label,"status":"done","ms":ms.round().max(1.) as u64,"error":""}),
                 Err(e) => json!({"key":key,"label":label,"status":"error","ms":0,"error":e}),
             }
         },
-    ));
-    let (domestic, abroad, sites) = tokio::join!(domestic_fut, abroad_fut, sites_fut);
+    ))
+    .await;
+    json!(sites)
+}
+
+pub async fn network_overview() -> Value {
+    let (domestic, abroad, sites) = tokio::join!(
+        direct_exit_info(),
+        proxy_exit_info(false),
+        site_latencies_overview(),
+    );
     json!({"domestic": domestic, "abroad": abroad, "sites": sites})
 }
 

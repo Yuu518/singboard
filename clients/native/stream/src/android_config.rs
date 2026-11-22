@@ -17,6 +17,28 @@ enum Command {
     Tools,
     CoreProgress,
     NetworkOverview,
+    NetworkCacheLoad {
+        endpoint: String,
+        #[serde(default)]
+        core_started_at: Option<u64>,
+    },
+    NetworkCacheClear,
+    NetworkDirect {
+        #[serde(default)]
+        endpoint: String,
+    },
+    NetworkProxy {
+        #[serde(default)]
+        endpoint: String,
+        #[serde(default)]
+        fingerprint: String,
+        #[serde(default)]
+        reset_cooldown: bool,
+    },
+    NetworkSites {
+        #[serde(default)]
+        endpoint: String,
+    },
     RootServiceStatus,
     RootServiceSync,
     ConnectionGeo { ip: String },
@@ -450,6 +472,28 @@ pub async fn request(dir: PathBuf, input: &str) -> Result<Value, String> {
         Command::Modules{text}=>json!(crate::editor::modules(&text)?.into_iter().map(|(name,range)|json!({"name":name,"start":text[..range.start].encode_utf16().count(),"end":text[..range.end].encode_utf16().count()})).collect::<Vec<_>>()),
         Command::CoreProgress=>json!(crate::core_actions::progress()),
         Command::NetworkOverview=>crate::tools::network_overview().await,
+        Command::NetworkCacheLoad { endpoint, core_started_at } => {
+            json!(crate::tools::load_network_cache(&dir, &endpoint, core_started_at))
+        }
+        Command::NetworkCacheClear => {
+            crate::tools::clear_network_cache(&dir);
+            json!(true)
+        }
+        Command::NetworkDirect { endpoint } => {
+            let data = crate::tools::direct_exit_info().await;
+            let updated_at = crate::tools::save_network_slot(&dir, &endpoint, "domestic", data.clone(), "");
+            json!({"data": data, "updatedAt": updated_at})
+        }
+        Command::NetworkProxy { endpoint, fingerprint, reset_cooldown } => {
+            let data = crate::tools::proxy_exit_info(reset_cooldown).await;
+            let updated_at = crate::tools::save_network_slot(&dir, &endpoint, "abroad", data.clone(), &fingerprint);
+            json!({"data": data, "updatedAt": updated_at})
+        }
+        Command::NetworkSites { endpoint } => {
+            let data = crate::tools::site_latencies_overview().await;
+            let updated_at = crate::tools::save_network_slot(&dir, &endpoint, "sites", data.clone(), "");
+            json!({"data": data, "updatedAt": updated_at})
+        }
         Command::RootServiceStatus=>{
             root::set_enabled(true);
             json!(crate::commands::service::service_status().await?)

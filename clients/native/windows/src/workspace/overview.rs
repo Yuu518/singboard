@@ -1182,33 +1182,45 @@ impl Workspace {
                     )),
             );
 
+        let running_net = live || local_running;
+        let exits_busy = self.domestic_busy || self.abroad_busy;
         let (mut dom_loc, dom_ip, dom_err) = format_ip_row(
-            self.network_info.as_ref().filter(|_| !self.network_busy).map(|v| &v["domestic"]),
-            self.network_busy,
+            self.domestic_info.as_ref().filter(|_| !self.domestic_busy),
+            self.domestic_busy,
             self.show_ip,
         );
         let (mut abr_loc, abr_ip, abr_err) = format_ip_row(
-            self.network_info.as_ref().filter(|_| !self.network_busy).map(|v| &v["abroad"]),
-            self.network_busy,
+            self.abroad_info.as_ref().filter(|_| !self.abroad_busy),
+            self.abroad_busy,
             self.show_ip,
         );
-        if self.network_due.is_some() {
+        if !self.domestic_busy && !self.domestic_checked && self.exits_due.is_some() {
             dom_loc = "即将自动检测".into();
-            abr_loc = "即将自动检测".into();
         }
-        let sites_val = self
-            .network_info
-            .as_ref()
-            .and_then(|v| v["sites"].as_array());
+        if !self.abroad_busy
+            && ((!self.abroad_checked && self.exits_due.is_some()) || self.proxy_dirty)
+        {
+            abr_loc = if self.proxy_dirty && self.abroad_info.is_some() {
+                "节点已切换，即将重检".into()
+            } else {
+                "即将自动检测".into()
+            };
+        }
+        let sites_val = self.sites_info.as_ref().and_then(|v| v.as_array());
+        let exit_age = format_relative_age(self.domestic_updated_at.max(self.abroad_updated_at));
+        let sites_age = format_relative_age(self.sites_updated_at);
+        let pad_x = if narrow { px(16.) } else { px(18.) };
 
         let ip_row_ui = |label: &'static str,
                          source: &'static str,
                          loc: String,
                          ip: String,
                          err: bool| {
-            let pad_x = if narrow { px(16.) } else { px(18.) };
             let pad_y = if narrow { px(10.) } else { px(11.) };
-            let pending = matches!(loc.as_str(), "未检测" | "检测中…" | "即将自动检测");
+            let pending = matches!(
+                loc.as_str(),
+                "未检测" | "检测中…" | "即将自动检测" | "节点已切换，即将重检"
+            );
             let location_size = if err { 12. } else if pending { 13. } else { 14. };
             div()
                 .px(pad_x)
@@ -1277,16 +1289,140 @@ impl Workspace {
                 )
         };
 
+        let exit_header = div()
+            .px(pad_x)
+            .pt(px(10.))
+            .pb(px(6.))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(6.))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_size(crate::theme::text_px(12.))
+                            .line_height(crate::theme::text_px(18.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.muted())
+                            .child("出口 IP"),
+                    )
+                    .when(!exit_age.is_empty() && !exits_busy, |el| {
+                        el.child(
+                            div()
+                                .text_size(crate::theme::text_px(11.))
+                                .line_height(crate::theme::text_px(16.5))
+                                .text_color(palette.muted())
+                                .child(format!("· {exit_age}")),
+                        )
+                    }),
+            )
+            .when(running_net, |el| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .id("toggle-ip")
+                                .relative()
+                                .overflow_hidden()
+                                .rounded_full()
+                                .bg(if self.show_ip {
+                                    palette.primary_soft()
+                                } else {
+                                    palette.fill()
+                                })
+                                .border_1()
+                                .border_color(if self.show_ip {
+                                    palette.selection_border()
+                                } else {
+                                    palette.control_rim()
+                                })
+                                .cursor_pointer()
+                                .child(crate::glass::control_layer(
+                                    palette,
+                                    px(999.),
+                                    !self.show_ip,
+                                ))
+                                .child(
+                                    div()
+                                        .relative()
+                                        .px(px(9.))
+                                        .py(px(2.))
+                                        .rounded_full()
+                                        .when(self.show_ip, |d| d.bg(palette.primary_soft()))
+                                        .hover(|s| s.bg(palette.fill_strong()))
+                                        .text_size(crate::theme::text_px(12.))
+                                        .line_height(crate::theme::text_px(17.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(palette.accent())
+                                        .child("显示 IP"),
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.show_ip = !this.show_ip;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("recheck-exits")
+                                .relative()
+                                .overflow_hidden()
+                                .rounded_full()
+                                .bg(palette.fill())
+                                .border_1()
+                                .border_color(palette.control_rim())
+                                .cursor_pointer()
+                                .child(crate::glass::control_layer(palette, px(999.), true))
+                                .child(
+                                    div()
+                                        .relative()
+                                        .px(px(9.))
+                                        .py(px(2.))
+                                        .rounded_full()
+                                        .hover(|s| s.bg(palette.fill_strong()))
+                                        .text_size(crate::theme::text_px(12.))
+                                        .line_height(crate::theme::text_px(17.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(if exits_busy {
+                                            palette.muted()
+                                        } else {
+                                            palette.accent()
+                                        })
+                                        .child(if exits_busy { "检测中…" } else { "检测" }),
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.refresh_exits(cx)
+                                })),
+                        ),
+                )
+            });
+
         let ip_col = div()
             .when(!narrow, |d| d.w(relative(1.1 / 2.1)).flex_none())
             .min_w_0()
-            .py_1()
+            .pb_1()
             .flex()
             .flex_col()
-            .justify_center()
-            .child(ip_row_ui("直连出口", "ipip.net", dom_loc, dom_ip, dom_err))
-            .child(div().h(px(1.)).ml_4().bg(palette.line()))
-            .child(ip_row_ui("代理出口", "ip.sb", abr_loc, abr_ip, abr_err));
+            .child(exit_header)
+            .child(div().h(px(1.)).mx(pad_x).bg(palette.line()))
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .child(ip_row_ui("直连出口", "ipip.net", dom_loc, dom_ip, dom_err))
+                    .child(div().h(px(1.)).ml_4().bg(palette.line()))
+                    .child(ip_row_ui("代理出口", "ip.sb", abr_loc, abr_ip, abr_err)),
+            );
 
         let mut site_cells = Vec::new();
         for (idx, (_, label, _)) in singboard_stream::tools::OVERVIEW_SITES
@@ -1294,14 +1430,25 @@ impl Workspace {
             .enumerate()
         {
             let item = sites_val.and_then(|arr| arr.get(idx));
-            let reason = item.filter(|s| s["status"] == "error").and_then(|s| s["error"].as_str()).unwrap_or_default().to_owned();
-            let (dot_color, badge_text) = if self.network_busy || self.network_due.is_some() {
-                (palette.muted(), "检测中".to_owned())
+            let reason = item
+                .filter(|s| s["status"] == "error")
+                .and_then(|s| s["error"].as_str())
+                .unwrap_or_default()
+                .to_owned();
+            let (dot_color, badge_text) = if self.sites_busy || self.sites_due.is_some() {
+                (palette.muted(), "测速中".to_owned())
             } else if let Some(s) = item {
                 match s["status"].as_str().unwrap_or("") {
                     "done" => {
                         let ms = s["ms"].as_u64().unwrap_or(0);
-                        (latency_dot(Some(ms), palette), if ms == 0 { "失败".to_owned() } else { format!("{ms}ms") })
+                        (
+                            latency_dot(Some(ms), palette),
+                            if ms == 0 {
+                                "失败".to_owned()
+                            } else {
+                                format!("{ms}ms")
+                            },
+                        )
                     }
                     "error" => (palette.danger_fill(), "失败".to_owned()),
                     _ => (palette.muted(), "未测".to_owned()),
@@ -1317,7 +1464,7 @@ impl Workspace {
                     .items_center()
                     .justify_between()
                     .gap(px(10.))
-                    .px(if narrow { px(16.) } else { px(18.) })
+                    .px(pad_x)
                     .py(if narrow { px(8.) } else { px(7.) })
                     .text_size(crate::theme::text_px(13.))
                     .line_height(px(19.5))
@@ -1328,11 +1475,27 @@ impl Workspace {
                             .text_color(palette.ink())
                             .child(label),
                     )
-                    .when(!reason.is_empty() && !self.network_busy && self.network_due.is_none(), |d| d.child(
-                        div().id(("site-error", idx)).flex_1().min_w_0().truncate().text_right()
-                            .text_size(crate::theme::text_px(12.)).line_height(px(19.5)).text_color(palette.muted()).child(reason.clone())
-                            .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(reason.clone()).build(window, cx)),
-                    ))
+                    .when(
+                        !reason.is_empty() && !self.sites_busy && self.sites_due.is_none(),
+                        |d| {
+                            d.child(
+                                div()
+                                    .id(("site-error", idx))
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_right()
+                                    .text_size(crate::theme::text_px(12.))
+                                    .line_height(crate::theme::text_px(19.5))
+                                    .text_color(palette.muted())
+                                    .child(reason.clone())
+                                    .tooltip(move |window, cx| {
+                                        gpui_component::tooltip::Tooltip::new(reason.clone())
+                                            .build(window, cx)
+                                    }),
+                            )
+                        },
+                    )
                     .child(
                         div()
                             .flex_none()
@@ -1351,8 +1514,81 @@ impl Workspace {
             );
         }
 
+        let site_header = div()
+            .px(pad_x)
+            .pt(px(10.))
+            .pb(px(6.))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(6.))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_size(crate::theme::text_px(12.))
+                            .line_height(crate::theme::text_px(18.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.muted())
+                            .child("连通性测试"),
+                    )
+                    .when(!sites_age.is_empty() && !self.sites_busy, |el| {
+                        el.child(
+                            div()
+                                .text_size(crate::theme::text_px(11.))
+                                .line_height(crate::theme::text_px(16.5))
+                                .text_color(palette.muted())
+                                .child(format!("· {sites_age}")),
+                        )
+                    }),
+            )
+            .when(running_net, |el| {
+                el.child(
+                    div()
+                        .id("recheck-sites")
+                        .relative()
+                        .overflow_hidden()
+                        .rounded_full()
+                        .bg(palette.fill())
+                        .border_1()
+                        .border_color(palette.control_rim())
+                        .cursor_pointer()
+                        .child(crate::glass::control_layer(palette, px(999.), true))
+                        .child(
+                            div()
+                                .relative()
+                                .px(px(9.))
+                                .py(px(2.))
+                                .rounded_full()
+                                .hover(|s| s.bg(palette.fill_strong()))
+                                .text_size(crate::theme::text_px(12.))
+                                .line_height(crate::theme::text_px(17.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(if self.sites_busy {
+                                    palette.muted()
+                                } else {
+                                    palette.accent()
+                                })
+                                .child(if self.sites_busy { "测速中…" } else { "测速" }),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.refresh_sites(cx)
+                        })),
+                )
+            });
+
         let site_grid = if narrow {
-            let mut col = div().w_full().py_1().flex().flex_col();
+            let mut col = div()
+                .w_full()
+                .pb_1()
+                .flex()
+                .flex_col()
+                .child(site_header)
+                .child(div().h(px(1.)).mx(pad_x).bg(palette.line()));
             for cell in site_cells {
                 col = col.child(cell);
             }
@@ -1365,15 +1601,22 @@ impl Workspace {
             div()
                 .flex_1()
                 .min_w_0()
-                .py_2()
-                .px_1()
+                .pb_1()
                 .flex()
                 .flex_col()
-                .justify_center()
-                .child(grid)
+                .child(site_header)
+                .child(div().h(px(1.)).mx(pad_x).bg(palette.line()))
+                .child(
+                    div()
+                        .flex_1()
+                        .py_1()
+                        .flex()
+                        .flex_col()
+                        .justify_center()
+                        .child(grid),
+                )
         };
 
-        let running_net = live || local_running;
         let network_section = div()
             .mt(px(26.))
             .flex()
@@ -1411,92 +1654,7 @@ impl Workspace {
                                     .truncate(),
                                 )
                             }),
-                    )
-                    .when(running_net, |el| {
-                        el.child(
-                            div()
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .gap(px(6.))
-                                .child(
-                                    div()
-                                        .id("toggle-ip")
-                                        .relative()
-                                        .overflow_hidden()
-                                        .rounded_full()
-                                        .bg(if self.show_ip {
-                                            palette.primary_soft()
-                                        } else {
-                                            palette.fill()
-                                        })
-                                        .border_1()
-                                        .border_color(if self.show_ip {
-                                            palette.selection_border()
-                                        } else {
-                                            palette.control_rim()
-                                        })
-                                        .shadow_sm()
-                                        .cursor_pointer()
-                                        .child(crate::glass::control_layer(
-                                            palette,
-                                            px(999.),
-                                            !self.show_ip,
-                                        ))
-                                        .child(
-                                            div()
-                                                .relative()
-                                                .px(px(10.))
-                                                .py(px(3.))
-                                                .rounded_full()
-                                                .when(self.show_ip, |d| d.bg(palette.primary_soft()))
-                                                .hover(|s| s.bg(palette.fill_strong()))
-                                                .text_size(crate::theme::text_px(13.))
-                                                .line_height(rems(18. / 16.))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(palette.accent())
-                                                .child("显示 IP"),
-                                        )
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.show_ip = !this.show_ip;
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    div()
-                                        .id("recheck-net")
-                                        .relative()
-                                        .overflow_hidden()
-                                        .rounded_full()
-                                        .bg(palette.fill())
-                                        .border_1()
-                                        .border_color(palette.control_rim())
-                                        .shadow_sm()
-                                        .cursor_pointer()
-                                        .child(crate::glass::control_layer(palette, px(999.), true))
-                                        .child(
-                                            div()
-                                                .relative()
-                                                .px(px(10.))
-                                                .py(px(3.))
-                                                .rounded_full()
-                                                .hover(|s| s.bg(palette.fill_strong()))
-                                                .text_size(crate::theme::text_px(13.))
-                                                .line_height(rems(18. / 16.))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(if self.network_busy {
-                                                    palette.muted()
-                                                } else {
-                                                    palette.accent()
-                                                })
-                                                .child("重新检测"),
-                                        )
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.refresh_network(cx)
-                                        })),
-                                ),
-                        )
-                    }),
+                    ),
             )
             .child(if narrow {
                 glass_card(palette, translucent, tint)

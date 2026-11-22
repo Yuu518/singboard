@@ -31,6 +31,7 @@ class CatalogPage extends StatefulWidget {
   final int reconnectGeneration;
   final Map<String, dynamic> preferences;
   final Map<String, dynamic> chainSpeeds;
+  final VoidCallback? onProxyChanged;
 
   const CatalogPage({
     super.key,
@@ -42,6 +43,7 @@ class CatalogPage extends StatefulWidget {
     this.reconnectGeneration = 0,
     this.preferences = const {},
     this.chainSpeeds = const {},
+    this.onProxyChanged,
   });
 
   @override
@@ -359,6 +361,7 @@ class _CatalogPageState extends State<CatalogPage> {
           undoSwitch = null;
         }
       });
+      widget.onProxyChanged?.call();
     } catch (e) {
       if (mounted) {
         showGlassToast(context, '切换失败：$e');

@@ -173,10 +173,22 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   }
 
   bool chart = false;
-  Item? networkInfo;
-  bool networkBusy = false, showIp = false, networkChecked = false;
-  Timer? networkScheduled;
-  int networkGeneration = 0;
+  Item? domesticInfo;
+  Item? abroadInfo;
+  List<Item> sitesInfo = [];
+  bool domesticBusy = false, abroadBusy = false, sitesBusy = false;
+  bool domesticChecked = false, abroadChecked = false, sitesChecked = false;
+  bool showIp = false, proxyDirty = false, _networkWasRunning = false;
+  int? domesticUpdatedAt, abroadUpdatedAt, sitesUpdatedAt;
+  int? _coreStartedAt;
+  String abroadFingerprint = '';
+  String _networkCacheLoadedFor = '';
+  bool _networkCacheLoading = false;
+  Timer? exitsScheduled;
+  Timer? sitesScheduled;
+  Timer? proxyDebounce;
+  DateTime? proxyDueAt;
+  int domesticGeneration = 0, abroadGeneration = 0, sitesGeneration = 0;
   bool get _networkRunning => preferences['nativeRootEnabled'] == true
       ? (rootRunning && summary.isNotEmpty)
       : (trafficStatus == '已连接' || connectionStatus == '已连接' || summary.isNotEmpty);
@@ -258,6 +270,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     _pendingTab = null;
     _swipeProgress.value = null;
     setState(() => tab = next);
+    if (next == 0) _syncNetwork();
     if (!_pager.hasClients) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _pager.hasClients) _pager.jumpToPage(tab);
@@ -286,40 +299,315 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   List<Map<String, dynamic>>? clearedLogs;
   Timer? clearedTimer;
 
-  Future<void> refreshNetwork() async {
-    if (networkBusy) return;
-    networkScheduled?.cancel();
-    networkScheduled = null;
-    final generation = networkGeneration;
+  String _proxyFingerprint() {
+    final config = summary['config'] is Map ? summary['config'] as Map : const {};
+    final mode = (config['mode']?.toString() ?? '').trim().toLowerCase();
+    final exitObj = summary['exit'] is Map ? summary['exit'] as Map : const {};
+    final exitNode = (exitObj['node']?.toString() ?? '').trim();
+    final exitDirect = exitObj['direct'] == true ? 'direct' : '';
+    final proxies = summary['proxies'] is Map ? summary['proxies'] as Map : const {};
+    final picks = <String>[];
+    for (final entry in proxies.entries) {
+      if (entry.value is Map) {
+        final now = (entry.value as Map)['now']?.toString().trim() ?? '';
+        if (now.isNotEmpty) picks.add('${entry.key}=$now');
+      }
+    }
+    picks.sort();
+    if (mode.isEmpty && exitNode.isEmpty && picks.isEmpty) return '';
+    return '$mode|$exitNode|$exitDirect|${picks.join(';')}';
+  }
+
+  String _formatRelativeAge(int? updatedAt) {
+    if (updatedAt == null || updatedAt <= 0) return '';
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final diff = now > updatedAt ? now - updatedAt : 0;
+    if (diff < 60) return '刚刚';
+    if (diff < 3600) return '${diff ~/ 60} 分钟前';
+    if (diff < 86400) return '${diff ~/ 3600} 小时前';
+    return '${diff ~/ 86400} 天前';
+  }
+
+  bool _invalidateIfCoreRestarted() {
+    final started = _coreStartedAt;
+    if (started == null) return false;
+    final stale = [domesticUpdatedAt, abroadUpdatedAt, sitesUpdatedAt]
+        .whereType<int>()
+        .any((ts) => ts + 5 < started);
+    if (stale) {
+      _resetNetwork(clearDisk: true);
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _restoreNetworkCache() async {
+    final ep = endpoint;
+    if (_networkCacheLoading || _networkCacheLoadedFor == ep) return;
+    _networkCacheLoading = true;
+    final rev = endpointRevision;
+    try {
+      final raw = await configRequest(
+        await configDirectory(),
+        'network_cache_load',
+        {
+          'endpoint': ep,
+          if (_coreStartedAt != null) 'core_started_at': _coreStartedAt,
+        },
+      );
+      if (!mounted || rev != endpointRevision || ep != endpoint) return;
+      _networkCacheLoadedFor = ep;
+      if (raw is Map) {
+        setState(() {
+          if (!domesticChecked && raw['domestic'] is Map) {
+            final slot = raw['domestic'] as Map;
+            if (slot['data'] is Map) {
+              domesticInfo = (slot['data'] as Map).cast<String, dynamic>();
+              domesticUpdatedAt = (slot['updated_at'] as num?)?.toInt();
+              domesticChecked = true;
+            }
+          }
+          if (!abroadChecked && raw['abroad'] is Map) {
+            final slot = raw['abroad'] as Map;
+            if (slot['data'] is Map) {
+              abroadInfo = (slot['data'] as Map).cast<String, dynamic>();
+              abroadUpdatedAt = (slot['updated_at'] as num?)?.toInt();
+              abroadFingerprint = slot['fingerprint']?.toString() ?? '';
+              abroadChecked = true;
+            }
+          }
+          if (!sitesChecked && raw['sites'] is Map) {
+            final slot = raw['sites'] as Map;
+            if (slot['data'] is List) {
+              sitesInfo = (slot['data'] as List).cast<Item>();
+              sitesUpdatedAt = (slot['updated_at'] as num?)?.toInt();
+              sitesChecked = true;
+            }
+          }
+        });
+      }
+      _checkCachedProxyFingerprint();
+      _syncNetwork();
+    } catch (_) {
+      _networkCacheLoadedFor = ep;
+      if (mounted) _syncNetwork();
+    } finally {
+      _networkCacheLoading = false;
+    }
+  }
+
+  void _checkCachedProxyFingerprint() {
+    if (!abroadChecked || abroadFingerprint.isEmpty || proxyDirty) return;
+    final current = _proxyFingerprint();
+    if (current.isNotEmpty && current != abroadFingerprint) {
+      _scheduleProxyRecheck();
+    }
+  }
+
+  void _scheduleProxyRecheck() {
+    if (!_networkRunning) return;
+    proxyDebounce?.cancel();
+    proxyDirty = true;
+    proxyDueAt = DateTime.now().add(const Duration(milliseconds: 1500));
+    proxyDebounce = Timer(const Duration(milliseconds: 1500), () {
+      proxyDebounce = null;
+      if (!mounted) return;
+      if (_networkRunning && tab == 0 && proxyDirty) {
+        refreshProxyExit(resetCooldown: true);
+      }
+    });
+    if (mounted) setState(() {});
+  }
+
+  void refreshExits() {
+    exitsScheduled?.cancel();
+    exitsScheduled = null;
+    proxyDebounce?.cancel();
+    proxyDebounce = null;
+    proxyDirty = false;
+    proxyDueAt = null;
+    refreshDirectExit();
+    refreshProxyExit(resetCooldown: true);
+  }
+
+  Future<void> refreshDirectExit() async {
+    if (domesticBusy) return;
+    final generation = ++domesticGeneration;
+    final ep = endpoint;
     setState(() {
-      networkBusy = true;
-      networkChecked = true;
+      domesticBusy = true;
+      domesticChecked = true;
     });
     try {
-      final result =
-          await configRequest(await configDirectory(), 'network_overview')
-              as Item;
-      if (mounted && generation == networkGeneration) setState(() => networkInfo = result);
+      final reply = await configRequest(
+        await configDirectory(),
+        'network_direct',
+        {'endpoint': ep},
+      );
+      if (!mounted || generation != domesticGeneration) return;
+      if (reply is Map && reply['data'] is Map) {
+        setState(() {
+          domesticInfo = (reply['data'] as Map).cast<String, dynamic>();
+          final ts = (reply['updatedAt'] as num?)?.toInt();
+          if (ts != null) domesticUpdatedAt = ts;
+        });
+      }
     } catch (_) {
     } finally {
-      if (mounted && generation == networkGeneration) setState(() => networkBusy = false);
+      if (mounted && generation == domesticGeneration) {
+        setState(() => domesticBusy = false);
+      }
+    }
+  }
+
+  Future<void> refreshProxyExit({bool resetCooldown = false}) async {
+    if (abroadBusy) return;
+    proxyDebounce?.cancel();
+    proxyDebounce = null;
+    proxyDirty = false;
+    proxyDueAt = null;
+    final generation = ++abroadGeneration;
+    final ep = endpoint;
+    final fp = _proxyFingerprint();
+    setState(() {
+      abroadBusy = true;
+      abroadChecked = true;
+    });
+    try {
+      final reply = await configRequest(
+        await configDirectory(),
+        'network_proxy',
+        {
+          'endpoint': ep,
+          'fingerprint': fp,
+          'reset_cooldown': resetCooldown,
+        },
+      );
+      if (!mounted || generation != abroadGeneration) return;
+      if (reply is Map && reply['data'] is Map) {
+        setState(() {
+          abroadInfo = (reply['data'] as Map).cast<String, dynamic>();
+          final ts = (reply['updatedAt'] as num?)?.toInt();
+          if (ts != null) {
+            abroadUpdatedAt = ts;
+            abroadFingerprint = fp;
+          }
+        });
+      }
+    } catch (_) {
+    } finally {
+      if (mounted && generation == abroadGeneration) {
+        setState(() => abroadBusy = false);
+      }
+    }
+  }
+
+  Future<void> refreshSites() async {
+    if (sitesBusy) return;
+    sitesScheduled?.cancel();
+    sitesScheduled = null;
+    final generation = ++sitesGeneration;
+    final ep = endpoint;
+    setState(() {
+      sitesBusy = true;
+      sitesChecked = true;
+    });
+    try {
+      final reply = await configRequest(
+        await configDirectory(),
+        'network_sites',
+        {'endpoint': ep},
+      );
+      if (!mounted || generation != sitesGeneration) return;
+      if (reply is Map && reply['data'] is List) {
+        setState(() {
+          sitesInfo = (reply['data'] as List).cast<Item>();
+          final ts = (reply['updatedAt'] as num?)?.toInt();
+          if (ts != null) sitesUpdatedAt = ts;
+        });
+      }
+    } catch (_) {
+    } finally {
+      if (mounted && generation == sitesGeneration) {
+        setState(() => sitesBusy = false);
+      }
     }
   }
 
   void _syncNetwork() {
-    if (_networkRunning && !networkChecked && networkScheduled == null) {
-      networkScheduled = Timer(const Duration(seconds: 3), refreshNetwork);
-    } else if (!_networkRunning && (networkChecked || networkScheduled != null)) {
-      _resetNetwork();
+    if (!_networkRunning) {
+      final hadRunning = _networkWasRunning;
+      _networkWasRunning = false;
+      if (hadRunning ||
+          domesticChecked ||
+          abroadChecked ||
+          sitesChecked ||
+          exitsScheduled != null ||
+          sitesScheduled != null ||
+          proxyDebounce != null) {
+        _resetNetwork(clearDisk: hadRunning);
+      }
+      return;
+    }
+    _networkWasRunning = true;
+    if (_invalidateIfCoreRestarted()) {
+      _networkCacheLoadedFor = endpoint;
+    }
+    if (_networkCacheLoadedFor != endpoint) {
+      _restoreNetworkCache();
+      return;
+    }
+    _checkCachedProxyFingerprint();
+    if (tab != 0) return;
+    if ((!domesticChecked || !abroadChecked) && exitsScheduled == null) {
+      exitsScheduled = Timer(const Duration(seconds: 3), () {
+        exitsScheduled = null;
+        if (!mounted || !_networkRunning || tab != 0) return;
+        if (!domesticChecked) refreshDirectExit();
+        if (!abroadChecked) refreshProxyExit();
+      });
+    }
+    if (!sitesChecked && sitesScheduled == null) {
+      sitesScheduled = Timer(const Duration(seconds: 3), () {
+        sitesScheduled = null;
+        if (!mounted || !_networkRunning || tab != 0) return;
+        if (!sitesChecked) refreshSites();
+      });
+    }
+    if (proxyDirty &&
+        proxyDueAt != null &&
+        !DateTime.now().isBefore(proxyDueAt!)) {
+      refreshProxyExit(resetCooldown: true);
     }
   }
 
-  void _resetNetwork() {
-    networkGeneration++;
-    networkScheduled?.cancel();
-    networkScheduled = null;
-    networkInfo = null;
-    networkChecked = networkBusy = false;
+  void _resetNetwork({bool clearDisk = false}) {
+    domesticGeneration++;
+    abroadGeneration++;
+    sitesGeneration++;
+    exitsScheduled?.cancel();
+    exitsScheduled = null;
+    sitesScheduled?.cancel();
+    sitesScheduled = null;
+    proxyDebounce?.cancel();
+    proxyDebounce = null;
+    proxyDirty = false;
+    proxyDueAt = null;
+    domesticInfo = null;
+    abroadInfo = null;
+    sitesInfo = [];
+    domesticUpdatedAt = null;
+    abroadUpdatedAt = null;
+    sitesUpdatedAt = null;
+    abroadFingerprint = '';
+    _networkCacheLoadedFor = '';
+    domesticChecked = abroadChecked = sitesChecked = false;
+    domesticBusy = abroadBusy = sitesBusy = false;
+    if (clearDisk) {
+      configDirectory().then((dir) {
+        configRequest(dir, 'network_cache_clear').catchError((_) => null);
+      });
+    }
   }
 
   bool _isAuthError(String err) =>
@@ -404,6 +692,13 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
         final nowRunning = status['state'] == 'running';
         setState(() {
           rootService = status;
+          final uptime = status['uptimeSeconds'];
+          if (nowRunning && uptime is num) {
+            final nowSecs = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+            _coreStartedAt = nowSecs - uptime.toInt();
+          } else if (!nowRunning) {
+            _coreStartedAt = null;
+          }
           if (wasRunning && !nowRunning) {
             summary = {};
             summaryError = '';
@@ -442,7 +737,10 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   Future<void> setMode(String mode) async {
     try {
       await clashRequest(endpoint, secret, 'set_mode', {'mode': mode});
-      if (mounted) await readSummary();
+      if (mounted) {
+        _scheduleProxyRecheck();
+        await readSummary();
+      }
     } catch (e) {
       if (mounted) {
         showGlassToast(context, e.toString());
@@ -888,6 +1186,8 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
         summaryError = '';
         _summaryRetryTimer?.cancel();
         _summaryRetryTimer = null;
+        _coreStartedAt = null;
+        _resetNetwork(clearDisk: true);
         _syncNetwork();
       }
     });
@@ -961,13 +1261,22 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     _ => '$mode 模式',
   };
 
-  Widget _ipRow(SingboardColors c, String label, String source, Item? data) {
+  Widget _ipRow(
+    SingboardColors c,
+    String label,
+    String source,
+    Item? data, {
+    required bool busy,
+    String? pendingText,
+  }) {
     final status = data?['status'] as String?;
     String primaryText;
     String ipText = '';
     bool isErr = false;
-    if (networkBusy) {
+    if (busy) {
       primaryText = '检测中…';
+    } else if (pendingText != null) {
+      primaryText = pendingText;
     } else if (status == 'done') {
       final locs = (data?['location'] as List? ?? [])
           .whereType<String>()
@@ -981,7 +1290,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       isErr = true;
       primaryText = '检测失败：${data?['error'] ?? '未知错误'}';
     } else {
-      primaryText = networkScheduled != null ? '即将自动检测' : '未检测';
+      primaryText = '未检测';
     }
     return Row(
       crossAxisAlignment: CrossAxisAlignment.baseline,
@@ -1092,7 +1401,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
               : '连不上 sing-box');
     final tcp = (metrics['tcp'] as num?)?.toInt() ?? 0;
     final udp = (metrics['udp'] as num?)?.toInt() ?? 0;
-    final sites = (networkInfo?['sites'] as List? ?? []).cast<Item>();
+    final sites = sitesInfo;
     final flowNodes = (activeMetrics['flow']?['nodes'] as List? ?? [])
         .cast<Item>();
     final flowConnCount =
@@ -1541,22 +1850,156 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       ),
     );
 
+    final exitsBusy = domesticBusy || abroadBusy;
+    final exitTs = [domesticUpdatedAt, abroadUpdatedAt]
+        .whereType<int>()
+        .fold<int?>(null, (a, b) => a == null || b > a ? b : a);
+    final exitAge = _formatRelativeAge(exitTs);
+    final sitesAge = _formatRelativeAge(sitesUpdatedAt);
+    final padX = wide ? 18.0 : 16.0;
+
+    final domPending = !domesticBusy && !domesticChecked && exitsScheduled != null
+        ? '即将自动检测'
+        : null;
+    final abrPending = !abroadBusy
+        ? (proxyDirty
+              ? (abroadInfo != null ? '节点已切换，即将重检' : '即将自动检测')
+              : (!abroadChecked && exitsScheduled != null ? '即将自动检测' : null))
+        : null;
+
+    Widget sectionPill(
+      String label, {
+      VoidCallback? onTap,
+      bool active = false,
+      bool muted = false,
+    }) {
+      return GestureDetector(
+        onTap: onTap,
+        child: GlassControl(
+          radius: 999,
+          tint: active ? c.primarySoft : c.fill,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: muted ? c.muted : c.selectionInk,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final exitHeader = Padding(
+      padding: EdgeInsets.fromLTRB(padX, 10, padX, 6),
+      child: Row(
+        children: [
+          Text(
+            '出口 IP',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: c.muted,
+            ),
+          ),
+          if (exitAge.isNotEmpty && !exitsBusy) ...[
+            const SizedBox(width: 6),
+            Text(
+              '· $exitAge',
+              style: TextStyle(
+                fontSize: 11,
+                color: c.muted.withValues(alpha: 0.8),
+              ),
+            ),
+          ],
+          const Spacer(),
+          if (_networkRunning) ...[
+            sectionPill(
+              '显示 IP',
+              active: showIp,
+              onTap: () => setState(() => showIp = !showIp),
+            ),
+            const SizedBox(width: 6),
+            sectionPill(
+              exitsBusy ? '检测中…' : '检测',
+              muted: exitsBusy,
+              onTap: exitsBusy ? null : refreshExits,
+            ),
+          ],
+        ],
+      ),
+    );
+
+    final siteHeader = Padding(
+      padding: EdgeInsets.fromLTRB(padX, 10, padX, 6),
+      child: Row(
+        children: [
+          Text(
+            '连通性测试',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: c.muted,
+            ),
+          ),
+          if (sitesAge.isNotEmpty && !sitesBusy) ...[
+            const SizedBox(width: 6),
+            Text(
+              '· $sitesAge',
+              style: TextStyle(
+                fontSize: 11,
+                color: c.muted.withValues(alpha: 0.8),
+              ),
+            ),
+          ],
+          const Spacer(),
+          if (_networkRunning)
+            sectionPill(
+              sitesBusy ? '测速中…' : '测速',
+              muted: sitesBusy,
+              onTap: sitesBusy ? null : refreshSites,
+            ),
+        ],
+      ),
+    );
+
     final ips = Column(
-      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        exitHeader,
+        Divider(
+          height: 0.5,
+          thickness: 0.5,
+          indent: padX,
+          endIndent: padX,
+          color: c.hairline,
+        ),
         Padding(
-          padding: EdgeInsets.symmetric(horizontal: wide ? 18 : 16, vertical: wide ? 11 : 10),
+          padding: EdgeInsets.symmetric(horizontal: padX, vertical: wide ? 11 : 10),
           child: _ipRow(
             c,
             '直连出口',
             'ipip.net',
-            networkInfo?['domestic'] as Item?,
+            domesticInfo,
+            busy: domesticBusy,
+            pendingText: domPending,
           ),
         ),
         Divider(height: 0.5, thickness: 0.5, indent: 16, color: c.hairline),
         Padding(
-          padding: EdgeInsets.symmetric(horizontal: wide ? 18 : 16, vertical: wide ? 11 : 10),
-          child: _ipRow(c, '代理出口', 'ip.sb', networkInfo?['abroad'] as Item?),
+          padding: EdgeInsets.symmetric(horizontal: padX, vertical: wide ? 11 : 10),
+          child: _ipRow(
+            c,
+            '代理出口',
+            'ip.sb',
+            abroadInfo,
+            busy: abroadBusy,
+            pendingText: abrPending,
+          ),
         ),
       ],
     );
@@ -1571,9 +2014,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
         Builder(
           builder: (_) {
             final item = sites.where((s) => s['key'] == key).firstOrNull;
-            final status = networkBusy
-                ? 'pending'
-                : (item?['status'] as String?);
+            final status = sitesBusy ? 'pending' : (item?['status'] as String?);
             final reason = status == 'error'
                 ? (item?['error'] as String?)
                 : null;
@@ -1586,10 +2027,10 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
             final msText = switch (status) {
               'done' => ms == 0 ? '失败' : '${ms ?? 0}ms',
               'error' => '失败',
-              _ => networkBusy || networkScheduled != null ? '检测中' : '未测',
+              _ => sitesBusy || sitesScheduled != null ? '测速中' : '未测',
             };
             return Padding(
-              padding: EdgeInsets.symmetric(horizontal: wide ? 18 : 16, vertical: wide ? 7 : 8),
+              padding: EdgeInsets.symmetric(horizontal: padX, vertical: wide ? 7 : 8),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -1946,79 +2387,51 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                     ),
                   ),
                 ),
-              ] else ...[
-                const Spacer(),
-                GestureDetector(
-                  onTap: () => setState(() => showIp = !showIp),
-                  child: GlassControl(
-                    radius: 999,
-                    tint: showIp ? c.primarySoft : c.fill,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 3,
-                      ),
-                      child: Text(
-                        '显示 IP',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: c.selectionInk,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                GestureDetector(
-                  onTap: networkBusy ? null : refreshNetwork,
-                  child: GlassControl(
-                    radius: 999,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 3,
-                      ),
-                      child: Text(
-                        networkBusy ? '检测中…' : '重新检测',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: networkBusy ? c.muted : c.selectionInk,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
               ],
             ],
           ),
         ),
         GlassCard(
-          padding: const EdgeInsets.symmetric(vertical: 4),
+          padding: const EdgeInsets.only(bottom: 4),
           child: wide
               ? IntrinsicHeight(
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Expanded(flex: 11, child: ips),
                       statDivider,
                       Expanded(
                         flex: 10,
                         child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            for (var i = 0; i < siteRows.length; i += 2)
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
+                            siteHeader,
+                            Divider(
+                              height: 0.5,
+                              thickness: 0.5,
+                              indent: padX,
+                              endIndent: padX,
+                              color: c.hairline,
+                            ),
+                            Expanded(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Expanded(child: siteRows[i]),
-                                  Expanded(
-                                    child: i + 1 < siteRows.length
-                                        ? siteRows[i + 1]
-                                        : const SizedBox.shrink(),
-                                  ),
+                                  for (var i = 0; i < siteRows.length; i += 2)
+                                    Row(
+                                      crossAxisAlignment: CrossAxisAlignment.center,
+                                      children: [
+                                        Expanded(child: siteRows[i]),
+                                        Expanded(
+                                          child: i + 1 < siteRows.length
+                                              ? siteRows[i + 1]
+                                              : const SizedBox.shrink(),
+                                        ),
+                                      ],
+                                    ),
                                 ],
                               ),
+                            ),
                           ],
                         ),
                       ),
@@ -2026,6 +2439,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                   ),
                 )
               : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     ips,
                     const SizedBox(height: 4),
@@ -2035,7 +2449,14 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                       indent: 16,
                       color: c.hairline,
                     ),
-                    const SizedBox(height: 4),
+                    siteHeader,
+                    Divider(
+                      height: 0.5,
+                      thickness: 0.5,
+                      indent: padX,
+                      endIndent: padX,
+                      color: c.hairline,
+                    ),
                     ...siteRows,
                   ],
                 ),
@@ -2931,6 +3352,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       chainSpeeds:
           (metrics['chainSpeeds'] as Map<String, dynamic>?) ??
               const {},
+      onProxyChanged: index == 1 ? _scheduleProxyRecheck : null,
     ),
     2 => ConnectionsPage(
       key: ValueKey(endpointRevision),
@@ -3106,6 +3528,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                                       if (settled != tab) {
                                         if (settled != 0) hoveredTopology = null;
                                         setState(() => tab = settled);
+                                        if (settled == 0) _syncNetwork();
                                       }
                                     }
                                     return false;
@@ -3126,6 +3549,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                                       } else if (tab != i) {
                                         if (i != 0) hoveredTopology = null;
                                         setState(() => tab = i);
+                                        if (i == 0) _syncNetwork();
                                       }
                                     },
                                     itemBuilder: (_, i) => _page(i),
