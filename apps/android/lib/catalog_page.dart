@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show InternetAddress;
+import 'dart:io' show InternetAddress, InternetAddressType;
 
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
@@ -29,11 +29,51 @@ String formatUpdatedRelative(dynamic raw, {DateTime? now}) {
   return '${secs ~/ 86400} 天前';
 }
 
-class _CondToken {
+class _ClausePart {
   final String kind;
-  final String text;
-  final String full;
-  const _CondToken(this.kind, this.text, [this.full = '']);
+  final bool negated;
+  final String? label;
+  final List<String> values;
+  final List<(String short, String full)> sets;
+  final bool mono;
+  final String op;
+  const _ClausePart.op(this.op)
+      : kind = 'op',
+        negated = false,
+        label = null,
+        values = const [],
+        sets = const [],
+        mono = false;
+  const _ClausePart.sets({required this.negated, required this.sets})
+      : kind = 'sets',
+        label = null,
+        values = const [],
+        mono = false,
+        op = '';
+  const _ClausePart.item({
+    required this.negated,
+    this.label,
+    required this.values,
+    this.mono = false,
+  })  : kind = 'item',
+        sets = const [],
+        op = '';
+  const _ClausePart.finalFallback()
+      : kind = 'final',
+        negated = false,
+        label = null,
+        values = const [],
+        sets = const [],
+        mono = false,
+        op = '';
+  const _ClausePart.allTraffic()
+      : kind = 'all',
+        negated = false,
+        label = null,
+        values = const [],
+        sets = const [],
+        mono = false,
+        op = '';
 }
 
 class _RuleAction {
@@ -41,7 +81,33 @@ class _RuleAction {
   final String label;
   final String? finalNode;
   final String? icon;
-  const _RuleAction(this.kind, this.label, {this.finalNode, this.icon});
+  final bool direct;
+  final bool rejectFinal;
+  const _RuleAction(
+    this.kind,
+    this.label, {
+    this.finalNode,
+    this.icon,
+    this.direct = false,
+    this.rejectFinal = false,
+  });
+
+  bool get isPreprocessing => kind == 'pass' || kind == 'stop';
+}
+
+class _RuleTrace {
+  final String query;
+  final int? winner;
+  final Set<int> passed;
+  final Set<int> shadowed;
+  final bool pending;
+  const _RuleTrace({
+    required this.query,
+    required this.winner,
+    required this.passed,
+    required this.shadowed,
+    required this.pending,
+  });
 }
 
 class CatalogPage extends StatefulWidget {
@@ -237,6 +303,7 @@ class _CatalogPageState extends State<CatalogPage> {
   bool get readable => widget.preferences['nativeRootEnabled'] == true;
 
   bool providers = false, busy = false, updating = false, sortByLatency = false;
+  bool preExpanded = false;
   int generation = 0;
   String query = '', error = '';
 
@@ -416,6 +483,26 @@ class _CatalogPageState extends State<CatalogPage> {
       provider: provider,
       uses: _ruleProviderUsage()[tag] ?? [],
     ));
+  }
+
+  void inspectRule(int index, Item rule) {
+    final providerCounts = <String, int>{
+      for (final p in providerItems)
+        if (p['name'] is String)
+          p['name'] as String: (p['ruleCount'] as num?)?.toInt() ?? 0,
+    };
+    showGlassDialog<void>(
+      context: context,
+      builder: (_) => _RuleInspectDialog(
+        index: index,
+        rule: rule,
+        clauses: _parseClauses(rule),
+        action: _parseAction(rule),
+        providerCounts: providerCounts,
+        readable: readable,
+        onOpenProvider: rulesTool,
+      ),
+    );
   }
 
   Future<void> providerAction(Item item, String op) async {
@@ -735,67 +822,306 @@ class _CatalogPageState extends State<CatalogPage> {
     return (c.dangerSoft, c.dangerInk);
   }
 
-  List<_CondToken> _itemTokens(String key, String raw) {
-    final list = raw.startsWith('[') && raw.endsWith(']')
-        ? raw.substring(1, raw.length - 1).split(RegExp(r'\s+')).where((s) => s.isNotEmpty).toList()
-        : [raw];
-    if (key == 'rule_set') {
-      return [
-        for (final full in list)
-          _CondToken('set', full.split('/').last, full),
-      ];
+  List<String> _splitRawValues(String raw) {
+    if (raw.startsWith('[') && raw.endsWith(']')) {
+      return raw
+          .substring(1, raw.length - 1)
+          .split(RegExp(r'\s+'))
+          .where((s) => s.isNotEmpty)
+          .toList();
     }
-    if (key == 'ip_is_private') {
-      return [_CondToken('text', raw == 'true' ? '私有 IP' : '非私有 IP')];
-    }
-    if (key == 'ip_version') {
-      return [_CondToken('text', 'IPv$raw')];
-    }
-    final label = _fieldLabels[key];
-    if (label == null) return [_CondToken('mono', '$key=$raw')];
-    final out = <_CondToken>[_CondToken('word', label)];
-    for (var i = 0; i < list.length; i++) {
-      if (i > 0) out.add(const _CondToken('word', '、'));
-      final text = _upperFields.contains(key) ? list[i].toUpperCase() : list[i];
-      out.add(_CondToken(_monoFields.contains(key) ? 'mono' : 'text', text));
-    }
-    return out;
+    return [raw];
   }
 
-  List<_CondToken> _termTokens(String term) {
+  _ClausePart _itemToClause(String key, String raw, bool negated) {
+    final list = _splitRawValues(raw);
+    if (key == 'rule_set') {
+      return _ClausePart.sets(
+        negated: negated,
+        sets: [for (final full in list) (full.split('/').last, full)],
+      );
+    }
+    if (key == 'ip_is_private') {
+      return _ClausePart.item(
+        negated: negated,
+        values: [raw == 'true' ? '私有 IP' : '非私有 IP'],
+      );
+    }
+    if (key == 'ip_version') {
+      return _ClausePart.item(
+        negated: negated,
+        values: ['IPv$raw'],
+      );
+    }
+    final label = _fieldLabels[key];
+    if (label == null) {
+      return _ClausePart.item(
+        negated: negated,
+        values: ['$key=$raw'],
+        mono: true,
+      );
+    }
+    final values = [
+      for (final v in list) _upperFields.contains(key) ? v.toUpperCase() : v,
+    ];
+    return _ClausePart.item(
+      negated: negated,
+      label: label,
+      values: values,
+      mono: _monoFields.contains(key),
+    );
+  }
+
+  List<_ClausePart> _termToClauses(String term) {
     var body = term.trim();
-    final out = <_CondToken>[];
+    var negated = false;
     if (body.startsWith('!(') && body.endsWith(')')) {
-      out.add(const _CondToken('word', '不满足'));
+      negated = true;
       body = body.substring(2, body.length - 1);
     } else if (body.startsWith('(') && body.endsWith(')')) {
       body = body.substring(1, body.length - 1);
     }
-    final matches = RegExp(r'([a-z_]+)=(\[[^\]]*\]|\S+)').allMatches(body).toList();
+    final matches =
+        RegExp(r'([a-z_]+)=(\[[^\]]*\]|\S+)').allMatches(body).toList();
     if (matches.isEmpty) {
-      out.add(_CondToken('mono', body));
-      return out;
+      return [_ClausePart.item(negated: negated, values: [body], mono: true)];
     }
+    final out = <_ClausePart>[];
     for (var i = 0; i < matches.length; i++) {
-      if (i > 0) out.add(const _CondToken('word', '，'));
-      out.addAll(_itemTokens(matches[i].group(1)!, matches[i].group(2)!));
+      if (i > 0) out.add(const _ClausePart.op('且'));
+      out.add(
+        _itemToClause(
+          matches[i].group(1)!,
+          matches[i].group(2)!,
+          negated && i == 0,
+        ),
+      );
     }
     return out;
   }
 
-  List<_CondToken> _tokenizeRule(Item rule) {
-    final payload = (rule['payload']?.toString() ?? '').trim();
-    if (payload.isEmpty) return const [_CondToken('word', '所有流量')];
-    final out = <_CondToken>[];
-    final parts = payload.split(RegExp(r'\s(&&|\|\|)\s'));
-    final ops = RegExp(r'\s(&&|\|\|)\s').allMatches(payload).map((m) => m.group(1)!).toList();
+  List<(String?, String)> _splitPayloadTerms(String payload) {
+    final trimmed = payload.trim();
+    if (trimmed.isEmpty) return const [];
+    final parts = trimmed.split(RegExp(r'\s(&&|\|\|)\s'));
+    final ops = RegExp(r'\s(&&|\|\|)\s')
+        .allMatches(trimmed)
+        .map((m) => m.group(1) == '&&' ? '且' : '或')
+        .toList();
+    final out = <(String?, String)>[];
     for (var i = 0; i < parts.length; i++) {
-      out.addAll(_termTokens(parts[i]));
-      if (i < ops.length) {
-        out.add(_CondToken('word', ops[i] == '&&' ? '且' : '或'));
-      }
+      out.add((i == 0 ? null : ops[i - 1], parts[i]));
     }
     return out;
+  }
+
+  List<_ClausePart> _parseClauses(Item rule) {
+    if (rule['condition']?.toString() == '最终回退') {
+      return const [_ClausePart.finalFallback()];
+    }
+    final payload = (rule['payload']?.toString() ?? '').trim();
+    if (payload.isEmpty) return const [_ClausePart.allTraffic()];
+    final out = <_ClausePart>[];
+    for (final (op, term) in _splitPayloadTerms(payload)) {
+      if (op != null) out.add(_ClausePart.op(op));
+      out.addAll(_termToClauses(term));
+    }
+    return out;
+  }
+
+  bool _isLookupQuery(String q) {
+    if (q.isEmpty) return false;
+    final parts = q.split('/');
+    final addr = InternetAddress.tryParse(parts.first);
+    final prefix = parts.length == 2 ? int.tryParse(parts.last) : null;
+    final isIp = addr != null &&
+        (parts.length == 1 ||
+            (parts.length == 2 &&
+                prefix != null &&
+                prefix >= 0 &&
+                prefix <= addr.rawAddress.length * 8));
+    if (isIp) return true;
+    return RegExp(
+      r'^(?:[a-z0-9_-]+\.)+[a-z0-9-]{2,}\.?$',
+      caseSensitive: false,
+    ).hasMatch(q);
+  }
+
+  bool _isPrivateIp(InternetAddress addr) {
+    final b = addr.rawAddress;
+    if (addr.type == InternetAddressType.IPv4 && b.length == 4) {
+      if (b[0] == 10 || b[0] == 127 || b[0] == 0) return true;
+      if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return true;
+      if (b[0] == 192 && b[1] == 168) return true;
+      if (b[0] == 169 && b[1] == 254) return true;
+      if (b[0] == 100 && (b[1] & 0xC0) == 64) return true;
+      if (b[0] == 255 && b[1] == 255 && b[2] == 255 && b[3] == 255) return true;
+      return false;
+    }
+    if (addr.type == InternetAddressType.IPv6 && b.length == 16) {
+      final allZero = b.every((x) => x == 0);
+      final loopback = b.sublist(0, 15).every((x) => x == 0) && b[15] == 1;
+      final ula = (b[0] & 0xFE) == 0xFC;
+      final linkLocal = b[0] == 0xFE && (b[1] & 0xC0) == 0x80;
+      return allZero || loopback || ula || linkLocal;
+    }
+    return false;
+  }
+
+  bool _ipInCidr(InternetAddress addr, String cidr) {
+    final cut = cidr.indexOf('/');
+    if (cut < 0) {
+      final net = InternetAddress.tryParse(cidr);
+      if (net == null || net.type != addr.type) return false;
+      final a = addr.rawAddress;
+      final n = net.rawAddress;
+      for (var i = 0; i < a.length; i++) {
+        if (a[i] != n[i]) return false;
+      }
+      return true;
+    }
+    final net = InternetAddress.tryParse(cidr.substring(0, cut));
+    final prefix = int.tryParse(cidr.substring(cut + 1));
+    if (net == null || prefix == null || net.type != addr.type) return false;
+    final a = addr.rawAddress;
+    final n = net.rawAddress;
+    final maxBits = a.length * 8;
+    if (prefix < 0 || prefix > maxBits) return false;
+    final fullBytes = prefix ~/ 8;
+    for (var i = 0; i < fullBytes; i++) {
+      if (a[i] != n[i]) return false;
+    }
+    final rem = prefix % 8;
+    if (rem > 0) {
+      final mask = (0xFF << (8 - rem)) & 0xFF;
+      if ((a[fullBytes] & mask) != (n[fullBytes] & mask)) return false;
+    }
+    return true;
+  }
+
+  bool? _evalItemForLookup(String key, String raw, String q, InternetAddress? ip) {
+    final list = _splitRawValues(raw);
+    switch (key) {
+      case 'rule_set':
+        return list.any(matched.contains);
+      case 'domain':
+        if (ip != null) return false;
+        final host = q.replaceFirst(RegExp(r'\.$'), '').toLowerCase();
+        return list.any(
+          (v) => host == v.replaceFirst(RegExp(r'\.$'), '').toLowerCase(),
+        );
+      case 'domain_suffix':
+        if (ip != null) return false;
+        final host = q.replaceFirst(RegExp(r'\.$'), '').toLowerCase();
+        return list.any((v) {
+          final suffix = v
+              .replaceFirst(RegExp(r'^\.'), '')
+              .replaceFirst(RegExp(r'\.$'), '')
+              .toLowerCase();
+          return suffix.isNotEmpty &&
+              (host == suffix || host.endsWith('.$suffix'));
+        });
+      case 'domain_keyword':
+        if (ip != null) return false;
+        final host = q.toLowerCase();
+        return list.any((v) => v.isNotEmpty && host.contains(v.toLowerCase()));
+      case 'ip_cidr':
+        if (ip == null) return null;
+        return list.any((cidr) => _ipInCidr(ip, cidr));
+      case 'ip_is_private':
+        if (ip == null) return null;
+        return _isPrivateIp(ip) == (raw == 'true');
+      case 'ip_version':
+        if (ip == null) return null;
+        return (ip.type == InternetAddressType.IPv4 && raw == '4') ||
+            (ip.type == InternetAddressType.IPv6 && raw == '6');
+      default:
+        return null;
+    }
+  }
+
+  bool? _evalTermForLookup(String term, String q, InternetAddress? ip) {
+    var body = term.trim();
+    var negated = false;
+    if (body.startsWith('!(') && body.endsWith(')')) {
+      negated = true;
+      body = body.substring(2, body.length - 1);
+    } else if (body.startsWith('(') && body.endsWith(')')) {
+      body = body.substring(1, body.length - 1);
+    }
+    final matches =
+        RegExp(r'([a-z_]+)=(\[[^\]]*\]|\S+)').allMatches(body).toList();
+    if (matches.isEmpty) return null;
+    var allKnown = true;
+    for (final m in matches) {
+      final res = _evalItemForLookup(m.group(1)!, m.group(2)!, q, ip);
+      if (res == false) return negated;
+      if (res == null) allKnown = false;
+    }
+    return allKnown ? !negated : null;
+  }
+
+  bool _evalRuleForLookup(Item rule, String q) {
+    if (rule['condition']?.toString() == '最终回退') return true;
+    final payload = (rule['payload']?.toString() ?? '').trim();
+    if (payload.isEmpty) return true;
+    final host = q.contains('/') ? q.split('/').first : q;
+    final ip = InternetAddress.tryParse(host);
+    bool? acc;
+    for (final (op, term) in _splitPayloadTerms(payload)) {
+      final val = _evalTermForLookup(term, q, ip);
+      if (op == null) {
+        acc = val;
+      } else if (op == '且') {
+        if (acc == false || val == false) {
+          acc = false;
+        } else if (acc == true && val == true) {
+          acc = true;
+        } else {
+          acc = null;
+        }
+      } else {
+        if (acc == true || val == true) {
+          acc = true;
+        } else if (acc == false && val == false) {
+          acc = false;
+        } else {
+          acc = null;
+        }
+      }
+    }
+    return acc == true;
+  }
+
+  _RuleTrace? _computeTrace() {
+    if (widget.proxies || providers || !_isLookupQuery(query)) return null;
+    int? winner;
+    final passed = <int>{};
+    final shadowed = <int>{};
+    for (var i = 0; i < items.length; i++) {
+      final r = items[i];
+      if (!_evalRuleForLookup(r, query)) continue;
+      final act = _parseAction(r);
+      if (act.kind == 'pass') {
+        if (winner == null) passed.add(i);
+      } else if (winner == null) {
+        winner = i;
+      } else {
+        shadowed.add(i);
+      }
+    }
+    return _RuleTrace(
+      query: query,
+      winner: winner,
+      passed: passed,
+      shadowed: shadowed,
+      pending: matching,
+    );
+  }
+
+  bool _isDirectLabel(String label) {
+    final lower = label.toLowerCase();
+    return lower == 'direct' || lower.contains('direct') || label.contains('直连');
   }
 
   _RuleAction _parseAction(Item rule) {
@@ -831,7 +1157,29 @@ class _CatalogPageState extends State<CatalogPage> {
     }
     final chain = (rule['chain'] as List? ?? []).whereType<String>().toList();
     final finalNode = chain.length > 1 ? chain.last : null;
-    return _RuleAction('route', outbound, finalNode: finalNode);
+    final rejectFinal = finalNode?.toLowerCase().contains('reject') == true;
+    final direct = !rejectFinal &&
+        ((finalNode != null && _isDirectLabel(finalNode)) ||
+            (finalNode == null && _isDirectLabel(outbound)));
+    return _RuleAction(
+      'route',
+      outbound,
+      finalNode: finalNode,
+      direct: direct,
+      rejectFinal: rejectFinal,
+    );
+  }
+
+  String _formatCompactCount(num n) {
+    final v = n.toInt();
+    if (v >= 10000) {
+      final s = (v / 1000).toStringAsFixed(1);
+      return '${s.endsWith('.0') ? s.substring(0, s.length - 2) : s}k';
+    }
+    if (v >= 1000) {
+      return '${(v / 1000).toStringAsFixed(1)}k';
+    }
+    return '$v';
   }
 
   Map<String, List<(int, String)>> _ruleProviderUsage() {
@@ -1518,45 +1866,23 @@ class _CatalogPageState extends State<CatalogPage> {
     );
   }
 
-  Widget _buildRuleCard(Item rule, int index, SingboardColors c) {
-    final tokens = _tokenizeRule(rule);
-    final action = _parseAction(rule);
-    final rejectFinal = action.finalNode?.toLowerCase().contains('reject') == true;
-
-    Widget destWidget;
+  Widget _buildActionCapsule(_RuleAction action, SingboardColors c, {bool compact = false}) {
     if (action.kind == 'route') {
-      destWidget = Wrap(
-        spacing: 5,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          Text(
-            action.label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: c.ink,
-            ),
-          ),
-          if (action.finalNode != null)
-            Text(
-              '› ${action.finalNode}',
-              style: TextStyle(
-                fontSize: 13,
-                color: rejectFinal ? c.dangerInk : c.muted,
-              ),
-            ),
-        ],
-      );
-    } else {
-      final bg = switch (action.kind) {
-        'reject' => c.dangerSoft,
-        'stop' => c.fill,
-        _ => c.fill.withValues(alpha: 0.45),
-      };
-      final fg = action.kind == 'reject' ? c.dangerInk : c.muted;
-      destWidget = Container(
+      final Color bg;
+      final Color fg;
+      if (action.rejectFinal) {
+        bg = c.dangerSoft;
+        fg = c.dangerInk;
+      } else if (action.direct) {
+        bg = c.successSoft;
+        fg = c.successInk;
+      } else {
+        bg = c.primarySoft;
+        fg = c.selectionInk;
+      }
+      return Container(
         constraints: const BoxConstraints(minHeight: 24),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(999),
@@ -1564,107 +1890,669 @@ class _CatalogPageState extends State<CatalogPage> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (action.icon != null) ...[
-              PanelIcon(action.icon!, size: 13, color: fg),
+            if (action.direct) ...[
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: c.success,
+                ),
+              ),
+              const SizedBox(width: 5),
+            ] else if (action.rejectFinal) ...[
+              PanelIcon('reject', size: 12, color: c.dangerInk),
               const SizedBox(width: 4),
             ],
-            Text(
-              action.label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: fg,
+            Flexible(
+              child: Text(
+                action.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: fg,
+                ),
               ),
             ),
+            if (action.finalNode != null && !(compact && action.direct)) ...[
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  '› ${action.finalNode}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: action.rejectFinal
+                        ? c.dangerInk
+                        : (action.direct ? c.successInk.withValues(alpha: 0.75) : c.muted),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       );
     }
-
-    return GlassCard(
-      radius: 16,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    final bg = switch (action.kind) {
+      'reject' => c.dangerSoft,
+      'stop' => c.fill,
+      _ => c.fill.withValues(alpha: 0.45),
+    };
+    final fg = action.kind == 'reject' ? c.dangerInk : c.muted;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 24),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+        border: action.kind == 'pass'
+            ? Border.all(color: c.hairline, width: 0.75)
+            : null,
+      ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          SizedBox(
-            width: MediaQuery.textScalerOf(context).scale(6.5) * items.length.toString().length,
-            child: Text(
-              '${index + 1}',
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                fontSize: 11,
-                height: 24 / 11,
-                color: c.muted,
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ConstrainedBox(constraints: const BoxConstraints(minHeight: 24), child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Wrap(
-                  spacing: 5,
-                  runSpacing: 5,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    for (final tok in tokens)
-                      switch (tok.kind) {
-                        'set' => GestureDetector(
-                          onTap: readable && providerItems.any((p) => p['name'] == tok.full) ? () => rulesTool(tok.full) : null,
-                          child: Container(
-                            constraints: const BoxConstraints(minHeight: 22),
-                            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: matched.contains(tok.full) ? c.primarySoft : c.fill,
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                PanelIcon('layers', size: 13, color: c.muted),
-                                const SizedBox(width: 4),
-                                Text(
-                                  tok.text,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w500,
-                                    color: c.ink,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        'word' => Text(
-                          tok.text,
-                          style: TextStyle(fontSize: 13, color: c.muted),
-                        ),
-                        'mono' => Text(
-                          tok.text,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontFamily: 'monospace',
-                            color: c.ink,
-                          ),
-                        ),
-                        _ => Text(
-                          tok.text,
-                          style: TextStyle(fontSize: 13, color: c.ink),
-                        ),
-                      },
-                  ],
-                ))),
-                const SizedBox(height: 6),
-                destWidget,
-              ],
+          if (action.icon != null) ...[
+            PanelIcon(action.icon!, size: 13, color: fg),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            action.label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: fg,
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildRailDot(_RuleAction action, bool isFinal, SingboardColors c) {
+    if (isFinal) {
+      return Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(
+          color: c.ink,
+          borderRadius: BorderRadius.circular(3),
+        ),
+      );
+    }
+    if (action.kind == 'reject' || action.rejectFinal) {
+      return Container(
+        width: 14,
+        height: 14,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: c.dangerSoft),
+        alignment: Alignment.center,
+        child: Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(shape: BoxShape.circle, color: c.error),
+        ),
+      );
+    }
+    if (action.direct) {
+      return Container(
+        width: 14,
+        height: 14,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: c.successSoft),
+        alignment: Alignment.center,
+        child: Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(shape: BoxShape.circle, color: c.success),
+        ),
+      );
+    }
+    if (action.kind == 'route') {
+      return Container(
+        width: 14,
+        height: 14,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: c.primarySoft),
+        alignment: Alignment.center,
+        child: Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(shape: BoxShape.circle, color: c.selectionInk),
+        ),
+      );
+    }
+    if (action.kind == 'pass') {
+      return Container(
+        width: 9,
+        height: 9,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.transparent,
+          border: Border.all(color: c.muted, width: 1.8),
+        ),
+      );
+    }
+    return Container(
+      width: 9,
+      height: 9,
+      decoration: BoxDecoration(shape: BoxShape.circle, color: c.muted),
+    );
+  }
+
+  Widget _buildTraceBanner(_RuleTrace trace, SingboardColors c) {
+    final winnerIdx = trace.winner;
+    if (winnerIdx == null || winnerIdx >= items.length) {
+      return const SizedBox.shrink();
+    }
+    final winnerRule = items[winnerIdx];
+    final isFinal = winnerRule['condition']?.toString() == '最终回退';
+    final winnerAction = _parseAction(winnerRule);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: c.primarySoft,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: c.selectionBorder, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                '路由试算',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: c.selectionInk,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  trace.query,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.w500,
+                    color: c.ink,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                isFinal ? '命中 最终回退' : '命中 第 #${winnerIdx + 1} 条',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: c.ink,
+                ),
+              ),
+              _buildActionCapsule(winnerAction, c),
+              if (trace.passed.isNotEmpty)
+                Text(
+                  '途经 ${trace.passed.length} 条预处理',
+                  style: TextStyle(fontSize: 11, color: c.muted),
+                ),
+              if (trace.pending)
+                Text(
+                  '正在核验规则提供商…',
+                  style: TextStyle(fontSize: 11, color: c.muted),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRuleRow(
+    Item rule,
+    int origIndex,
+    int pos,
+    int total,
+    Map<String, int> providerCounts,
+    _RuleTrace? trace,
+    SingboardColors c,
+  ) {
+    final clauses = _parseClauses(rule);
+    final action = _parseAction(rule);
+    final isFinal = rule['condition']?.toString() == '最终回退';
+    final isFirst = pos == 0;
+    final isLast = pos + 1 == total;
+    final isWinner = trace?.winner == origIndex;
+    final isPassed = trace?.passed.contains(origIndex) == true;
+    final isShadowed = trace?.shadowed.contains(origIndex) == true;
+
+    final chips = <Widget>[];
+    for (final part in clauses) {
+      switch (part.kind) {
+        case 'op':
+          chips.add(
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Text(
+                part.op,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                  color: c.muted,
+                ),
+              ),
+            ),
+          );
+        case 'final':
+          chips.add(
+            Text(
+              '以上条件均未命中',
+              style: TextStyle(fontSize: 12, color: c.muted),
+            ),
+          );
+        case 'all':
+          chips.add(
+            Text(
+              '所有流量',
+              style: TextStyle(fontSize: 12, color: c.muted),
+            ),
+          );
+        case 'sets':
+          if (part.negated) {
+            chips.add(
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: c.dangerSoft,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '非',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: c.dangerInk,
+                  ),
+                ),
+              ),
+            );
+          }
+          for (final (short, full) in part.sets) {
+            final isHit = matched.contains(full);
+            final provCount = providerCounts[full];
+            final canOpen = readable && provCount != null;
+            chips.add(
+              GestureDetector(
+                onTap: canOpen ? () => rulesTool(full) : null,
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 22),
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: isHit ? c.primarySoft : c.fill,
+                    borderRadius: BorderRadius.circular(999),
+                    border: isHit
+                        ? Border.all(color: c.selectionBorder, width: 0.75)
+                        : null,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      PanelIcon(
+                        'layers',
+                        size: 12,
+                        color: isHit ? c.selectionInk : c.muted,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        short,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: isHit ? c.selectionInk : c.ink,
+                        ),
+                      ),
+                      if (provCount != null && provCount > 0) ...[
+                        const SizedBox(width: 4),
+                        Text(
+                          _formatCompactCount(provCount),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: isHit
+                                ? c.selectionInk.withValues(alpha: 0.8)
+                                : c.muted,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }
+        case 'item':
+          if (part.negated) {
+            chips.add(
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: c.dangerSoft,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '非',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: c.dangerInk,
+                  ),
+                ),
+              ),
+            );
+          }
+          final shownVals = part.values.take(2).toList();
+          final hidden = part.values.length > 2 ? part.values.length - 2 : 0;
+          chips.add(
+            Container(
+              constraints: const BoxConstraints(minHeight: 22),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: c.fill.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(7),
+                border: Border.all(color: c.hairline, width: 0.75),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (part.label != null) ...[
+                    Text(
+                      part.label!,
+                      style: TextStyle(fontSize: 12, color: c.muted),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  Flexible(
+                    child: Text(
+                      shownVals.join(', '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: part.mono ? 'monospace' : null,
+                        color: c.ink,
+                      ),
+                    ),
+                  ),
+                  if (hidden > 0) ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: c.fillStrong,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        '+$hidden',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: c.muted,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          );
+      }
+    }
+
+    Widget? traceTag;
+    if (isWinner) {
+      traceTag = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: c.successSoft,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          '生效命中',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: c.successInk,
+          ),
+        ),
+      );
+    } else if (isPassed) {
+      traceTag = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: c.fill,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          '路过',
+          style: TextStyle(fontSize: 11, color: c.muted),
+        ),
+      );
+    } else if (isShadowed && trace?.winner != null) {
+      traceTag = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: c.fill,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          '已被 #${trace!.winner! + 1} 截断',
+          style: TextStyle(fontSize: 11, color: c.muted),
+        ),
+      );
+    }
+
+    return Opacity(
+      opacity: isShadowed ? 0.58 : 1.0,
+      child: Material(
+        color: isWinner
+            ? c.primarySoft
+            : (isFinal ? c.fill.withValues(alpha: 0.7) : Colors.transparent),
+        child: InkWell(
+          onTap: () => inspectRule(origIndex, rule),
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border(
+                top: isFirst
+                    ? BorderSide.none
+                    : BorderSide(
+                        color: isWinner ? c.selectionBorder : c.hairline,
+                        width: 0.75,
+                      ),
+              ),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    width: 16,
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 1.5,
+                          height: 4,
+                          color: isFirst
+                              ? Colors.transparent
+                              : c.ink.withValues(alpha: 0.18),
+                        ),
+                        _buildRailDot(action, isFinal, c),
+                        Expanded(
+                          child: Container(
+                            width: 1.5,
+                            color: isLast
+                                ? Colors.transparent
+                                : c.ink.withValues(alpha: 0.18),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              isFinal
+                                  ? '回退'
+                                  : '#${(origIndex + 1).toString().padLeft(2, '0')}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: c.muted,
+                                fontFeatures: const [FontFeature.tabularFigures()],
+                              ),
+                            ),
+                            const Spacer(),
+                            if (traceTag != null) ...[
+                              traceTag,
+                              const SizedBox(width: 6),
+                            ],
+                            Flexible(
+                              flex: 3,
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: _buildActionCapsule(action, c, compact: true),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 5,
+                          runSpacing: 5,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: chips,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRulesPanel(List<Item> shown, _RuleTrace? trace, SingboardColors c) {
+    final providerCounts = <String, int>{
+      for (final p in providerItems)
+        if (p['name'] is String)
+          p['name'] as String: (p['ruleCount'] as num?)?.toInt() ?? 0,
+    };
+    var leadingPre = 0;
+    if (query.isEmpty) {
+      while (leadingPre < shown.length && _parseAction(shown[leadingPre]).isPreprocessing) {
+        leadingPre++;
+      }
+    }
+    final hasPreCollapse = leadingPre > 0 && leadingPre < shown.length;
+    final preSummary = <String>[];
+    if (hasPreCollapse) {
+      for (var i = 0; i < leadingPre; i++) {
+        final lbl = _parseAction(shown[i]).label;
+        if (!preSummary.contains(lbl)) preSummary.add(lbl);
+      }
+    }
+    final visible = hasPreCollapse && !preExpanded
+        ? shown.sublist(leadingPre)
+        : shown;
+
+    return GlassCard(
+      radius: 18,
+      padding: EdgeInsets.zero,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (hasPreCollapse)
+              Material(
+                color: c.fill.withValues(alpha: 0.45),
+                child: InkWell(
+                  onTap: () => setState(() => preExpanded = !preExpanded),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(color: c.hairline, width: 0.75),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        AnimatedRotation(
+                          turns: preExpanded ? 0.25 : 0,
+                          duration: const Duration(milliseconds: 180),
+                          child: PanelIcon('chevron', size: 13, color: c.muted),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '预处理规则 ($leadingPre)',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: c.ink,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            preSummary.join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 12, color: c.muted),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          preExpanded ? '收起' : '展开',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: c.selectionInk,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            for (var pos = 0; pos < visible.length; pos++)
+              _buildRuleRow(
+                visible[pos],
+                items.indexOf(visible[pos]),
+                pos,
+                visible.length,
+                providerCounts,
+                trace,
+                c,
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1824,7 +2712,15 @@ class _CatalogPageState extends State<CatalogPage> {
     final shown = source.where((item) {
       if (query.isEmpty) return true;
       if (!widget.proxies && providers) return matched.contains(item['name']);
-      if (!widget.proxies && _tokenizeRule(item).any((t) => t.kind == 'set' && matched.contains(t.full))) return true;
+      if (!widget.proxies) {
+        final clauses = _parseClauses(item);
+        if (clauses.any((p) => p.kind == 'sets' && p.sets.any((s) => matched.contains(s.$2)))) {
+          return true;
+        }
+        if (_isLookupQuery(query) && _evalRuleForLookup(item, query)) {
+          return true;
+        }
+      }
       final values = <dynamic>[
         item['name'],
         item['type'],
@@ -1842,6 +2738,8 @@ class _CatalogPageState extends State<CatalogPage> {
       );
     }).toList();
     final usageMap = !widget.proxies && providers ? _ruleProviderUsage() : const <String, List<(int, String)>>{};
+    final trace = _computeTrace();
+    final groupedRulesMode = !widget.proxies && !providers;
 
     final header = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1957,6 +2855,12 @@ class _CatalogPageState extends State<CatalogPage> {
     final hasPlaceholder = error.isNotEmpty || shown.isEmpty;
     final viewPad = MediaQuery.viewPaddingOf(context);
     final bottomPad = MediaQuery.paddingOf(context).bottom;
+    final hasTraceBanner = groupedRulesMode && trace != null && trace.winner != null;
+    final listCount = hasPlaceholder
+        ? 2
+        : groupedRulesMode
+            ? (hasTraceBanner ? 3 : 2)
+            : shown.length + 1;
     return ListView.builder(
       padding: EdgeInsets.fromLTRB(
         panelGutter(context) + viewPad.left,
@@ -1964,7 +2868,7 @@ class _CatalogPageState extends State<CatalogPage> {
         panelGutter(context) + viewPad.right,
         120 + bottomPad,
       ),
-      itemCount: hasPlaceholder ? 2 : shown.length + 1,
+      itemCount: listCount,
       itemBuilder: (_, index) {
         if (index == 0) return header;
         if (error.isNotEmpty) {
@@ -2031,6 +2935,12 @@ class _CatalogPageState extends State<CatalogPage> {
             ),
           );
         }
+        if (groupedRulesMode) {
+          if (hasTraceBanner && index == 1) {
+            return _buildTraceBanner(trace, c);
+          }
+          return _buildRulesPanel(shown, trace, c);
+        }
         final i = index - 1;
         final item = shown[i];
         final Widget card;
@@ -2038,7 +2948,7 @@ class _CatalogPageState extends State<CatalogPage> {
           card = widget.proxies
               ? _buildProxyProviderCard(item, c)
               : _buildRuleProviderCard(item, usageMap, c);
-        } else if (widget.proxies) {
+        } else {
           final name = item['name'] as String;
           card = Focus(
             key: ValueKey(name),
@@ -2065,16 +2975,6 @@ class _CatalogPageState extends State<CatalogPage> {
               }),
               child: _buildProxyGroupCard(item, c),
             ),
-          );
-        } else {
-          final tags = _tokenizeRule(item)
-              .where((t) => t.kind == 'set')
-              .map((t) => t.full)
-              .where((tag) => providerItems.any((p) => p['name'] == tag))
-              .toSet();
-          card = GestureDetector(
-            onTap: readable && tags.length == 1 ? () => rulesTool(tags.single) : null,
-            child: _buildRuleCard(item, items.indexOf(item), c),
           );
         }
         if (i + 1 >= shown.length) return card;
@@ -2334,6 +3234,485 @@ class _RuleDetailState extends State<_RuleDetail> {
             child: Text(query.isEmpty && activeType == null ? '共 ${entries.length} 条' : '显示 ${shown.length} / 共 ${entries.length} 条', style: TextStyle(fontSize: 12, color: c.muted)),
           ),
         ])),
+      ),
+    );
+  }
+}
+
+class _RuleInspectDialog extends StatelessWidget {
+  final int index;
+  final Item rule;
+  final List<_ClausePart> clauses;
+  final _RuleAction action;
+  final Map<String, int> providerCounts;
+  final bool readable;
+  final ValueChanged<String> onOpenProvider;
+
+  const _RuleInspectDialog({
+    required this.index,
+    required this.rule,
+    required this.clauses,
+    required this.action,
+    required this.providerCounts,
+    required this.readable,
+    required this.onOpenProvider,
+  });
+
+  String _formatCount(int n) {
+    final s = n.toString();
+    final buf = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+    }
+    return buf.toString();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SingboardColors.of(context);
+    final isFinal = rule['condition']?.toString() == '最终回退';
+    final rawPayload = (rule['payload']?.toString() ?? '').trim();
+    final copyPayload = rawPayload.isEmpty
+        ? (rule['condition']?.toString() ?? 'final')
+        : rawPayload;
+    final chain = (rule['chain'] as List? ?? []).whereType<String>().toList();
+    final relatedSets = <String>[];
+    for (final part in clauses) {
+      if (part.kind == 'sets') {
+        for (final s in part.sets) {
+          if (!relatedSets.contains(s.$2)) relatedSets.add(s.$2);
+        }
+      }
+    }
+
+    Widget buildActionBadge() {
+      if (action.kind == 'route') {
+        final bg = action.rejectFinal
+            ? c.dangerSoft
+            : (action.direct ? c.successSoft : c.primarySoft);
+        final fg = action.rejectFinal
+            ? c.dangerInk
+            : (action.direct ? c.successInk : c.selectionInk);
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text(
+            action.finalNode != null
+                ? '${action.label} › ${action.finalNode}'
+                : action.label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: fg,
+            ),
+          ),
+        );
+      }
+      final bg = action.kind == 'reject' ? c.dangerSoft : c.fill;
+      final fg = action.kind == 'reject' ? c.dangerInk : c.muted;
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          action.label,
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: fg),
+        ),
+      );
+    }
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 580,
+          maxHeight: MediaQuery.sizeOf(context).height * 0.8,
+        ),
+        child: GlassCard(
+          popover: true,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: c.fill,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      isFinal
+                          ? '最终回退'
+                          : '#${(index + 1).toString().padLeft(2, '0')}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: c.muted,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '规则详情',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: c.ink,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '关闭详情',
+                    onPressed: () => Navigator.pop(context),
+                    icon: PanelIcon('close-detail', size: 14, color: c.muted),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '匹配条件',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: c.muted,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: c.fill,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (var i = 0; i < clauses.length; i++) ...[
+                              if (i > 0) const SizedBox(height: 6),
+                              switch (clauses[i].kind) {
+                                'op' => Padding(
+                                    padding: const EdgeInsets.only(left: 2),
+                                    child: Text(
+                                      clauses[i].op == '且' ? 'AND · 且' : 'OR · 或',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: c.selectionInk,
+                                      ),
+                                    ),
+                                  ),
+                                'final' => Text(
+                                    '以上所有规则均未命中时进入此回退规则',
+                                    style: TextStyle(fontSize: 12, color: c.ink),
+                                  ),
+                                'all' => Text(
+                                    '匹配所有流量',
+                                    style: TextStyle(fontSize: 12, color: c.ink),
+                                  ),
+                                'sets' => Wrap(
+                                    spacing: 6,
+                                    runSpacing: 6,
+                                    crossAxisAlignment: WrapCrossAlignment.center,
+                                    children: [
+                                      if (clauses[i].negated)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 6,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: c.dangerSoft,
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: Text(
+                                            '不满足',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: c.dangerInk,
+                                            ),
+                                          ),
+                                        ),
+                                      Text(
+                                        '规则集',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                          color: c.muted,
+                                        ),
+                                      ),
+                                      for (final s in clauses[i].sets)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 3,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: c.surface,
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: Text(
+                                            s.$2,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontFamily: 'monospace',
+                                              color: c.ink,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                _ => Wrap(
+                                    spacing: 6,
+                                    runSpacing: 6,
+                                    crossAxisAlignment: WrapCrossAlignment.center,
+                                    children: [
+                                      if (clauses[i].negated)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 6,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: c.dangerSoft,
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: Text(
+                                            '不满足',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: c.dangerInk,
+                                            ),
+                                          ),
+                                        ),
+                                      if (clauses[i].label != null)
+                                        Text(
+                                          clauses[i].label!,
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w500,
+                                            color: c.muted,
+                                          ),
+                                        ),
+                                      for (final v in clauses[i].values)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 3,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: c.surface,
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: Text(
+                                            v,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontFamily: clauses[i].mono ? 'monospace' : null,
+                                              color: c.ink,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                              },
+                            ],
+                          ],
+                        ),
+                      ),
+                      if (relatedSets.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          '关联规则提供商',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: c.muted,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            for (final tag in relatedSets)
+                              GestureDetector(
+                                onTap: readable && providerCounts.containsKey(tag)
+                                    ? () {
+                                        Navigator.pop(context);
+                                        onOpenProvider(tag);
+                                      }
+                                    : null,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: c.fill,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      PanelIcon('layers', size: 13, color: c.muted),
+                                      const SizedBox(width: 6),
+                                      Flexible(
+                                        child: Text(
+                                          tag,
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w500,
+                                            color: c.ink,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        providerCounts.containsKey(tag)
+                                            ? '${_formatCount(providerCounts[tag]!)} 条'
+                                            : '未加载',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: c.muted,
+                                          fontFeatures: const [
+                                            FontFeature.tabularFigures(),
+                                          ],
+                                        ),
+                                      ),
+                                      if (readable && providerCounts.containsKey(tag)) ...[
+                                        const SizedBox(width: 4),
+                                        PanelIcon('chevron', size: 12, color: c.muted),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      Text(
+                        '执行动作与代理链',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: c.muted,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      if (chain.length > 1)
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            for (var i = 0; i < chain.length; i++) ...[
+                              if (i > 0)
+                                PanelIcon('arrow-right', size: 12, color: c.muted),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: i == 0 ? c.primarySoft : c.fill,
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  chain[i],
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight:
+                                        i == 0 ? FontWeight.w600 : FontWeight.w500,
+                                    color: i == 0 ? c.selectionInk : c.ink,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        )
+                      else
+                        buildActionBadge(),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Text(
+                            '原始规则',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: c.muted,
+                            ),
+                          ),
+                          const Spacer(),
+                          GestureDetector(
+                            onTap: () {
+                              Clipboard.setData(ClipboardData(text: copyPayload));
+                              showGlassToast(context, '已复制原始规则', error: false);
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              child: Text(
+                                '复制',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: c.selectionInk,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: c.fill,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: SelectableText(
+                          copyPayload,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontFamily: 'monospace',
+                            color: c.muted,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

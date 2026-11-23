@@ -50,6 +50,8 @@ enum Action {
     Dismiss,
     RuleDetail(String),
     CloseRuleDetail,
+    InspectRule(usize),
+    CloseRuleInspect,
     Providers,
     Sort,
     History,
@@ -1528,9 +1530,15 @@ impl Workspace {
                     return;
                 }
                 if key.key == "escape" {
-                    if this.page == Page::Rules && this.rule_browser.detail.is_some() {
-                        this.apply(Action::CloseRuleDetail, cx);
-                        return;
+                    if this.page == Page::Rules {
+                        if this.rule_browser.detail.is_some() {
+                            this.apply(Action::CloseRuleDetail, cx);
+                            return;
+                        }
+                        if this.rule_browser.inspect.is_some() {
+                            this.apply(Action::CloseRuleInspect, cx);
+                            return;
+                        }
                     }
                     if this.page == Page::Connections {
                         if this.detail.is_some() {
@@ -1566,7 +1574,7 @@ impl Workspace {
                 ) && key.modifiers.control
                     && key.key == "f"
                 {
-                    if this.detail.is_some() || this.confirm.is_some() { return; }
+                    if this.detail.is_some() || this.confirm.is_some() || this.rule_browser.inspect.is_some() { return; }
                     if let Some(dialog) = &this.rule_browser.detail {
                         dialog.search.update(cx, |field, cx| field.select_all(window, cx));
                     } else if let Some(filter) = &this.filter {
@@ -2158,6 +2166,14 @@ impl Workspace {
                     self.leave_dialog(dialog::LeavingDialog::Rule(detail), cx);
                 }
             }
+            Action::InspectRule(index) => {
+                self.open_rule_inspect(index);
+            }
+            Action::CloseRuleInspect => {
+                if let Some(inspect) = self.rule_browser.inspect.take() {
+                    self.leave_dialog(dialog::LeavingDialog::RuleInspect(inspect), cx);
+                }
+            }
             Action::Dismiss => {
                 self.cancel_scroll(scrolling::ScrollTarget::ConnDetail);
                 if let Some(detail) = self.detail.take() {
@@ -2361,9 +2377,7 @@ impl Workspace {
                     if self.show_providers {
                         query.is_empty() || self.rule_browser.matched.contains(&self.providers[i].0)
                     } else {
-                        let r = &self.rules[i];
-                        query.is_empty() || ["payload","type","proxy","condition","route","chain"].iter().any(|key| !r[key].is_null() && r[key].to_string().to_lowercase().contains(query))
-                            || rules::rule_set_tags_from_payload(r["payload"].as_str().unwrap_or("")).iter().any(|tag| self.rule_browser.matched.contains(tag))
+                        self.rule_matches_query(i, query)
                     }
                 }
                 _ => true,
@@ -2461,7 +2475,11 @@ impl Workspace {
             .font_weight(FontWeight::MEDIUM)
             .child(title)
             .on_click(cx.listener(move |this, _, _, cx| this.apply(action.clone(), cx)));
-        if self.detail.is_some() || self.confirm.is_some() || self.rule_browser.detail.is_some() {
+        if self.detail.is_some()
+            || self.confirm.is_some()
+            || self.rule_browser.detail.is_some()
+            || self.rule_browser.inspect.is_some()
+        {
             dialog::keyboard_action(button, keyboard_action, cx)
         } else {
             button

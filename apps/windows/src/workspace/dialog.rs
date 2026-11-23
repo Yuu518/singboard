@@ -13,6 +13,7 @@ pub(super) enum LeavingDialog {
     Connection(Value),
     Disconnect(Command),
     Rule(rules::RuleDetail),
+    RuleInspect(rules::RuleInspect),
 }
 
 impl Workspace {
@@ -22,7 +23,7 @@ impl Workspace {
         }
         match self.page {
             Page::Connections => self.detail.is_some() || self.confirm.is_some(),
-            Page::Rules => self.rule_browser.detail.is_some(),
+            Page::Rules => self.rule_browser.detail.is_some() || self.rule_browser.inspect.is_some(),
             Page::Config => self.config_dialog.is_some(),
             Page::Settings => self.settings_layout.dialog.is_some(),
             _ => false,
@@ -32,7 +33,7 @@ impl Workspace {
     pub(crate) fn page_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let visible = match self.page {
             Page::Connections => self.detail.is_some() || self.confirm.is_some(),
-            Page::Rules => self.rule_browser.detail.is_some(),
+            Page::Rules => self.rule_browser.detail.is_some() || self.rule_browser.inspect.is_some(),
             Page::Config => self.config_dialog.is_some(),
             Page::Settings => self.settings_layout.dialog.is_some(),
             _ => false,
