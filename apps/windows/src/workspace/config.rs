@@ -127,6 +127,23 @@ fn parse_iso_seconds(iso: &str) -> Option<i64> {
     Some(days_from_civil(y, m, d) * 86400 + hh * 3600 + mm * 60 + ss)
 }
 
+fn relative_profile_timestamp(iso: &str) -> String {
+    let rfc = super::format_rfc3339_relative(iso);
+    if !rfc.is_empty() {
+        return rfc;
+    }
+    let Some(ts) = parse_iso_seconds(iso) else {
+        return String::new();
+    };
+    let Some(now) = parse_iso_seconds(&super::now_iso()) else {
+        return String::new();
+    };
+    if ts <= 0 {
+        return String::new();
+    }
+    super::format_elapsed_relative(now.saturating_sub(ts) as u64)
+}
+
 fn is_remote_profile_due(profile: &ConfigProfile, now_secs: i64) -> bool {
     if profile.kind != "remote" || profile.auto_update_interval == 0 {
         return false;
@@ -1550,7 +1567,7 @@ impl Workspace {
             };
 
             let mut meta_parts = Vec::new();
-            let stamp = short_timestamp(&profile.last_updated);
+            let stamp = relative_profile_timestamp(&profile.last_updated);
             if !stamp.is_empty() {
                 meta_parts.push(format!(
                     "{} {stamp}",

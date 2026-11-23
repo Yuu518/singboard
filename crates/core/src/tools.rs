@@ -888,6 +888,12 @@ pub use crate::commands::ip_lookup::{
     parse_ipipnet, save_network_slot,
 };
 
+pub fn parse_rfc3339_unix_secs(iso: &str) -> Option<i64> {
+    let dt = chrono::DateTime::parse_from_rfc3339(iso.trim()).ok()?;
+    let ts = dt.timestamp();
+    (ts > 0).then_some(ts)
+}
+
 pub async fn direct_exit_info() -> Value {
     match ip_lookup::fetch_direct_ip().await {
         Ok(info) => json!({"status":"done","ip":info.ip,"location":info.location,"error":""}),
@@ -1071,5 +1077,19 @@ mod tests {
         assert_eq!(loc, vec!["中国", "广东", "深圳", "电信"]);
         assert_eq!(mask_ip("1.2.3.4"), "•.•.•.•");
         assert_eq!(mask_ip("2001:db8::1"), "••••:•••::•");
+    }
+    #[test]
+    fn parses_rfc3339_unix_secs_and_rejects_zero() {
+        assert_eq!(
+            parse_rfc3339_unix_secs("2026-11-23T02:55:12Z"),
+            Some(1795402512)
+        );
+        assert_eq!(
+            parse_rfc3339_unix_secs("2026-11-23T10:55:12.123456789+08:00"),
+            Some(1795402512)
+        );
+        assert_eq!(parse_rfc3339_unix_secs("0001-01-01T00:00:00Z"), None);
+        assert_eq!(parse_rfc3339_unix_secs("1970-01-01T00:00:00Z"), None);
+        assert_eq!(parse_rfc3339_unix_secs(""), None);
     }
 }

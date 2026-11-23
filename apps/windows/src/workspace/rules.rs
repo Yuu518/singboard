@@ -854,12 +854,9 @@ impl Workspace {
                             .map(|i| {
                                 let (name, item) = &this.providers[i];
                                 let rule_count = item["ruleCount"].as_u64().unwrap_or(0);
-                                let updated = item["updatedAt"]
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .split('T')
-                                    .next()
-                                    .unwrap_or("");
+                                let updated = super::format_rfc3339_relative(
+                                    item["updatedAt"].as_str().unwrap_or(""),
+                                );
                                 let vehicle = item["vehicleType"].as_str().unwrap_or("");
                                 let behavior = item["behavior"].as_str().unwrap_or("");
                                 let is_inline = vehicle.eq_ignore_ascii_case("inline");
@@ -874,7 +871,7 @@ impl Workspace {
                                     meta_parts.push(f_lbl);
                                 }
                                 if !updated.is_empty() {
-                                    meta_parts.push(format!("{updated} 更新"));
+                                    meta_parts.push(format!("更新于 {updated}"));
                                 }
                                 let usage_str = match usage_map.get(name) {
                                     None => "未被路由规则引用".into(),
@@ -991,6 +988,13 @@ impl Workspace {
                                     line = line.child(
                                         div()
                                             .id(("rp-update", i))
+                                            .role(Role::Button)
+                                            .aria_label("更新")
+                                            .tooltip(|window, cx| {
+                                                gpui_component::tooltip::Tooltip::new("更新")
+                                                    .build(window, cx)
+                                            })
+                                            .cursor_pointer()
                                             .size(px(28.))
                                             .flex_none()
                                             .rounded_full()
@@ -1435,10 +1439,9 @@ impl Workspace {
                 };
                 let meta = metadata
                     .map(|p| {
-                        let updated = p["updatedAt"]
-                            .as_str()
-                            .and_then(|v| v.split('T').next())
-                            .unwrap_or("");
+                        let updated = super::format_rfc3339_relative(
+                            p["updatedAt"].as_str().unwrap_or(""),
+                        );
                         [
                             vehicle_label(vehicle),
                             format_label(p["behavior"].as_str().unwrap_or("")),
@@ -1446,7 +1449,7 @@ impl Workspace {
                             if updated.is_empty() {
                                 String::new()
                             } else {
-                                format!("{updated} 更新")
+                                format!("更新于 {updated}")
                             },
                         ]
                         .into_iter()

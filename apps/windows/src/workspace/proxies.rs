@@ -249,13 +249,6 @@ fn format_speed_compact(bytes: u64) -> String {
     }
 }
 
-fn relative_date(iso: &str) -> String {
-    if iso.is_empty() {
-        return String::new();
-    }
-    iso.split('T').next().unwrap_or(iso).to_owned()
-}
-
 fn format_expire(ts: i64) -> String {
     if ts <= 0 {
         return "无期限".into();
@@ -641,7 +634,8 @@ impl Workspace {
                                 .is_some()
                         })
                         .count();
-                    let updated = relative_date(item["updatedAt"].as_str().unwrap_or(""));
+                    let updated =
+                        super::format_rfc3339_relative(item["updatedAt"].as_str().unwrap_or(""));
                     let sub = &item["subscriptionInfo"];
                     let total_bytes = sub["Total"].as_u64().unwrap_or(0);
                     let expire = sub["Expire"].as_i64();
@@ -804,14 +798,25 @@ impl Workspace {
                     let mut actions = div().flex().items_center().gap_1().child(
                         div()
                             .id(("pp-hc", pi))
+                            .role(Role::Button)
+                            .aria_label("健康检查")
+                            .tooltip(|window, cx| {
+                                gpui_component::tooltip::Tooltip::new("健康检查").build(window, cx)
+                            })
                             .cursor_pointer()
-                            .px_2()
-                            .py(px(4.))
+                            .size(px(32.))
+                            .flex_none()
                             .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .hover(|s| s.bg(palette.fill()))
-                            .text_xs()
-                            .text_color(palette.muted())
-                            .child("健康检查")
+                            .child(
+                                svg()
+                                    .path("bolt")
+                                    .size(px(18.))
+                                    .text_color(palette.muted()),
+                            )
                             .on_click(cx.listener({
                                 let name = name.clone();
                                 move |this, _, _, cx| {
@@ -826,15 +831,25 @@ impl Workspace {
                         actions = actions.child(
                             div()
                                 .id(("pp-up", pi))
+                                .role(Role::Button)
+                                .aria_label("更新")
+                                .tooltip(|window, cx| {
+                                    gpui_component::tooltip::Tooltip::new("更新").build(window, cx)
+                                })
                                 .cursor_pointer()
-                                .px_2()
-                                .py(px(4.))
+                                .size(px(32.))
+                                .flex_none()
                                 .rounded_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
                                 .hover(|s| s.bg(palette.fill()))
-                                .text_xs()
-                                .text_color(palette.accent())
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("更新")
+                                .child(
+                                    svg()
+                                        .path("refresh")
+                                        .size(px(18.))
+                                        .text_color(palette.accent()),
+                                )
                                 .on_click(cx.listener({
                                     let name = name.clone();
                                     move |this, _, _, cx| {

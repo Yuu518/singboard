@@ -838,12 +838,20 @@ impl Workspace {
         {
             self.refresh_local_state(cx);
         }
+        let mut notified = false;
         if let Some((_, sample)) = self.service_uptime {
             let elapsed = sample.elapsed().as_secs();
             if self.uptime_tick != elapsed {
                 self.uptime_tick = elapsed;
                 cx.notify();
+                notified = true;
             }
+        }
+        if !notified
+            && ((matches!(self.page, Page::Proxies | Page::Rules) && self.show_providers)
+                || self.page == Page::Config)
+        {
+            cx.notify();
         }
         if self
             .undo
@@ -2570,6 +2578,26 @@ impl RenderOnce for DropdownBox {
                     }),
             )
     }
+}
+
+pub(super) fn format_elapsed_relative(diff: u64) -> String {
+    if diff < 60 {
+        format!("{diff} 秒前")
+    } else if diff < 3600 {
+        format!("{} 分钟前", diff / 60)
+    } else if diff < 86400 {
+        format!("{} 小时前", diff / 3600)
+    } else {
+        format!("{} 天前", diff / 86400)
+    }
+}
+
+pub(super) fn format_rfc3339_relative(iso: &str) -> String {
+    let Some(ts) = singboard_core::tools::parse_rfc3339_unix_secs(iso) else {
+        return String::new();
+    };
+    let now = singboard_core::tools::now_unix_secs();
+    format_elapsed_relative(now.saturating_sub(ts as u64))
 }
 
 fn format_relative_age(updated_at: Option<u64>) -> String {

@@ -10,6 +10,25 @@ import 'config_page.dart' show configDirectory;
 
 typedef Item = Map<String, dynamic>;
 
+DateTime? _parseUpdatedAt(dynamic raw) {
+  final iso = raw?.toString().trim() ?? '';
+  if (iso.isEmpty) return null;
+  final dt = DateTime.tryParse(iso);
+  if (dt == null || dt.millisecondsSinceEpoch <= 0) return null;
+  return dt;
+}
+
+String formatUpdatedRelative(dynamic raw, {DateTime? now}) {
+  final dt = _parseUpdatedAt(raw);
+  if (dt == null) return '';
+  final diff = (now ?? DateTime.now()).difference(dt).inSeconds;
+  final secs = diff < 0 ? 0 : diff;
+  if (secs < 60) return '$secs 秒前';
+  if (secs < 3600) return '${secs ~/ 60} 分钟前';
+  if (secs < 86400) return '${secs ~/ 3600} 小时前';
+  return '${secs ~/ 86400} 天前';
+}
+
 class _CondToken {
   final String kind;
   final String text;
@@ -171,6 +190,7 @@ class _CatalogPageState extends State<CatalogPage> {
   (String group, String prev)? undoSwitch;
   Timer? undoTimer;
   Timer? ruleTimer;
+  Timer? ageTimer;
   int matchRevision = 0;
   Set<String> matched = {};
   String matchError = '';
@@ -189,6 +209,33 @@ class _CatalogPageState extends State<CatalogPage> {
     if (widget.enabled) load();
   }
 
+  void _syncAgeTimer() {
+    ageTimer?.cancel();
+    ageTimer = null;
+    if (!mounted || !widget.active || !providers || providerItems.isEmpty) {
+      return;
+    }
+    final now = DateTime.now();
+    var fast = false;
+    var hasAny = false;
+    for (final item in providerItems) {
+      final dt = _parseUpdatedAt(item['updatedAt']);
+      if (dt == null) continue;
+      hasAny = true;
+      final secs = now.difference(dt).inSeconds;
+      if (secs < 60) {
+        fast = true;
+        break;
+      }
+    }
+    if (!hasAny) return;
+    ageTimer = Timer(Duration(seconds: fast ? 1 : 30), () {
+      if (!mounted) return;
+      setState(() {});
+      _syncAgeTimer();
+    });
+  }
+
   @override
   void didUpdateWidget(CatalogPage old) {
     super.didUpdateWidget(old);
@@ -200,12 +247,16 @@ class _CatalogPageState extends State<CatalogPage> {
     } else if (widget.enabled && widget.active && !old.active) {
       load(silent: items.isNotEmpty);
     }
+    if (widget.active != old.active) {
+      _syncAgeTimer();
+    }
   }
 
   @override
   void dispose() {
     undoTimer?.cancel();
     ruleTimer?.cancel();
+    ageTimer?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -260,6 +311,7 @@ class _CatalogPageState extends State<CatalogPage> {
         if (!providersAvailable) providers = false;
         error = '';
       });
+      _syncAgeTimer();
       if (!widget.proxies && query.isNotEmpty) scheduleMatch();
     } catch (e) {
       if (mounted && revision == generation && !silent) {
@@ -1028,7 +1080,7 @@ class _CatalogPageState extends State<CatalogPage> {
     final tested = nodes.where((n) => _delayOf(n) != null).length;
     final open = expandedProviders.contains(name);
     final vehicle = item['vehicleType']?.toString() ?? '';
-    final updated = (item['updatedAt']?.toString() ?? '').split('T').first;
+    final updated = formatUpdatedRelative(item['updatedAt']);
     final sub = item['subscriptionInfo'] as Map?;
     final total = (sub?['Total'] as num?)?.toInt() ?? 0;
     final used = ((sub?['Download'] as num?)?.toInt() ?? 0) +
@@ -1392,11 +1444,11 @@ class _CatalogPageState extends State<CatalogPage> {
       'source' => '源文件',
       _ => behavior,
     };
-    final updated = (item['updatedAt']?.toString() ?? '').split('T').first;
+    final updated = formatUpdatedRelative(item['updatedAt']);
     final meta = [
       if (vLabel.isNotEmpty) vLabel,
       if (fLabel.isNotEmpty) fLabel,
-      if (updated.isNotEmpty) '$updated 更新',
+      if (updated.isNotEmpty) '更新于 $updated',
     ].join(' · ');
     final uses = usageMap[name];
     final usageText = uses == null || uses.isEmpty
@@ -1577,6 +1629,7 @@ class _CatalogPageState extends State<CatalogPage> {
                 value: providers,
                 onChanged: (v) {
                   setState(() { providers = v; query = ''; _searchCtrl.clear(); });
+                  _syncAgeTimer();
                   if (!widget.proxies) scheduleMatch();
                 },
               ),
@@ -1802,6 +1855,7 @@ class _RuleDetailState extends State<_RuleDetail> {
   String? activeType;
   String query = '', error = '', match = '';
   Timer? timer;
+  Timer? ageTimer;
   bool loading = true;
   String get name => widget.provider['name'] as String;
 
@@ -1855,11 +1909,25 @@ class _RuleDetailState extends State<_RuleDetail> {
     return counts;
   }
 
-  @override
-  void initState() { super.initState(); load(); }
+  void _syncAgeTimer() {
+    ageTimer?.cancel();
+    ageTimer = null;
+    if (!mounted) return;
+    final dt = _parseUpdatedAt(widget.provider['updatedAt']);
+    if (dt == null) return;
+    final secs = DateTime.now().difference(dt).inSeconds;
+    ageTimer = Timer(Duration(seconds: secs < 60 ? 1 : 30), () {
+      if (!mounted) return;
+      setState(() {});
+      _syncAgeTimer();
+    });
+  }
 
   @override
-  void dispose() { timer?.cancel(); search.dispose(); super.dispose(); }
+  void initState() { super.initState(); load(); _syncAgeTimer(); }
+
+  @override
+  void dispose() { timer?.cancel(); ageTimer?.cancel(); search.dispose(); super.dispose(); }
 
   Future<void> load() async {
     setState(() { loading = true; error = ''; });
@@ -1943,7 +2011,7 @@ class _RuleDetailState extends State<_RuleDetail> {
     final vehicle = (p['vehicleType'] ?? '').toString().toLowerCase();
     final icon = switch (vehicle) { 'remote' || 'http' => 'remote', 'inline' => 'inline', _ => 'file' };
     final source = switch (vehicle) { 'remote' || 'http' => '远程', 'inline' => '内联', 'local' || 'file' => '本地', _ => vehicle };
-    final date = p['updatedAt']?.toString().split('T').first ?? '';
+    final updated = formatUpdatedRelative(p['updatedAt']);
     return Dialog(backgroundColor: Colors.transparent, insetPadding: const EdgeInsets.symmetric(horizontal: 16),
       child: ConstrainedBox(constraints: BoxConstraints(maxWidth: 672, maxHeight: MediaQuery.sizeOf(context).height * .8),
         child: GlassCard(popover: true, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1952,7 +2020,7 @@ class _RuleDetailState extends State<_RuleDetail> {
             Expanded(child: Text(name, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: c.ink))),
             IconButton(tooltip: '关闭详情', onPressed: () => Navigator.pop(context), icon: PanelIcon('close-detail', size: 14, color: c.muted)),
           ]),
-          Text([source, "${p['ruleCount'] ?? 0} 条", if (date.isNotEmpty) '$date 更新'].join(' · '), style: TextStyle(fontSize: 12, color: c.muted)),
+          Text([source, "${p['ruleCount'] ?? 0} 条", if (updated.isNotEmpty) '更新于 $updated'].join(' · '), style: TextStyle(fontSize: 12, color: c.muted)),
           if (widget.uses.isNotEmpty) Text(widget.uses.length == 1 ? '用于第 ${widget.uses.first.$1} 条规则 → ${widget.uses.first.$2}' :
               '用于第 ${widget.uses.map((u) => u.$1).join('、')} 条规则', style: TextStyle(fontSize: 12, color: c.muted)),
           const SizedBox(height: 10),
