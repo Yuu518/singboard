@@ -14,13 +14,37 @@ pub(super) struct ProxyUi {
     hovered: Option<String>,
     hover_motion: HashMap<(bool, String), (Instant, f32, bool)>,
     pointer: Option<Point<Pixels>>,
-    pub(super) testing: Option<String>,
-    pub(super) testing_nodes: HashSet<String>,
+    pub(super) testing_groups: HashMap<String, (usize, usize)>,
+    pub(super) testing_providers: HashMap<String, (usize, usize)>,
+    pub(super) testing_nodes: HashMap<String, usize>,
     motion: HashMap<(bool, String), (Instant, f32, bool)>,
     reveal: Option<(String, Rc<Cell<Option<Bounds<Pixels>>>>)>,
 }
 
 impl ProxyUi {
+    pub(super) fn clear_testing(&mut self) {
+        self.testing_groups.clear();
+        self.testing_providers.clear();
+        self.testing_nodes.clear();
+    }
+
+    pub(super) fn is_node_testing(&self, name: &str) -> bool {
+        self.testing_nodes.contains_key(name)
+    }
+
+    pub(super) fn mark_node_testing(&mut self, name: &str) {
+        *self.testing_nodes.entry(name.to_owned()).or_insert(0) += 1;
+    }
+
+    pub(super) fn unmark_node_testing(&mut self, name: &str) {
+        if let Some(count) = self.testing_nodes.get_mut(name) {
+            if *count <= 1 {
+                self.testing_nodes.remove(name);
+            } else {
+                *count -= 1;
+            }
+        }
+    }
     fn set_hover(&mut self, provider: bool, name: &str, hovered: bool) {
         let key = (provider, name.to_owned());
         let current = self.hover_value(&key, None);
@@ -172,7 +196,11 @@ fn latency_badge(
     palette: crate::theme::Palette,
     medium: bool,
 ) -> Div {
-    let (bg, fg) = latency_badge_style(delay, palette);
+    let (bg, fg) = if testing {
+        (palette.primary_soft(), palette.accent())
+    } else {
+        latency_badge_style(delay, palette)
+    };
     div()
         .relative()
         .flex_none()
@@ -226,6 +254,28 @@ fn node_type_desc(node: &singboard_core::clash::Node, ipv6: bool) -> String {
     }
     if node.udp {
         parts.push(if node.xudp { "xudp" } else { "udp" }.into());
+    }
+    if ipv6 {
+        parts.push("IPv6".into());
+    }
+    parts.join(" / ")
+}
+
+fn raw_node_type_desc(node: &Value, ipv6: bool) -> String {
+    let mut parts = Vec::new();
+    let t = format_type(node["type"].as_str().unwrap_or(""));
+    if !t.is_empty() {
+        parts.push(t);
+    }
+    if node["udp"].as_bool().unwrap_or(false) {
+        parts.push(
+            if node["xudp"].as_bool().unwrap_or(false) {
+                "xudp"
+            } else {
+                "udp"
+            }
+            .into(),
+        );
     }
     if ipv6 {
         parts.push("IPv6".into());
@@ -312,9 +362,15 @@ impl Workspace {
     }
 
     pub(super) fn release_proxy_order(&mut self) {
+        let groups = &self.groups;
         let state = &mut self.proxy_ui;
         state.orders.retain(|name, _| {
-            state.hovered.as_ref() == Some(name) || state.testing.as_ref() == Some(name)
+            state.hovered.as_ref() == Some(name)
+                || state.testing_groups.contains_key(name)
+                || groups
+                    .iter()
+                    .find(|g| &g.name == name)
+                    .is_some_and(|g| g.nodes.iter().any(|n| state.testing_nodes.contains_key(&n.name)))
         });
     }
 
@@ -751,10 +807,12 @@ impl Workspace {
                         let dots_full_h = dot_rows as f32 * 20. - 2.;
                         let mut dots = div().flex_none().w_full().flex().flex_wrap().gap(px(6.)).pt(px(4.));
                         for (ni, node) in proxies_arr.iter().enumerate() {
+                            let n_name = node["name"].as_str().unwrap_or("");
                             let delay = node["history"]
                                 .as_array()
                                 .and_then(|h| h.last())
                                 .and_then(|v| v["delay"].as_u64());
+                            let node_testing = self.proxy_ui.is_node_testing(n_name);
                             let fill = dot_color(delay, palette);
                             let (dot_op, dot_scale) = dot_motion(elapsed, open, ni);
                             dots = dots.child(
@@ -774,7 +832,11 @@ impl Workspace {
                                             .justify_center()
                                             .when_some(fill, |d, c| d.bg(c))
                                             .when(fill.is_none(), |d| {
-                                                d.border_1().border_color(palette.line())
+                                                d.border_1().border_color(if node_testing {
+                                                    palette.accent()
+                                                } else {
+                                                    palette.line()
+                                                })
                                             })
                                             .when(delay == Some(0), |d| {
                                                 d.child(
@@ -795,7 +857,29 @@ impl Workspace {
                             .child(dots);
                         head_left = head_left.child(dots_box);
                     }
-                    let mut actions = div().flex().items_center().gap_1().child(
+                    let checking = self.proxy_ui.testing_providers.get(name).copied();
+                    let hc_btn = if let Some((done, total)) = checking {
+                        div()
+                            .id(("pp-hc", pi))
+                            .h(px(28.))
+                            .px_2()
+                            .flex_none()
+                            .rounded_full()
+                            .bg(palette.primary_soft())
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.accent())
+                            .child(super::settings::loading_spinner(
+                                SharedString::from(format!("pp-hc-spin-{pi}")),
+                                px(12.),
+                                palette.accent(),
+                            ))
+                            .child(format!("{done}/{total}"))
+                    } else {
+                        let name = name.clone();
                         div()
                             .id(("pp-hc", pi))
                             .role(Role::Button)
@@ -817,16 +901,12 @@ impl Workspace {
                                     .size(px(18.))
                                     .text_color(palette.muted()),
                             )
-                            .on_click(cx.listener({
-                                let name = name.clone();
-                                move |this, _, _, cx| {
-                                    this.apply(
-                                        Action::Run(Command::HealthCheck { name: name.clone() }),
-                                        cx,
-                                    );
-                                }
-                            })),
-                    );
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.test_provider(name.clone(), cx);
+                            }))
+                    };
+                    let mut actions = div().flex().items_center().gap_1().child(hc_btn);
                     if !vehicle.eq_ignore_ascii_case("inline") {
                         actions = actions.child(
                             div()
@@ -903,38 +983,29 @@ impl Workspace {
                             for (col_idx, node) in chunk.iter().enumerate() {
                                 let ni = row_idx * cols + col_idx;
                                 let n_name = node["name"].as_str().unwrap_or("").to_owned();
-                                let n_kind = format_type(node["type"].as_str().unwrap_or(""));
+                                let is_v6 = self.ipv6 && self.ipv6_nodes.contains(&n_name);
+                                let n_desc = raw_node_type_desc(node, is_v6);
                                 let delay = node["history"]
                                     .as_array()
                                     .and_then(|h| h.last())
                                     .and_then(|v| v["delay"].as_u64());
-                                let testing = self.proxy_ui.testing_nodes.contains(&n_name);
+                                let testing = self.proxy_ui.is_node_testing(&n_name);
                                 let test_name = n_name.clone();
-                                let url = self.latency_test_url.clone();
+                                let url = item["testUrl"]
+                                    .as_str()
+                                    .filter(|u| !u.trim().is_empty())
+                                    .unwrap_or(&self.latency_test_url)
+                                    .to_owned();
                                 let badge = latency_badge(
                                     SharedString::from(format!("pp-delay-spin-{pi}-{ni}")),
                                     delay,
                                     testing,
                                     palette,
-                                    false,
-                                )
-                                .id(SharedString::from(format!("pp-delay-{pi}-{ni}")))
-                                .when(!testing, |el| {
-                                    el.cursor_pointer().on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            this.run(
-                                                Command::Delay {
-                                                    name: test_name.clone(),
-                                                    url: url.clone(),
-                                                    ipv6: this.ipv6,
-                                                },
-                                                cx,
-                                            );
-                                        },
-                                    ))
-                                });
+                                    true,
+                                );
                                 row = row.child(
                                     div()
+                                        .id(SharedString::from(format!("pp-node-{pi}-{ni}")))
                                         .w_full()
                                         .min_w_0()
                                         .h(px(tile_h))
@@ -942,7 +1013,23 @@ impl Workspace {
                                         .rounded(px(12.))
                                         .bg(palette.tile())
                                         .border_1()
-                                        .border_color(palette.control_rim())
+                                        .border_color(if testing {
+                                            palette.selection_border()
+                                        } else {
+                                            palette.control_rim()
+                                        })
+                                        .when(!testing, |el| {
+                                            el.cursor_pointer()
+                                                .hover(|s| s.bg(palette.fill_strong()))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.test_node(
+                                                        test_name.clone(),
+                                                        url.clone(),
+                                                        None,
+                                                        cx,
+                                                    );
+                                                }))
+                                        })
                                         .flex()
                                         .flex_col()
                                         .justify_between()
@@ -973,7 +1060,7 @@ impl Workspace {
                                                         .text_xs()
                                                         .text_color(palette.muted())
                                                         .truncate()
-                                                        .child(n_kind),
+                                                        .child(n_desc),
                                                 )
                                                 .child(badge),
                                         ),
@@ -1112,7 +1199,7 @@ impl Workspace {
                 current = current.child(latency_badge(
                     SharedString::from(format!("now-delay-spin-{gi}")),
                     now_delay,
-                    self.proxy_ui.testing_nodes.contains(&g.now),
+                    self.proxy_ui.is_node_testing(&g.now),
                     palette,
                     false,
                 ));
@@ -1200,6 +1287,7 @@ impl Workspace {
                     let selected = node.name == g.now;
                     let fill = dot_color(node.delay, palette);
                     let failed = node.delay == Some(0);
+                    let node_testing = self.proxy_ui.is_node_testing(&node.name);
                     let mut slot = div()
                         .id(SharedString::from(format!("dot-{gi}-{ni}")))
                         .size(px(14.))
@@ -1217,7 +1305,11 @@ impl Workspace {
                                 .justify_center()
                                 .when_some(fill, |v, c| v.bg(c))
                                 .when(fill.is_none(), |v| {
-                                    v.border_1().border_color(palette.line())
+                                    v.border_1().border_color(if node_testing {
+                                        palette.accent()
+                                    } else {
+                                        palette.line()
+                                    })
                                 })
                                 .when(selected && failed, |v| {
                                     v.border_2().border_color(palette.ink())
@@ -1261,41 +1353,50 @@ impl Workspace {
             }
 
             let group_test = g.name.clone();
-            let group_url = g.test_url.clone();
+            let group_progress = self.proxy_ui.testing_groups.get(&g.name).copied();
+            let group_test_btn = if let Some((done, total)) = group_progress {
+                div()
+                    .id(("group-test", gi))
+                    .px_2()
+                    .py(px(3.))
+                    .rounded_full()
+                    .bg(palette.primary_soft())
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(palette.accent())
+                    .child(super::settings::loading_spinner(
+                        SharedString::from(format!("group-test-spin-{gi}")),
+                        px(12.),
+                        palette.accent(),
+                    ))
+                    .child(format!("测试中 {done}/{total}"))
+            } else {
+                div()
+                    .id(("group-test", gi))
+                    .cursor_pointer()
+                    .px_2()
+                    .py(px(3.))
+                    .rounded(px(8.))
+                    .hover(|s| s.bg(palette.fill()))
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(palette.ink())
+                    .child("延迟测试")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.test_group(group_test.clone(), cx);
+                    }))
+            };
             let header_right = div()
                 .flex_none()
                 .flex()
                 .flex_col()
                 .items_end()
                 .gap(px(2.))
-                .child(
-                    div()
-                        .id(("group-test", gi))
-                        .cursor_pointer()
-                        .px_2()
-                        .py(px(3.))
-                        .rounded(px(8.))
-                        .hover(|s| s.bg(palette.fill()))
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(palette.ink())
-                        .child(if self.proxy_ui.testing.as_ref() == Some(&g.name) {
-                            "测试中…"
-                        } else {
-                            "延迟测试"
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.run(
-                                Command::GroupDelay {
-                                    name: group_test.clone(),
-                                    url: group_url.clone(),
-                                    ipv6: this.ipv6,
-                                },
-                                cx,
-                            )
-                        })),
-                )
+                .child(group_test_btn)
                 .child(
                     div()
                         .min_w(crate::theme::text_px(80.))
@@ -1358,6 +1459,7 @@ impl Workspace {
                         .gap(px(8.));
                     for &(ni, node) in chunk {
                         let selected = node.name == g.now;
+                        let testing = self.proxy_ui.is_node_testing(&node.name);
                         let name = node.name.clone();
                         let group = g.name.clone();
                         let is_v6 = self.ipv6 && self.ipv6_nodes.contains(&name);
@@ -1405,7 +1507,7 @@ impl Workspace {
                             } else {
                                 palette.tile()
                             })
-                            .border_color(if selected {
+                            .border_color(if selected || testing {
                                 palette.selection_border()
                             } else {
                                 palette.control_rim()
@@ -1469,7 +1571,7 @@ impl Workspace {
                         if show_lat {
                             let test_name = node.name.clone();
                             let url = g.test_url.clone();
-                            let testing = self.proxy_ui.testing_nodes.contains(&node.name);
+                            let group_for_test = g.name.clone();
                             bottom = bottom.child(
                                 latency_badge(
                                     SharedString::from(format!("delay-spin-{gi}-{ni}")),
@@ -1483,12 +1585,10 @@ impl Workspace {
                                     el.cursor_pointer().on_click(cx.listener(
                                         move |this, _, _, cx| {
                                             cx.stop_propagation();
-                                            this.run(
-                                                Command::Delay {
-                                                    name: test_name.clone(),
-                                                    url: url.clone(),
-                                                    ipv6: this.ipv6,
-                                                },
+                                            this.test_node(
+                                                test_name.clone(),
+                                                url.clone(),
+                                                Some(group_for_test.clone()),
                                                 cx,
                                             );
                                         },

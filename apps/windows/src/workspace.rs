@@ -285,8 +285,7 @@ impl Workspace {
         self.generation += 1;
         self.busy = false;
         self.refreshing = false;
-        self.proxy_ui.testing = None;
-        self.proxy_ui.testing_nodes.clear();
+        self.proxy_ui.clear_testing();
         self.groups.clear();
         self.rules.clear();
         self.providers.clear();
@@ -1513,8 +1512,7 @@ impl Workspace {
         self.generation += 1;
         self.busy = false;
         self.refreshing = false;
-        self.proxy_ui.testing = None;
-        self.proxy_ui.testing_nodes.clear();
+        self.proxy_ui.clear_testing();
         self.show_providers = false;
         if self.filter.is_none() {
             let search = cx.new(crate::search::Search::new);
@@ -1703,13 +1701,12 @@ impl Workspace {
             }
             self.busy = true;
         }
-        if let Command::GroupDelay{name,..} = &command {
-            self.proxy_ui.testing = Some(name.clone());
-            self.freeze_proxy_order(name);
-        } else if let Command::Delay { name, .. } = &command {
-            if !self.proxy_ui.testing_nodes.insert(name.clone()) {
+        if let Command::Delay { name, .. } = &command {
+            if self.proxy_ui.is_node_testing(name) {
                 return;
             }
+            self.clear_node_delay(name);
+            self.proxy_ui.mark_node_testing(name);
         }
         match &command {
             Command::Disconnect { id } => self.conn_ui.mark_closing(std::iter::once(id.clone())),
@@ -1742,11 +1739,9 @@ impl Workspace {
                 } else if is_exclusive_action {
                     this.busy = false;
                 }
-                if matches!(&command,Command::GroupDelay{..}) {
-                    this.proxy_ui.testing = None;
+                if let Command::Delay { name, .. } = &command {
+                    this.proxy_ui.unmark_node_testing(name);
                     this.release_proxy_order();
-                } else if let Command::Delay { name, .. } = &command {
-                    this.proxy_ui.testing_nodes.remove(name);
                 }
                 match result {
                     Err(error) => {
@@ -1873,21 +1868,215 @@ impl Workspace {
         {
             node.delay = delay;
         }
-        if let Some(d) = delay {
-            for (_, provider) in &mut self.providers {
-                if let Some(list) = provider["proxies"].as_array_mut() {
-                    for node in list {
-                        if node["name"].as_str() == Some(name) {
-                            if let Some(history) = node["history"].as_array_mut() {
-                                history.push(serde_json::json!({ "delay": d }));
-                            } else {
-                                node["history"] = serde_json::json!([{ "delay": d }]);
+        for (_, provider) in &mut self.providers {
+            if let Some(list) = provider["proxies"].as_array_mut() {
+                for node in list {
+                    if node["name"].as_str() == Some(name) {
+                        match delay {
+                            Some(d) => {
+                                if let Some(history) = node["history"].as_array_mut() {
+                                    history.push(serde_json::json!({ "delay": d }));
+                                } else {
+                                    node["history"] = serde_json::json!([{ "delay": d }]);
+                                }
+                            }
+                            None => {
+                                node["history"] = serde_json::json!([]);
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    fn clear_node_delay(&mut self, name: &str) {
+        self.set_node_delay(name, None);
+        self.ipv6_nodes.remove(name);
+    }
+
+    fn apply_delay_result(&mut self, res: singboard_core::clash::DelayResult) {
+        if let Some(v) = res.ipv6 {
+            if v {
+                self.ipv6_nodes.insert(res.name.clone());
+            } else {
+                self.ipv6_nodes.remove(&res.name);
+            }
+        }
+        self.set_node_delay(&res.name, Some(res.delay));
+    }
+
+    pub(super) fn test_node(
+        &mut self,
+        name: String,
+        url: String,
+        group: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.proxy_ui.is_node_testing(&name) {
+            return;
+        }
+        if let Some(group) = &group {
+            self.freeze_proxy_order(group);
+        }
+        self.clear_node_delay(&name);
+        self.proxy_ui.mark_node_testing(&name);
+        let generation = self.generation;
+        let api = self.api.clone();
+        let ipv6 = self.ipv6;
+        let req_name = name.clone();
+        let task = singboard_core::runtime().spawn(async move {
+            api.execute(Command::Delay {
+                name: req_name,
+                url,
+                ipv6,
+            })
+            .await
+        });
+        cx.spawn(async move |weak, cx| {
+            let result = task.await.unwrap_or_else(|e| Err(e.to_string()));
+            let _ = weak.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.proxy_ui.unmark_node_testing(&name);
+                match result {
+                    Ok(data) => {
+                        this.apply_delay_result(singboard_core::clash::DelayResult {
+                            name,
+                            delay: data["delay"].as_u64().unwrap_or(0),
+                            ipv6: data["ipv6"].as_bool(),
+                        });
+                    }
+                    Err(_) => {
+                        if ipv6 {
+                            this.ipv6_nodes.remove(&name);
+                        }
+                        this.set_node_delay(&name, Some(0));
+                    }
+                }
+                this.release_proxy_order();
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(super) fn test_group(&mut self, group_name: String, cx: &mut Context<Self>) {
+        if self.proxy_ui.testing_groups.contains_key(&group_name) {
+            return;
+        }
+        let Some(group) = self.groups.iter().find(|g| g.name == group_name) else {
+            return;
+        };
+        let url = group.test_url.clone();
+        let mut seen = std::collections::HashSet::new();
+        let nodes: Vec<String> = group
+            .nodes
+            .iter()
+            .filter(|n| !n.kind.eq_ignore_ascii_case("direct"))
+            .filter(|n| seen.insert(n.name.clone()))
+            .map(|n| n.name.clone())
+            .collect();
+        if nodes.is_empty() {
+            return;
+        }
+        self.test_nodes_batch(false, group_name, url, nodes, cx);
+    }
+
+    pub(super) fn test_provider(&mut self, provider_name: String, cx: &mut Context<Self>) {
+        if self.proxy_ui.testing_providers.contains_key(&provider_name) {
+            return;
+        }
+        let Some((_, item)) = self.providers.iter().find(|(k, _)| k == &provider_name) else {
+            return;
+        };
+        let url = item["testUrl"]
+            .as_str()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(&self.latency_test_url)
+            .to_owned();
+        let mut seen = std::collections::HashSet::new();
+        let nodes: Vec<String> = item["proxies"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|n| !n["type"].as_str().unwrap_or("").eq_ignore_ascii_case("direct"))
+            .filter_map(|n| n["name"].as_str())
+            .filter(|name| !name.is_empty() && seen.insert((*name).to_owned()))
+            .map(str::to_owned)
+            .collect();
+        if nodes.is_empty() {
+            return;
+        }
+        self.test_nodes_batch(true, provider_name, url, nodes, cx);
+    }
+
+    fn test_nodes_batch(
+        &mut self,
+        is_provider: bool,
+        target: String,
+        url: String,
+        nodes: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        const CONCURRENCY: usize = 8;
+        if !is_provider {
+            self.freeze_proxy_order(&target);
+        }
+        let total = nodes.len();
+        if is_provider {
+            self.proxy_ui.testing_providers.insert(target.clone(), (0, total));
+        } else {
+            self.proxy_ui.testing_groups.insert(target.clone(), (0, total));
+        }
+        for node in &nodes {
+            self.clear_node_delay(node);
+            self.proxy_ui.mark_node_testing(node);
+        }
+        let generation = self.generation;
+        let mut rx = self.api.test_nodes(nodes, url, self.ipv6, CONCURRENCY);
+        cx.spawn(async move |weak, cx| {
+            while let Some(res) = rx.recv().await {
+                let mut alive = false;
+                let _ = weak.update(cx, |this, cx| {
+                    if this.generation != generation {
+                        return;
+                    }
+                    alive = true;
+                    let name = res.name.clone();
+                    this.apply_delay_result(res);
+                    this.proxy_ui.unmark_node_testing(&name);
+                    let map = if is_provider {
+                        &mut this.proxy_ui.testing_providers
+                    } else {
+                        &mut this.proxy_ui.testing_groups
+                    };
+                    if let Some((done, _)) = map.get_mut(&target) {
+                        *done += 1;
+                    }
+                    cx.notify();
+                });
+                if !alive {
+                    break;
+                }
+            }
+            let _ = weak.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                if is_provider {
+                    this.proxy_ui.testing_providers.remove(&target);
+                } else {
+                    this.proxy_ui.testing_groups.remove(&target);
+                    this.release_proxy_order();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     fn apply(&mut self, action: Action, cx: &mut Context<Self>) {
@@ -1897,8 +2086,7 @@ impl Workspace {
                 self.generation += 1;
                 self.busy = false;
                 self.refreshing = false;
-                self.proxy_ui.testing = None;
-                self.proxy_ui.testing_nodes.clear();
+                self.proxy_ui.clear_testing();
                 self.show_providers = !self.show_providers;
                 if self.page == Page::Rules {
                     if let Some(filter) = &self.filter {

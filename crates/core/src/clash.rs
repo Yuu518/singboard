@@ -5,6 +5,23 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use url::Url;
 
+pub const DEFAULT_TEST_URL: &str = "https://www.gstatic.com/generate_204";
+
+pub fn resolve_test_url(url: &str) -> &str {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        DEFAULT_TEST_URL
+    } else {
+        trimmed
+    }
+}
+
+pub struct DelayResult {
+    pub name: String,
+    pub delay: u64,
+    pub ipv6: Option<bool>,
+}
+
 #[derive(Clone)]
 pub struct Clash {
     base: Url,
@@ -124,7 +141,7 @@ fn groups(response: Value) -> Result<Value, String> {
             test_url: proxy["testUrl"]
                 .as_str()
                 .filter(|url| !url.is_empty())
-                .unwrap_or("https://www.gstatic.com/generate_204")
+                .unwrap_or(DEFAULT_TEST_URL)
                 .into(),
             nodes,
         });
@@ -181,6 +198,16 @@ mod tests {
             "wss://example.org/clash/panel/logs?token=a%26b"
         );
         assert!(api.url(&["proxies", ".."]).is_err());
+    }
+
+    #[test]
+    fn resolves_empty_test_url_to_default() {
+        assert_eq!(resolve_test_url(""), DEFAULT_TEST_URL);
+        assert_eq!(resolve_test_url("   "), DEFAULT_TEST_URL);
+        assert_eq!(
+            resolve_test_url(" https://cp.cloudflare.com/generate_204 "),
+            "https://cp.cloudflare.com/generate_204"
+        );
     }
 }
 
@@ -394,7 +421,7 @@ impl Clash {
             Select { name, .. } => request.json(&json!({"name":name})),
             SetMode { mode } => request.json(&json!({"mode":mode})),
             Delay { url, .. } | GroupDelay { url, .. } => {
-                request.query(&[("url", url.as_str()), ("timeout", "5000")])
+                request.query(&[("url", resolve_test_url(url)), ("timeout", "5000")])
             }
             _ => request,
         };
@@ -432,5 +459,62 @@ impl Clash {
         } else {
             Ok(value)
         }
+    }
+
+    pub fn test_nodes(
+        &self,
+        nodes: Vec<String>,
+        url: String,
+        ipv6: bool,
+        concurrency: usize,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<DelayResult> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        if nodes.is_empty() {
+            return rx;
+        }
+        let workers = concurrency.max(1).min(nodes.len());
+        let queue = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::VecDeque::from(nodes),
+        ));
+        let url = resolve_test_url(&url).to_owned();
+        for _ in 0..workers {
+            let api = self.clone();
+            let queue = queue.clone();
+            let tx = tx.clone();
+            let url = url.clone();
+            crate::runtime().spawn(async move {
+                loop {
+                    if tx.is_closed() {
+                        break;
+                    }
+                    let next = queue.lock().ok().and_then(|mut q| q.pop_front());
+                    let Some(name) = next else {
+                        break;
+                    };
+                    let result = api
+                        .execute(Command::Delay {
+                            name: name.clone(),
+                            url: url.clone(),
+                            ipv6,
+                        })
+                        .await;
+                    let (delay, v6) = match result {
+                        Ok(data) => (data["delay"].as_u64().unwrap_or(0), data["ipv6"].as_bool()),
+                        Err(_) => (0, if ipv6 { Some(false) } else { None }),
+                    };
+                    if tx
+                        .send(DelayResult {
+                            name,
+                            delay,
+                            ipv6: v6,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
+        rx
     }
 }

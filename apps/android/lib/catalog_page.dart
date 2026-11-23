@@ -154,8 +154,23 @@ class _CatalogPageState extends State<CatalogPage> {
     });
   }
 
+  bool _groupHasTestingNode(String groupName) {
+    for (final g in items) {
+      if (g['name'] == groupName) {
+        final list = g['nodes'] as List? ?? const [];
+        return list.any((n) => n is Map && _isNodeTesting(n['name']?.toString() ?? ''));
+      }
+    }
+    return false;
+  }
+
   void _releaseOrder(String name) {
-    if (!_pointed.contains(name) && !_focused.contains(name) && !testingGroups.contains(name)) _frozenOrder.remove(name);
+    if (!_pointed.contains(name) &&
+        !_focused.contains(name) &&
+        !testingGroups.containsKey(name) &&
+        !_groupHasTestingNode(name)) {
+      _frozenOrder.remove(name);
+    }
   }
 
   void toggleGroup(String group) {
@@ -183,10 +198,34 @@ class _CatalogPageState extends State<CatalogPage> {
           duration: reduce ? Duration.zero : const Duration(milliseconds: 220), curve: Curves.easeOut);
     });
   }
-  final testingGroups = <String>{};
-  final testingNodes = <String>{};
-  final delays = <String, int>{};
+  final testingGroups = <String, (int, int)>{};
+  final testingProviders = <String, (int, int)>{};
+  final testingNodes = <String, int>{};
+  final delays = <String, int?>{};
   final v6Nodes = <String>{};
+  int testGeneration = 0;
+
+  bool _isNodeTesting(String name) => (testingNodes[name] ?? 0) > 0;
+
+  void _markNodeTesting(String name) {
+    testingNodes[name] = (testingNodes[name] ?? 0) + 1;
+  }
+
+  void _unmarkNodeTesting(String name) {
+    final count = testingNodes[name] ?? 0;
+    if (count <= 1) {
+      testingNodes.remove(name);
+    } else {
+      testingNodes[name] = count - 1;
+    }
+  }
+
+  void _resetTesting() {
+    testGeneration++;
+    testingGroups.clear();
+    testingProviders.clear();
+    testingNodes.clear();
+  }
   (String group, String prev)? undoSwitch;
   Timer? undoTimer;
   Timer? ruleTimer;
@@ -239,6 +278,15 @@ class _CatalogPageState extends State<CatalogPage> {
   @override
   void didUpdateWidget(CatalogPage old) {
     super.didUpdateWidget(old);
+    final endpointChanged =
+        widget.endpoint != old.endpoint || widget.secret != old.secret;
+    if (endpointChanged || widget.reconnectGeneration != old.reconnectGeneration) {
+      _resetTesting();
+      if (endpointChanged) {
+        delays.clear();
+        v6Nodes.clear();
+      }
+    }
     if (widget.enabled && !old.enabled) {
       load();
     } else if (widget.enabled &&
@@ -423,65 +471,159 @@ class _CatalogPageState extends State<CatalogPage> {
 
   Future<void> testGroup(Item group) async {
     final gName = group['name'].toString();
-    if (testingGroups.contains(gName)) return;
-    _holdOrder(group);
-    setState(() => testingGroups.add(gName));
-    try {
-      final value = await clashRequest(widget.endpoint, widget.secret, 'group_delay', {
-        'name': gName,
-        'url': group['test_url'] ?? '',
-        'ipv6': widget.preferences['ipv6TestEnabled'] == true,
-      });
-      if (!mounted) return;
-      setState(() {
-        final lats = ((value['latencies'] ?? value) as Map).cast<String, dynamic>();
-        for (final e in lats.entries) {
-          if (e.value is num) delays[e.key] = (e.value as num).toInt();
-        }
-        final v6Map = value['ipv6'] as Map?;
-        if (v6Map != null) {
-          for (final e in v6Map.entries) {
-            if ((e.value as num? ?? 0) > 0) {
-              v6Nodes.add(e.key.toString());
-            } else {
-              v6Nodes.remove(e.key.toString());
-            }
-          }
-        }
-      });
-    } catch (e) {
-      if (mounted) {
-        showGlassToast(context, '测速失败：$e');
-      }
-    } finally {
-      if (mounted) setState(() { testingGroups.remove(gName); _releaseOrder(gName); });
+    if (testingGroups.containsKey(gName)) return;
+    final rawNodes = (group['nodes'] as List? ?? []).cast<Item>();
+    final seen = <String>{};
+    final nodes = <String>[];
+    for (final n in rawNodes) {
+      if (n['kind']?.toString().toLowerCase() == 'direct') continue;
+      final name = n['name']?.toString() ?? '';
+      if (name.isNotEmpty && seen.add(name)) nodes.add(name);
     }
+    if (nodes.isEmpty) return;
+    _holdOrder(group);
+    await _testNodesBatch(
+      isProvider: false,
+      target: gName,
+      url: group['test_url']?.toString() ?? '',
+      nodes: nodes,
+    );
   }
 
-  Future<void> testNode(String testUrl, String nodeName) async {
-    if (testingNodes.contains(nodeName)) return;
-    setState(() => testingNodes.add(nodeName));
+  Future<void> testProvider(Item item) async {
+    final name = item['name'].toString();
+    if (testingProviders.containsKey(name)) return;
+    final rawNodes = (item['proxies'] as List? ?? []).cast<Item>();
+    final seen = <String>{};
+    final nodes = <String>[];
+    for (final n in rawNodes) {
+      if (n['type']?.toString().toLowerCase() == 'direct') continue;
+      final nName = n['name']?.toString() ?? '';
+      if (nName.isNotEmpty && seen.add(nName)) nodes.add(nName);
+    }
+    if (nodes.isEmpty) return;
+    final rawUrl = item['testUrl']?.toString().trim() ?? '';
+    final url = rawUrl.isNotEmpty
+        ? rawUrl
+        : (widget.preferences['latencyTestUrl']?.toString() ?? '');
+    await _testNodesBatch(
+      isProvider: true,
+      target: name,
+      url: url,
+      nodes: nodes,
+    );
+  }
+
+  Future<void> _testNodesBatch({
+    required bool isProvider,
+    required String target,
+    required String url,
+    required List<String> nodes,
+  }) async {
+    const concurrency = 8;
+    final runGen = testGeneration;
+    final ipv6 = widget.preferences['ipv6TestEnabled'] == true;
+    setState(() {
+      if (isProvider) {
+        testingProviders[target] = (0, nodes.length);
+      } else {
+        testingGroups[target] = (0, nodes.length);
+      }
+      for (final node in nodes) {
+        delays[node] = null;
+        v6Nodes.remove(node);
+        _markNodeTesting(node);
+      }
+    });
+    var cursor = 0;
+    final workers = nodes.length < concurrency ? nodes.length : concurrency;
+    Future<void> worker() async {
+      while (mounted && runGen == testGeneration) {
+        if (cursor >= nodes.length) break;
+        final nodeName = nodes[cursor++];
+        var delay = 0;
+        bool? v6 = ipv6 ? false : null;
+        try {
+          final value = await clashRequest(widget.endpoint, widget.secret, 'delay', {
+            'name': nodeName,
+            'url': url,
+            'ipv6': ipv6,
+          });
+          if (value is Map) {
+            if (value['delay'] case final num d) delay = d.toInt();
+            if (value['ipv6'] case final bool b) v6 = b;
+          }
+        } catch (_) {}
+        if (!mounted || runGen != testGeneration) break;
+        setState(() {
+          delays[nodeName] = delay;
+          if (v6 == true) {
+            v6Nodes.add(nodeName);
+          } else if (v6 == false) {
+            v6Nodes.remove(nodeName);
+          }
+          _unmarkNodeTesting(nodeName);
+          final map = isProvider ? testingProviders : testingGroups;
+          final current = map[target];
+          if (current != null) map[target] = (current.$1 + 1, current.$2);
+        });
+      }
+    }
+
+    await Future.wait(List.generate(workers, (_) => worker()));
+    if (!mounted || runGen != testGeneration) return;
+    setState(() {
+      if (isProvider) {
+        testingProviders.remove(target);
+      } else {
+        testingGroups.remove(target);
+        _releaseOrder(target);
+      }
+    });
+  }
+
+  Future<void> testNode(String testUrl, String nodeName, {Item? group}) async {
+    if (_isNodeTesting(nodeName)) return;
+    final runGen = testGeneration;
+    final ipv6 = widget.preferences['ipv6TestEnabled'] == true;
+    if (group != null && sortByLatency) _holdOrder(group);
+    setState(() {
+      delays[nodeName] = null;
+      v6Nodes.remove(nodeName);
+      _markNodeTesting(nodeName);
+    });
     try {
       final value = await clashRequest(widget.endpoint, widget.secret, 'delay', {
         'name': nodeName,
         'url': testUrl,
-        'ipv6': widget.preferences['ipv6TestEnabled'] == true,
+        'ipv6': ipv6,
       });
-      if (!mounted) return;
+      if (!mounted || runGen != testGeneration) return;
       setState(() {
-        if (value['delay'] case final num d) delays[nodeName] = d.toInt();
-        if (value['ipv6'] == true) {
+        final d = value is Map && value['delay'] is num
+            ? (value['delay'] as num).toInt()
+            : 0;
+        delays[nodeName] = d;
+        if (value is Map && value['ipv6'] == true) {
           v6Nodes.add(nodeName);
-        } else {
+        } else if (ipv6) {
           v6Nodes.remove(nodeName);
         }
       });
     } catch (_) {
-      if (mounted) {
-        setState(() => delays[nodeName] = 0);
+      if (mounted && runGen == testGeneration) {
+        setState(() {
+          delays[nodeName] = 0;
+          if (ipv6) v6Nodes.remove(nodeName);
+        });
       }
     } finally {
-      if (mounted) setState(() => testingNodes.remove(nodeName));
+      if (mounted && runGen == testGeneration) {
+        setState(() {
+          _unmarkNodeTesting(nodeName);
+          if (group != null) _releaseOrder(group['name'].toString());
+        });
+      }
     }
   }
 
@@ -580,7 +722,12 @@ class _CatalogPageState extends State<CatalogPage> {
     return c.error;
   }
 
-  (Color bg, Color fg) _latencyBadge(int? delay, SingboardColors c) {
+  (Color bg, Color fg) _latencyBadge(
+    int? delay,
+    SingboardColors c, {
+    bool testing = false,
+  }) {
+    if (testing) return (c.primarySoft, c.selectionInk);
     if (delay == null) return (c.fill, c.muted);
     if (delay == 0) return (c.dangerSoft, c.dangerInk);
     if (delay < 300) return (c.successSoft, c.successInk);
@@ -717,7 +864,13 @@ class _CatalogPageState extends State<CatalogPage> {
     return buf.toString();
   }
 
-  Widget _buildDot(int? delay, bool selected, SingboardColors c, {VoidCallback? onTap}) {
+  Widget _buildDot(
+    int? delay,
+    bool selected,
+    SingboardColors c, {
+    bool testing = false,
+    VoidCallback? onTap,
+  }) {
     final fill = _dotFill(delay, c);
     final failed = delay == 0;
     return GestureDetector(
@@ -729,7 +882,10 @@ class _CatalogPageState extends State<CatalogPage> {
           shape: BoxShape.circle,
           color: fill ?? Colors.transparent,
           border: fill == null
-              ? Border.all(color: c.muted.withValues(alpha: 0.55), width: 1.2)
+              ? Border.all(
+                  color: testing ? c.primary : c.muted.withValues(alpha: 0.55),
+                  width: testing ? 1.5 : 1.2,
+                )
               : (selected && failed
                   ? Border.all(color: c.ink.withValues(alpha: 0.75), width: 1.8)
                   : null),
@@ -757,7 +913,7 @@ class _CatalogPageState extends State<CatalogPage> {
     final now = group['now']?.toString() ?? '';
     final selectable = gKind.toLowerCase() == 'selector';
     final isOpen = query.isEmpty ? expanded.contains(gName) : !collapsedSearch.contains(gName);
-    final isTesting = testingGroups.contains(gName);
+    final groupProgress = testingGroups[gName];
     final rawNodes = (group['nodes'] as List? ?? []).cast<Item>();
     final wholeMatch = query.isEmpty || gName.toLowerCase().contains(query);
     var nodes = rawNodes
@@ -775,10 +931,11 @@ class _CatalogPageState extends State<CatalogPage> {
     }
     final nowNode = rawNodes.where((n) => n['name'] == now).firstOrNull;
     final nowDelay = nowNode == null ? null : _delayOf(nowNode);
+    final nowTesting = _isNodeTesting(now);
     final showNowBadge = now.isNotEmpty &&
         ((nowDelay != null && nowDelay > 0) ||
             (nowNode?['kind']?.toString().toLowerCase() != 'direct'));
-    final (nowBg, nowFg) = _latencyBadge(nowDelay, c);
+    final (nowBg, nowFg) = _latencyBadge(nowDelay, c, testing: nowTesting);
     final ipv6Enabled = widget.preferences['ipv6TestEnabled'] == true;
     final spd = widget.chainSpeeds[gName];
     final dlSpd = spd is List && spd.isNotEmpty ? (spd[0] as num).toInt() : 0;
@@ -848,7 +1005,7 @@ class _CatalogPageState extends State<CatalogPage> {
                               const SizedBox(width: 6),
                               _buildLatencyBadge(
                                 nowDelay,
-                                testingNodes.contains(now),
+                                nowTesting,
                                 nowBg,
                                 nowFg,
                                 verticalPadding: 2,
@@ -886,6 +1043,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                   _delayOf(node),
                                   node['name'] == now,
                                   c,
+                                  testing: _isNodeTesting(node['name'].toString()),
                                   onTap: selectable
                                       ? () => selectNode(group, node['name'].toString())
                                       : null,
@@ -900,20 +1058,51 @@ class _CatalogPageState extends State<CatalogPage> {
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      GestureDetector(
-                        onTap: isTesting ? null : () => testGroup(group),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                          child: Text(
-                            isTesting ? '测速中' : '延迟测试',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                              color: isTesting ? c.muted : c.ink,
+                      if (groupProgress != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: c.primarySoft,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox.square(
+                                dimension: 11,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.6,
+                                  color: c.selectionInk,
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                '测速中 ${groupProgress.$1}/${groupProgress.$2}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: c.selectionInk,
+                                  fontFeatures: const [FontFeature.tabularFigures()],
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      else
+                        GestureDetector(
+                          onTap: () => testGroup(group),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                            child: Text(
+                              '延迟测试',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: c.ink,
+                              ),
                             ),
                           ),
                         ),
-                      ),
                       const SizedBox(height: 2),
                       Visibility(
                         visible: hasSpeed,
@@ -963,10 +1152,10 @@ class _CatalogPageState extends State<CatalogPage> {
                     final assignKey = selected && !selectedKeyAssigned;
                     if (assignKey) selectedKeyAssigned = true;
                     final delay = _delayOf(node);
-                    final testing = testingNodes.contains(nName);
+                    final testing = _isNodeTesting(nName);
                     final showLat = (delay != null && delay > 0) ||
                         (node['kind']?.toString().toLowerCase() != 'direct');
-                    final (latBg, latFg) = _latencyBadge(delay, c);
+                    final (latBg, latFg) = _latencyBadge(delay, c, testing: testing);
                     final isV6 = ipv6Enabled && v6Nodes.contains(nName);
                     return GestureDetector(
                       key: assignKey ? selectedTiles.putIfAbsent(gName, GlobalKey.new) : null,
@@ -984,10 +1173,10 @@ class _CatalogPageState extends State<CatalogPage> {
                                   : const Color(0x38FFFFFF)),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: selected
+                            color: selected || testing
                                 ? c.selectionBorder
                                 : c.hairline,
-                            width: selected ? 1 : 0.5,
+                            width: selected || testing ? 1 : 0.5,
                           ),
                         ),
                         child: Column(
@@ -1031,6 +1220,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                         : () => testNode(
                                               group['test_url']?.toString() ?? '',
                                               nName,
+                                              group: group,
                                             ),
                                     child: _buildLatencyBadge(
                                       delay,
@@ -1085,7 +1275,12 @@ class _CatalogPageState extends State<CatalogPage> {
     final total = (sub?['Total'] as num?)?.toInt() ?? 0;
     final used = ((sub?['Download'] as num?)?.toInt() ?? 0) +
         ((sub?['Upload'] as num?)?.toInt() ?? 0);
-    final testUrl = widget.preferences['latencyTestUrl']?.toString() ?? '';
+    final rawTestUrl = item['testUrl']?.toString().trim() ?? '';
+    final testUrl = rawTestUrl.isNotEmpty
+        ? rawTestUrl
+        : (widget.preferences['latencyTestUrl']?.toString() ?? '');
+    final providerProgress = testingProviders[name];
+    final ipv6Enabled = widget.preferences['ipv6TestEnabled'] == true;
 
     return GlassCard(
       radius: 18,
@@ -1157,7 +1352,12 @@ class _CatalogPageState extends State<CatalogPage> {
                             runSpacing: 6,
                             children: [
                               for (final node in nodes)
-                                _buildDot(_delayOf(node), false, c),
+                                _buildDot(
+                                  _delayOf(node),
+                                  false,
+                                  c,
+                                  testing: _isNodeTesting(node['name'].toString()),
+                                ),
                             ],
                           ),
                         ],
@@ -1167,11 +1367,43 @@ class _CatalogPageState extends State<CatalogPage> {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      IconButton(
-                        tooltip: '健康检查',
-                        icon: PanelIcon('bolt', size: 18, color: c.muted),
-                        onPressed: updating ? null : () => providerAction(item, 'health_check'),
-                      ),
+                      if (providerProgress != null)
+                        Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: c.primarySoft,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox.square(
+                                dimension: 12,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.6,
+                                  color: c.selectionInk,
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                '${providerProgress.$1}/${providerProgress.$2}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: c.selectionInk,
+                                  fontFeatures: const [FontFeature.tabularFigures()],
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      else
+                        IconButton(
+                          tooltip: '健康检查',
+                          icon: PanelIcon('bolt', size: 18, color: c.muted),
+                          onPressed: () => testProvider(item),
+                        ),
                       if (vehicle.toLowerCase() != 'inline')
                         IconButton(
                           tooltip: '更新',
@@ -1199,47 +1431,63 @@ class _CatalogPageState extends State<CatalogPage> {
                   Widget buildTile(Item node) {
                     final nName = node['name'].toString();
                     final delay = _delayOf(node);
-                    final testing = testingNodes.contains(nName);
-                    final (latBg, latFg) = _latencyBadge(delay, c);
-                    return Container(
-                      height: tileHeight,
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: c.dark
-                            ? const Color(0x14FFFFFF)
-                            : const Color(0x38FFFFFF),
+                    final testing = _isNodeTesting(nName);
+                    final (latBg, latFg) = _latencyBadge(delay, c, testing: testing);
+                    final isV6 = ipv6Enabled && v6Nodes.contains(nName);
+                    return Material(
+                      color: Colors.transparent,
+                      borderRadius: BorderRadius.circular(12),
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: c.hairline, width: 0.5),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              nName,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(fontSize: 14, height: 1.2, color: c.ink),
+                        onTap: testing ? null : () => testNode(testUrl, nName),
+                        child: Container(
+                          height: tileHeight,
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: c.dark
+                                ? const Color(0x14FFFFFF)
+                                : const Color(0x38FFFFFF),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: testing ? c.selectionBorder : c.hairline,
+                              width: testing ? 1 : 0.5,
                             ),
                           ),
-                          const SizedBox(height: 4),
-                          Row(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Expanded(
                                 child: Text(
-                                  _formatType(node, false),
-                                  maxLines: 1,
+                                  nName,
+                                  maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(fontSize: 12, color: c.muted),
+                                  style: TextStyle(fontSize: 14, height: 1.2, color: c.ink),
                                 ),
                               ),
-                              GestureDetector(
-                                onTap: testing ? null : () => testNode(testUrl, nName),
-                                child: _buildLatencyBadge(delay, testing, latBg, latFg),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      _formatType(node, isV6),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(fontSize: 12, color: c.muted),
+                                    ),
+                                  ),
+                                  _buildLatencyBadge(
+                                    delay,
+                                    testing,
+                                    latBg,
+                                    latFg,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ],
                               ),
                             ],
                           ),
-                        ],
+                        ),
                       ),
                     );
                   }
