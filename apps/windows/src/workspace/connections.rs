@@ -856,15 +856,72 @@ impl Workspace {
                 let mut traffic = vec![("下载总量", fmt_bytes(r["download"].as_u64().unwrap_or(0))), ("上传总量", fmt_bytes(r["upload"].as_u64().unwrap_or(0)))];
                 if open { traffic.extend([("下载速度", format!("{}/s",fmt_bytes(r["downloadSpeed"].as_u64().unwrap_or(0)))),
                     ("上传速度",format!("{}/s",fmt_bytes(r["uploadSpeed"].as_u64().unwrap_or(0))))]); }
-                let header = div().flex().items_center().justify_between().gap_2()
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).truncate().child(format!("{}{}",dashboard::host(r),if open { "" } else { "  已关闭" })))
-                    .child(dialog::keyboard_action(div().id("conn-detail-close").cursor_pointer().p_2().child(svg().path("close-detail").size(px(12.)).text_color(palette.muted()))
-                        .on_click(cx.listener(|this,_,_,cx| this.apply(Action::Dismiss,cx))), Action::Dismiss, cx));
+                let header = div()
+                    .flex_none()
+                    .pl_5()
+                    .pr_4()
+                    .pt_4()
+                    .pb_3()
+                    .border_b_1()
+                    .border_color(palette.line())
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_lg()
+                            .font_weight(FontWeight::BOLD)
+                            .truncate()
+                            .child(dashboard::host(r).to_owned()),
+                    )
+                    .when(!open, |el| {
+                        el.child(
+                            div()
+                                .flex_none()
+                                .px(px(8.))
+                                .py(px(2.))
+                                .rounded_full()
+                                .bg(palette.fill())
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(palette.muted())
+                                .child("已关闭"),
+                        )
+                    })
+                    .child(dialog::keyboard_action(
+                        div()
+                            .id("conn-detail-close")
+                            .flex_none()
+                            .size(px(28.))
+                            .rounded_full()
+                            .bg(palette.fill())
+                            .hover(|s| s.bg(palette.fill_strong()))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .child(
+                                svg()
+                                    .path("close-detail")
+                                    .size(px(12.))
+                                    .text_color(palette.muted()),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.apply(Action::Dismiss, cx))),
+                        Action::Dismiss,
+                        cx,
+                    ));
                 let mut body = div()
                     .relative()
                     .top(self.overscroll_offset(scrolling::ScrollTarget::ConnDetail))
+                    .flex_none()
                     .w_full()
+                    .h_auto()
                     .min_h_full()
+                    .pl_5()
+                    .pr(px(24.))
+                    .py_4()
                     .flex()
                     .flex_col()
                     .gap_4()
@@ -906,23 +963,40 @@ impl Workspace {
                     .flex_1()
                     .min_h_0()
                     .w_full()
+                    .flex()
+                    .flex_col()
                     .overflow_hidden()
                     .child(
                         div()
                             .id("conn-detail-body")
-                            .size_full()
+                            .flex_1()
+                            .min_h_0()
+                            .w_full()
+                            .flex()
+                            .flex_col()
                             .overflow_y_scroll()
                             .track_scroll(&self.conn_detail_scroll)
                             .child(body.child(section("流量信息", traffic))),
                     )
                     .vertical_scrollbar(&self.conn_detail_scroll);
-                let footer = div().flex().justify_end().gap_2().when(open, |el| {
-                    let id = field(r, "id");
-                    el.child(self.button("conn-detail-disconnect", "断开连接", Action::Run(Command::Disconnect { id }), cx)
-                        .text_color(palette.danger()).bg(palette.danger_soft()))
-                }).child(self.button("conn-done","完成",Action::Dismiss,cx));
+                let footer = div()
+                    .flex_none()
+                    .px_5()
+                    .py_3()
+                    .border_t_1()
+                    .border_color(palette.line())
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_2()
+                    .when(open, |el| {
+                        let id = field(r, "id");
+                        el.child(self.button("conn-detail-disconnect", "断开连接", Action::Run(Command::Disconnect { id }), cx)
+                            .text_color(palette.danger()).bg(palette.danger_soft()))
+                    })
+                    .child(self.button("conn-done", "完成", Action::Dismiss, cx));
                 el.child(dialog::surface("conn-details-pop", self.page_dialog("conn-details", Action::Dismiss, cx), popover_card(palette, tint)
-                    .id("conn-dialog-card").w(px(672.)).max_w_full().max_h(px(modal_height)).p_5().gap_3().flex().flex_col()
+                    .id("conn-dialog-card").w(px(672.)).max_w_full().max_h(px(modal_height)).flex().flex_col()
                     .on_click(|_,_,cx| cx.stop_propagation()).child(header).child(body_pane).child(footer), 672., leaving, cx))
             })
             .when_some(confirm, |el, cmd| {

@@ -431,39 +431,74 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
             ),
             child: GlassCard(
               popover: true,
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
+              padding: EdgeInsets.zero,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          host(row),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: c.ink,
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 14, 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            host(row),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: c.ink,
+                            ),
                           ),
                         ),
-                      ),
-                      if (!open) Text('已关闭', style: TextStyle(color: c.muted)),
-                      IconButton(
-                        tooltip: '关闭详情',
-                        icon: PanelIcon(
-                          'close-detail',
-                          size: 12,
-                          color: c.muted,
+                        if (!open) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: c.fill,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              '已关闭',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: c.muted,
+                              ),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: '关闭详情',
+                          constraints: const BoxConstraints.tightFor(
+                            width: 32,
+                            height: 32,
+                          ),
+                          padding: EdgeInsets.zero,
+                          style: IconButton.styleFrom(
+                            backgroundColor: c.fill,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: PanelIcon(
+                            'close-detail',
+                            size: 12,
+                            color: c.muted,
+                          ),
+                          onPressed: () => Navigator.pop(ctx),
                         ),
-                        onPressed: () => Navigator.pop(ctx),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
+                  Container(height: 0.75, color: c.hairline),
                   Flexible(
                     child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -573,27 +608,31 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                       ),
                     ),
                   ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      if (open)
-                        TextButton(
-                          onPressed: busy
-                              ? null
-                              : () {
-                                  Navigator.pop(ctx);
-                                  disconnect([row]);
-                                },
-                          child: Text(
-                            '断开连接',
-                            style: TextStyle(color: c.dangerInk),
+                  Container(height: 0.75, color: c.hairline),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        if (open)
+                          TextButton(
+                            onPressed: busy
+                                ? null
+                                : () {
+                                    Navigator.pop(ctx);
+                                    disconnect([row]);
+                                  },
+                            child: Text(
+                              '断开连接',
+                              style: TextStyle(color: c.dangerInk),
+                            ),
                           ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('完成'),
                         ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text('完成'),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ],
               ),
