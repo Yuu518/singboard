@@ -33,7 +33,7 @@ pub fn configure(
         singboard_service::params::write_panel_sid(service, user_sid)?;
         if start || was_running {
             if let Some(at) = stopped_at
-                && let Some(rem) = std::time::Duration::from_millis(800).checked_sub(at.elapsed())
+                && let Some(rem) = std::time::Duration::from_millis(1500).checked_sub(at.elapsed())
             {
                 std::thread::sleep(rem);
             }

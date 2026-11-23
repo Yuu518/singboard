@@ -251,7 +251,7 @@ pub fn start_service(service_name: &str) -> Result<(), String> {
             }
         }
 
-        for _ in 0..180 {
+        for _ in 0..240 {
             thread::sleep(Duration::from_millis(250));
             let mut status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
             let mut bytes_needed: u32 = 0;
@@ -380,7 +380,7 @@ pub fn stop_service(service_name: &str) -> Result<(), String> {
         }
 
         let mut stopped = false;
-        for _ in 0..30 {
+        for _ in 0..50 {
             thread::sleep(Duration::from_millis(500));
             let mut bytes_needed: u32 = 0;
             let mut proc_status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
