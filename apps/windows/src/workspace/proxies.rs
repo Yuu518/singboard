@@ -1663,3 +1663,110 @@ impl Workspace {
             .child(self.scroll_pane("proxy-groups", list, cx))
     }
 }
+
+pub(super) fn linked_proxy_names(
+    groups: &[singboard_core::clash::Group],
+    name: &str,
+) -> Vec<String> {
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    let mut result = Vec::new();
+    if visited.insert(name.to_owned()) {
+        queue.push_back(name.to_owned());
+        result.push(name.to_owned());
+    }
+    let mut cur = name.to_owned();
+    while let Some(g) = groups.iter().find(|g| g.name == cur) {
+        if g.now.is_empty() || !visited.insert(g.now.clone()) {
+            break;
+        }
+        queue.push_back(g.now.clone());
+        result.push(g.now.clone());
+        cur = g.now.clone();
+    }
+    while let Some(target) = queue.pop_front() {
+        for g in groups {
+            if g.now == target && visited.insert(g.name.clone()) {
+                queue.push_back(g.name.clone());
+                result.push(g.name.clone());
+            }
+        }
+    }
+    result
+}
+
+pub(super) fn ancestor_group_names(
+    groups: &[singboard_core::clash::Group],
+    group_name: &str,
+) -> Vec<String> {
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    let mut result = Vec::new();
+    if visited.insert(group_name.to_owned()) {
+        queue.push_back(group_name.to_owned());
+        result.push(group_name.to_owned());
+    }
+    while let Some(target) = queue.pop_front() {
+        for g in groups {
+            if g.now == target && visited.insert(g.name.clone()) {
+                queue.push_back(g.name.clone());
+                result.push(g.name.clone());
+            }
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ancestor_group_names, linked_proxy_names};
+    use singboard_core::clash::Group;
+
+    fn group(name: &str, now: &str) -> Group {
+        Group {
+            name: name.into(),
+            kind: "Selector".into(),
+            now: now.into(),
+            nodes: Vec::new(),
+            test_url: String::new(),
+        }
+    }
+
+    #[test]
+    fn linked_proxy_names_propagates_up_and_down_nested_groups() {
+        let groups = vec![
+            group("Global", "Proxy"),
+            group("Proxy", "Premium-JP"),
+            group("Premium-JP", "TYO(Softbank)"),
+            group("Backup", "TYO(Softbank)"),
+            group("Other", "HK"),
+        ];
+        let from_leaf = linked_proxy_names(&groups, "TYO(Softbank)");
+        assert!(from_leaf.contains(&"TYO(Softbank)".to_owned()));
+        assert!(from_leaf.contains(&"Premium-JP".to_owned()));
+        assert!(from_leaf.contains(&"Proxy".to_owned()));
+        assert!(from_leaf.contains(&"Global".to_owned()));
+        assert!(from_leaf.contains(&"Backup".to_owned()));
+        assert!(!from_leaf.contains(&"Other".to_owned()));
+
+        let from_mid = linked_proxy_names(&groups, "Premium-JP");
+        assert!(from_mid.contains(&"TYO(Softbank)".to_owned()));
+        assert!(from_mid.contains(&"Proxy".to_owned()));
+        assert!(from_mid.contains(&"Global".to_owned()));
+        assert!(from_mid.contains(&"Backup".to_owned()));
+
+        assert_eq!(
+            linked_proxy_names(&groups, "TYO(IX-Softbank)"),
+            vec!["TYO(IX-Softbank)".to_owned()]
+        );
+    }
+
+    #[test]
+    fn linked_and_ancestor_names_handle_cycles() {
+        let groups = vec![group("A", "B"), group("B", "A")];
+        let linked = linked_proxy_names(&groups, "A");
+        assert_eq!(linked.len(), 2);
+        let ancestors = ancestor_group_names(&groups, "A");
+        assert_eq!(ancestors.len(), 2);
+    }
+}

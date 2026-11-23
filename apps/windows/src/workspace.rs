@@ -1760,7 +1760,11 @@ impl Workspace {
                                 this.providers.clear()
                             }
                             Command::Delay { name, .. } => {
-                                this.set_node_delay(name, Some(0));
+                                this.sync_linked_delay(
+                                    name,
+                                    Some(0),
+                                    this.ipv6.then_some(false),
+                                );
                             }
                             Command::Disconnect { id } => this.conn_ui.unmark_closing(std::iter::once(id.as_str())),
                             Command::DisconnectMany { ids } => this.conn_ui.unmark_closing(ids.iter().map(String::as_str)),
@@ -1788,37 +1792,38 @@ impl Workspace {
                                 .unwrap_or_default()
                         }
                         Command::Delay { name, .. } => {
-                            if let Some(v) = data["ipv6"].as_bool() {
-                                if v {
-                                    this.ipv6_nodes.insert(name.clone());
-                                } else {
-                                    this.ipv6_nodes.remove(&name);
-                                }
-                            }
-                            this.set_node_delay(&name, data["delay"].as_u64());
+                            this.sync_linked_delay(
+                                &name,
+                                data["delay"].as_u64(),
+                                data["ipv6"].as_bool(),
+                            );
                         }
                         Command::GroupDelay { .. } => {
-                            if let Some(nodes) = data["ipv6"].as_object() {
-                                for (k, v) in nodes {
-                                    if v.as_u64().unwrap_or(0) > 0 {
-                                        this.ipv6_nodes.insert(k.clone());
-                                    } else {
-                                        this.ipv6_nodes.remove(k);
-                                    }
-                                }
-                            }
-                            let data = data.get("latencies").unwrap_or(&data);
-                            for node in this.groups.iter_mut().flat_map(|g| &mut g.nodes) {
-                                if let Some(delay) = data[&node.name].as_u64() {
-                                    node.delay = Some(delay);
-                                }
+                            let ipv6_map = data["ipv6"].as_object().cloned();
+                            let latencies = data.get("latencies").unwrap_or(&data);
+                            let updates: Vec<(String, u64, Option<bool>)> = latencies
+                                .as_object()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|(name, value)| {
+                                    let delay = value.as_u64()?;
+                                    let ipv6 = ipv6_map
+                                        .as_ref()
+                                        .and_then(|m| m.get(name))
+                                        .map(|v| v.as_u64().unwrap_or(0) > 0);
+                                    Some((name.clone(), delay, ipv6))
+                                })
+                                .collect();
+                            for (name, delay, ipv6) in updates {
+                                this.sync_linked_delay(&name, Some(delay), ipv6);
                             }
                         }
                         Command::Select { group, name } => {
                             if let Some(g) = this.groups.iter_mut().find(|g| g.name == group) {
-                                let old = std::mem::replace(&mut g.now, name);
-                                this.undo = Some((group, old, std::time::Instant::now()));
+                                let old = std::mem::replace(&mut g.now, name.clone());
+                                this.undo = Some((group.clone(), old, std::time::Instant::now()));
                             }
+                            this.sync_group_selection_delay(&group, &name);
                             this.schedule_proxy_recheck(cx);
                             this.refresh(cx);
                         }
@@ -1903,15 +1908,43 @@ impl Workspace {
         self.ipv6_nodes.remove(name);
     }
 
-    fn apply_delay_result(&mut self, res: singboard_core::clash::DelayResult) {
-        if let Some(v) = res.ipv6 {
-            if v {
-                self.ipv6_nodes.insert(res.name.clone());
-            } else {
-                self.ipv6_nodes.remove(&res.name);
+    fn sync_linked_delay(&mut self, name: &str, delay: Option<u64>, ipv6: Option<bool>) {
+        let targets = proxies::linked_proxy_names(&self.groups, name);
+        for target in targets {
+            if let Some(v) = ipv6 {
+                if v {
+                    self.ipv6_nodes.insert(target.clone());
+                } else {
+                    self.ipv6_nodes.remove(&target);
+                }
             }
+            self.set_node_delay(&target, delay);
         }
-        self.set_node_delay(&res.name, Some(res.delay));
+    }
+
+    fn sync_group_selection_delay(&mut self, group_name: &str, selected_name: &str) {
+        let delay = self
+            .groups
+            .iter()
+            .find(|g| g.name == group_name)
+            .and_then(|g| g.nodes.iter().find(|n| n.name == selected_name))
+            .and_then(|n| n.delay);
+        let ipv6 = self.ipv6.then(|| self.ipv6_nodes.contains(selected_name));
+        let ancestors = proxies::ancestor_group_names(&self.groups, group_name);
+        for target in ancestors {
+            if let Some(v) = ipv6 {
+                if v {
+                    self.ipv6_nodes.insert(target.clone());
+                } else {
+                    self.ipv6_nodes.remove(&target);
+                }
+            }
+            self.set_node_delay(&target, delay);
+        }
+    }
+
+    fn apply_delay_result(&mut self, res: singboard_core::clash::DelayResult) {
+        self.sync_linked_delay(&res.name, Some(res.delay), res.ipv6);
     }
 
     pub(super) fn test_node(
@@ -1957,10 +1990,7 @@ impl Workspace {
                         });
                     }
                     Err(_) => {
-                        if ipv6 {
-                            this.ipv6_nodes.remove(&name);
-                        }
-                        this.set_node_delay(&name, Some(0));
+                        this.sync_linked_delay(&name, Some(0), ipv6.then_some(false));
                     }
                 }
                 this.release_proxy_order();

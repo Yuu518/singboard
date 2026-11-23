@@ -421,6 +421,9 @@ class _CatalogPageState extends State<CatalogPage> {
       if (!mounted || revision != generation) return;
       setState(() {
         items = next;
+        if (widget.proxies) {
+          delays.removeWhere((k, _) => !_isNodeTesting(k));
+        }
         providerItems = nextProviders;
         providersAvailable = providerApiReady;
         if (!providersAvailable) providers = false;
@@ -538,6 +541,7 @@ class _CatalogPageState extends State<CatalogPage> {
       if (!mounted) return;
       setState(() {
         group['now'] = nodeName;
+        _syncGroupSelectionDelay(group, nodeName);
         undoTimer?.cancel();
         if (undoable && prev.isNotEmpty) {
           undoSwitch = (gName, prev);
@@ -643,12 +647,7 @@ class _CatalogPageState extends State<CatalogPage> {
         } catch (_) {}
         if (!mounted || runGen != testGeneration) break;
         setState(() {
-          delays[nodeName] = delay;
-          if (v6 == true) {
-            v6Nodes.add(nodeName);
-          } else if (v6 == false) {
-            v6Nodes.remove(nodeName);
-          }
+          _recordDelay(nodeName, delay, ipv6: v6);
           _unmarkNodeTesting(nodeName);
           final map = isProvider ? testingProviders : testingGroups;
           final current = map[target];
@@ -690,18 +689,15 @@ class _CatalogPageState extends State<CatalogPage> {
         final d = value is Map && value['delay'] is num
             ? (value['delay'] as num).toInt()
             : 0;
-        delays[nodeName] = d;
-        if (value is Map && value['ipv6'] == true) {
-          v6Nodes.add(nodeName);
-        } else if (ipv6) {
-          v6Nodes.remove(nodeName);
-        }
+        final v6 = value is Map && value['ipv6'] == true
+            ? true
+            : (ipv6 ? false : null);
+        _recordDelay(nodeName, d, ipv6: v6);
       });
     } catch (_) {
       if (mounted && runGen == testGeneration) {
         setState(() {
-          delays[nodeName] = 0;
-          if (ipv6) v6Nodes.remove(nodeName);
+          _recordDelay(nodeName, 0, ipv6: ipv6 ? false : null);
         });
       }
     } finally {
@@ -710,6 +706,101 @@ class _CatalogPageState extends State<CatalogPage> {
           _unmarkNodeTesting(nodeName);
           if (group != null) _releaseOrder(group['name'].toString());
         });
+      }
+    }
+  }
+
+  List<String> _linkedProxyNames(String name) {
+    final visited = <String>{name};
+    final queue = <String>[name];
+    final result = <String>[name];
+    if (!widget.proxies) return result;
+    var cur = name;
+    while (true) {
+      Item? found;
+      for (final g in items) {
+        if (g['name']?.toString() == cur) {
+          found = g;
+          break;
+        }
+      }
+      if (found == null) break;
+      final now = found['now']?.toString() ?? '';
+      if (now.isEmpty || !visited.add(now)) break;
+      queue.add(now);
+      result.add(now);
+      cur = now;
+    }
+    var idx = 0;
+    while (idx < queue.length) {
+      final target = queue[idx++];
+      for (final g in items) {
+        if (g['now']?.toString() == target) {
+          final gName = g['name']?.toString() ?? '';
+          if (gName.isNotEmpty && visited.add(gName)) {
+            queue.add(gName);
+            result.add(gName);
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  List<String> _ancestorGroupNames(String groupName) {
+    final visited = <String>{groupName};
+    final queue = <String>[groupName];
+    final result = <String>[groupName];
+    if (!widget.proxies) return result;
+    var idx = 0;
+    while (idx < queue.length) {
+      final target = queue[idx++];
+      for (final g in items) {
+        if (g['now']?.toString() == target) {
+          final gName = g['name']?.toString() ?? '';
+          if (gName.isNotEmpty && visited.add(gName)) {
+            queue.add(gName);
+            result.add(gName);
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  void _recordDelay(String name, int delay, {bool? ipv6}) {
+    for (final target in _linkedProxyNames(name)) {
+      delays[target] = delay;
+      if (ipv6 == true) {
+        v6Nodes.add(target);
+      } else if (ipv6 == false) {
+        v6Nodes.remove(target);
+      }
+    }
+  }
+
+  void _syncGroupSelectionDelay(Item group, String nodeName) {
+    final gName = group['name']?.toString() ?? '';
+    if (gName.isEmpty) return;
+    final rawNodes = (group['nodes'] as List? ?? []).cast<Item>();
+    Item? selected;
+    for (final n in rawNodes) {
+      if (n['name']?.toString() == nodeName) {
+        selected = n;
+        break;
+      }
+    }
+    final delay = selected == null ? null : _delayOf(selected);
+    final ipv6Enabled = widget.preferences['ipv6TestEnabled'] == true;
+    final isV6 = v6Nodes.contains(nodeName);
+    for (final target in _ancestorGroupNames(gName)) {
+      delays[target] = delay;
+      if (ipv6Enabled) {
+        if (isV6) {
+          v6Nodes.add(target);
+        } else {
+          v6Nodes.remove(target);
+        }
       }
     }
   }
