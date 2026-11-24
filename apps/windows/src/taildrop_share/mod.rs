@@ -55,18 +55,23 @@ pub fn format_bytes(bytes: u64) -> String {
 
 fn peer_display_name(peer: &Value) -> String {
     let host = peer["hostName"].as_str().unwrap_or_default().trim();
-    if !host.is_empty() && host != "device-of-shared-to-user" {
-        return host.to_owned();
-    }
+    let host_ok = !host.is_empty() && host != "device-of-shared-to-user";
     let dns = peer["dnsName"]
         .as_str()
         .unwrap_or_default()
+        .trim()
         .trim_end_matches('.');
     if let Some(label) = dns.split('.').next().map(str::trim)
         && !label.is_empty()
         && label != "device-of-shared-to-user"
     {
+        if host_ok && host.eq_ignore_ascii_case(label) {
+            return host.to_owned();
+        }
         return label.to_owned();
+    }
+    if host_ok {
+        return host.to_owned();
     }
     if host == "device-of-shared-to-user" {
         return "共享设备".into();
@@ -392,5 +397,35 @@ mod tests {
         assert_eq!(ids, vec!["online-b", "online-a", "shared-1", "offline-1"]);
         assert!(eps[0].peers[0].is_last);
         assert_eq!(eps[0].peers[2].display_name, "friend-pc");
+    }
+
+    #[test]
+    fn peer_display_name_prefers_dns_label_and_preserves_matching_host_case() {
+        assert_eq!(
+            peer_display_name(&json!({
+                "hostName": "DESKTOP-ABC",
+                "dnsName": "yuu-desktop.tailnet.ts.net."
+            })),
+            "yuu-desktop"
+        );
+        assert_eq!(
+            peer_display_name(&json!({
+                "hostName": "JP-Oracle-Yuu",
+                "dnsName": "jp-oracle-yuu.tailnet.ts.net."
+            })),
+            "JP-Oracle-Yuu"
+        );
+        assert_eq!(
+            peer_display_name(&json!({
+                "hostName": "local-box"
+            })),
+            "local-box"
+        );
+        assert_eq!(
+            peer_display_name(&json!({
+                "hostName": "device-of-shared-to-user"
+            })),
+            "共享设备"
+        );
     }
 }

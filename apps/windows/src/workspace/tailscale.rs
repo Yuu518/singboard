@@ -442,21 +442,23 @@ fn all_peers(endpoint: &Value) -> Vec<&Value> {
 
 fn peer_display_name(peer: &Value) -> String {
     let host = peer["hostName"].as_str().unwrap_or_default().trim();
-    if !host.is_empty() && host != "device-of-shared-to-user" {
-        return host.to_owned();
-    }
+    let host_ok = !host.is_empty() && host != "device-of-shared-to-user";
     if let Some(label) = peer["dnsName"]
         .as_str()
-        .map(|s| s.trim_end_matches('.'))
+        .map(|s| s.trim().trim_end_matches('.'))
         .and_then(|s| s.split('.').next())
+        .map(str::trim)
         .filter(|s| !s.is_empty() && *s != "device-of-shared-to-user")
     {
+        if host_ok && host.eq_ignore_ascii_case(label) {
+            return host.to_owned();
+        }
         return label.to_owned();
     }
-    if host == "device-of-shared-to-user" {
-        "共享设备".into()
-    } else if !host.is_empty() {
+    if host_ok {
         host.to_owned()
+    } else if host == "device-of-shared-to-user" {
+        "共享设备".into()
     } else {
         "未命名".into()
     }
@@ -2151,7 +2153,12 @@ impl Workspace {
                 .child(self.scroll_pane("tailscale-scroll", login_body, cx));
         }
 
-        let self_host = self_peer["hostName"].as_str().unwrap_or("本机").to_owned();
+        let self_name = peer_display_name(&self_peer);
+        let self_host = if self_name == "未命名" {
+            "本机".to_owned()
+        } else {
+            self_name
+        };
         let self_ip = peer_primary_ip(&self_peer);
         let self_dns = self_peer["dnsName"]
             .as_str()

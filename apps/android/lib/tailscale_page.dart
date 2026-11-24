@@ -949,7 +949,8 @@ class _TailscalePageState extends State<TailscalePage> {
     String activeExitName,
     List<Map<String, dynamic>> peers,
   ) {
-    final selfHost = selfPeer['hostName']?.toString() ?? '本机';
+    final selfName = tailscalePeerDisplayName(selfPeer);
+    final selfHost = selfName == '未命名' ? '本机' : selfName;
     final selfIp = tailscalePrimaryIp(selfPeer);
     final selfDns =
         (selfPeer['dnsName']?.toString() ?? '').replaceAll(RegExp(r'\.$'), '');

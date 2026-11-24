@@ -342,14 +342,18 @@ List<Map<String, dynamic>> tailscaleAllPeers(Map<String, dynamic> endpoint) {
 
 String tailscalePeerDisplayName(Map<String, dynamic> peer) {
   final host = (peer['hostName']?.toString() ?? '').trim();
-  if (host.isNotEmpty && host != 'device-of-shared-to-user') return host;
-  final dns = (peer['dnsName']?.toString() ?? '').replaceAll(RegExp(r'\.+$'), '');
+  final hostOk = host.isNotEmpty && host != 'device-of-shared-to-user';
+  final dns = (peer['dnsName']?.toString() ?? '').trim().replaceAll(RegExp(r'\.+$'), '');
   if (dns.isNotEmpty) {
     final label = dns.split('.').first.trim();
-    if (label.isNotEmpty && label != 'device-of-shared-to-user') return label;
+    if (label.isNotEmpty && label != 'device-of-shared-to-user') {
+      if (hostOk && host.toLowerCase() == label.toLowerCase()) return host;
+      return label;
+    }
   }
+  if (hostOk) return host;
   if (host == 'device-of-shared-to-user') return '共享设备';
-  return host.isNotEmpty ? host : '未命名';
+  return '未命名';
 }
 
 List<Map<String, dynamic>> taildropTargets(Map<String, dynamic> endpoint) {

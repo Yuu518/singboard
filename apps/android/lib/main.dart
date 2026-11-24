@@ -2519,7 +2519,12 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
               final online = peers.where((p) => p['online'] == true).length;
               final network = ep['networkName']?.toString() ?? 'Tailnet';
               final selfIp = tailscalePrimaryIp(selfPeer);
-              final exitName = exitNode['hostName']?.toString() ?? '';
+              final exitId = exitNode['stableId']?.toString() ?? '';
+              final exitName = exitId.isEmpty &&
+                      (exitNode['dnsName']?.toString() ?? '').isEmpty &&
+                      (exitNode['hostName']?.toString() ?? '').isEmpty
+                  ? ''
+                  : tailscalePeerDisplayName(exitNode);
               return GlassCard(
                 padding: EdgeInsets.zero,
                 child: InkWell(

@@ -158,4 +158,29 @@ void main() {
     await tester.pump();
     expect(cleared, ['batch']);
   });
+
+  test('设备显示名优先采用控制台 dnsName 并保留未改名时的 hostName 大小写', () {
+    expect(
+      tailscalePeerDisplayName({
+        'hostName': 'DESKTOP-ABC',
+        'dnsName': 'yuu-desktop.tailnet.ts.net.',
+      }),
+      'yuu-desktop',
+    );
+    expect(
+      tailscalePeerDisplayName({
+        'hostName': 'JP-Oracle-Yuu',
+        'dnsName': 'jp-oracle-yuu.tailnet.ts.net.',
+      }),
+      'JP-Oracle-Yuu',
+    );
+    expect(
+      tailscalePeerDisplayName({'hostName': 'local-box'}),
+      'local-box',
+    );
+    expect(
+      tailscalePeerDisplayName({'hostName': 'device-of-shared-to-user'}),
+      '共享设备',
+    );
+  });
 }

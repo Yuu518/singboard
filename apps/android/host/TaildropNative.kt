@@ -149,11 +149,14 @@ class TaildropClient(dir: String) : AutoCloseable {
                     val stableId = peer.optString("stableId", "").trim()
                     if (stableId.isEmpty()) continue
                     val hostName = peer.optString("hostName", "").trim()
+                    val hostOk = hostName.isNotEmpty() && hostName != "device-of-shared-to-user"
                     val dnsName = peer.optString("dnsName", "").trim().trimEnd('.')
                     val dnsLabel = dnsName.substringBefore('.').trim()
+                    val dnsOk = dnsLabel.isNotEmpty() && dnsLabel != "device-of-shared-to-user"
                     val displayName = when {
-                        hostName.isNotEmpty() && hostName != "device-of-shared-to-user" -> hostName
-                        dnsLabel.isNotEmpty() && dnsLabel != "device-of-shared-to-user" -> dnsLabel
+                        dnsOk && hostOk && hostName.equals(dnsLabel, ignoreCase = true) -> hostName
+                        dnsOk -> dnsLabel
+                        hostOk -> hostName
                         hostName == "device-of-shared-to-user" -> "共享设备"
                         else -> stableId
                     }
