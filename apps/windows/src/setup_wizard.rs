@@ -6,7 +6,7 @@ use crate::{
     workspace::{Page, Workspace},
 };
 use gpui::{prelude::*, *};
-use gpui_component::input::InputState;
+use gpui_component::input::{EditorState, InputEvent, InputState};
 
 pub struct SetupWizard {
     pub visible: bool,
@@ -15,6 +15,10 @@ pub struct SetupWizard {
     working_dir: Entity<InputState>,
     api_url: Entity<InputState>,
     api_secret: Entity<InputState>,
+    service_url: Entity<InputState>,
+    service_secret: Entity<InputState>,
+    service_server_name: Entity<InputState>,
+    service_ca_pem: Entity<EditorState>,
     api_id: String,
     api_name: String,
     error: String,
@@ -35,6 +39,7 @@ impl SetupWizard {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "http://127.0.0.1:9090".into());
         let default_secret = active.map(|a| a.secret.clone()).unwrap_or_default();
+        let default_service = active.and_then(|a| a.service_api.clone()).unwrap_or_default();
         let api_id = active.map(|a| a.id.clone()).unwrap_or_default();
         let api_name = active
             .map(|a| a.name.clone())
@@ -58,6 +63,33 @@ impl SetupWizard {
                 .default_value(default_secret)
                 .masked(true)
         });
+        let service_url = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("留空自动发现，或填 http(s)://主机:端口")
+                .default_value(default_service.url)
+        });
+        let service_secret = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("留空表示无密钥")
+                .default_value(default_service.secret)
+                .masked(true)
+        });
+        let service_server_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("可选，如 router.internal")
+                .default_value(default_service.server_name)
+        });
+        let service_ca_pem = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .line_number(false)
+                .default_value(default_service.ca_pem)
+        });
+        cx.subscribe(&service_url, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
 
         Self {
             visible,
@@ -66,11 +98,51 @@ impl SetupWizard {
             working_dir,
             api_url,
             api_secret,
+            service_url,
+            service_secret,
+            service_server_name,
+            service_ca_pem,
             api_id,
             api_name,
             error: String::new(),
             saving: false,
         }
+    }
+
+    fn import_ca_pem(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.saving {
+            return;
+        }
+        let picker = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("选择 CA 证书 PEM 文件".into()),
+        });
+        let handle = window.window_handle();
+        cx.spawn(async move |weak, cx| {
+            if let Ok(Ok(Some(paths))) = picker.await
+                && let Some(path) = paths.into_iter().next()
+            {
+                let content = std::fs::read_to_string(&path).map_err(|e| format!("无法读取证书文件：{e}"));
+                let _ = handle.update(cx, |_, window, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        match content {
+                            Ok(pem) => {
+                                this.service_ca_pem
+                                    .update(cx, |editor, cx| editor.set_value(pem, window, cx));
+                                this.error.clear();
+                            }
+                            Err(err) => {
+                                this.error = err;
+                            }
+                        }
+                        cx.notify();
+                    });
+                });
+            }
+        })
+        .detach();
     }
 
     fn browse(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -119,6 +191,10 @@ impl SetupWizard {
         let working_dir = self.working_dir.read(cx).value().trim().to_owned();
         let api_url = self.api_url.read(cx).value().trim().to_owned();
         let api_secret = self.api_secret.read(cx).value().to_string();
+        let service_url = self.service_url.read(cx).value().trim().to_owned();
+        let service_secret = self.service_secret.read(cx).value().to_string();
+        let service_server_name = self.service_server_name.read(cx).value().trim().to_owned();
+        let service_ca_pem = self.service_ca_pem.read(cx).value().trim().to_owned();
 
         if working_dir.is_empty() {
             self.error = "请填写工作目录。".into();
@@ -139,6 +215,11 @@ impl SetupWizard {
         values.insert("url".into(), api_url);
         values.insert("secret".into(), api_secret);
         values.insert("workdir".into(), working_dir);
+        values.insert("service_present".into(), "1".into());
+        values.insert("service_url".into(), service_url);
+        values.insert("service_secret".into(), service_secret);
+        values.insert("service_server_name".into(), service_server_name);
+        values.insert("service_ca_pem".into(), service_ca_pem);
 
         let task = singboard_core::runtime().spawn(async move {
             let dir = service::data_dir()?;
@@ -321,6 +402,115 @@ impl Render for SetupWizard {
                                     )),
                             ),
                     )
+                    .child(div().h(px(1.)).w_full().bg(p.line()))
+                    .child({
+                        let service_https = self
+                            .service_url
+                            .read(cx)
+                            .value()
+                            .trim()
+                            .to_ascii_lowercase()
+                            .starts_with("https://");
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(p.muted())
+                                            .child("sing-box API（可选）"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(p.muted())
+                                            .child("填写后可接入 Tailscale 等原生服务；本地部署留空可自动发现。输入 https:// 时自动展开 TLS 配置。"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(div().text_xs().text_color(p.muted()).child("sing-box API 地址"))
+                                    .child(crate::glass::glass_input(
+                                        "wizard-service-url-input",
+                                        &self.service_url,
+                                        true,
+                                        p,
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(div().text_xs().text_color(p.muted()).child("sing-box API 密钥"))
+                                    .child(crate::glass::glass_input(
+                                        "wizard-service-secret-input",
+                                        &self.service_secret,
+                                        true,
+                                        p,
+                                    )),
+                            )
+                            .when(service_https, |el| {
+                                el.child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(div().text_xs().text_color(p.muted()).child("TLS Server Name（可选）"))
+                                        .child(crate::glass::glass_input(
+                                            "wizard-service-sni-input",
+                                            &self.service_server_name,
+                                            true,
+                                            p,
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .child(div().text_xs().text_color(p.muted()).child("CA 证书 PEM（可选）"))
+                                                .child(
+                                                    div()
+                                                        .id("wizard-import-ca")
+                                                        .cursor_pointer()
+                                                        .px_2p5()
+                                                        .py(px(2.))
+                                                        .rounded_full()
+                                                        .bg(p.primary_soft())
+                                                        .text_xs()
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .text_color(p.accent())
+                                                        .child("从文件导入")
+                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                            this.import_ca_pem(window, cx);
+                                                        })),
+                                                ),
+                                        )
+                                        .child(crate::glass::glass_multiline_input(
+                                            "wizard-service-ca-input",
+                                            &self.service_ca_pem,
+                                            px(84.),
+                                            p,
+                                        )),
+                                )
+                            })
+                    })
                     .when(!self.error.is_empty(), |el| {
                         el.child(
                             div()

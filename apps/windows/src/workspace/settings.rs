@@ -1,6 +1,6 @@
 use super::*;
 use crate::theme::Palette;
-use gpui_component::input::InputState;
+use gpui_component::input::{EditorState, InputState};
 use singboard_core::{settings::Settings, tools::Values};
 use std::collections::{HashMap, HashSet};
 
@@ -100,6 +100,8 @@ pub(super) struct SettingsLayout {
     pub(super) service_action: Option<&'static str>,
     pub(super) api_edit: Option<bool>,
     pub(super) protocol: Option<String>,
+    pub(super) service_protocol: Option<String>,
+    pub(super) service_ca_editor: Option<(Entity<EditorState>, String)>,
     pub(super) dialog: Option<SettingsDialog>,
 }
 
@@ -1969,7 +1971,7 @@ impl Workspace {
             )
             .child(section_header("核心与服务", palette, cx))
             .child(core_card)
-            .child(section_header("Clash API", palette, cx).mt_6())
+            .child(section_header("API 设置", palette, cx).mt_6())
             .child(api_card)
             .child(section_header("网络测试", palette, cx).mt_6())
             .child(network_card)

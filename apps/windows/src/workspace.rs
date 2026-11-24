@@ -17,6 +17,7 @@ mod proxies;
 mod rules;
 mod settings;
 mod scrolling;
+mod tailscale;
 mod toast;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -26,18 +27,20 @@ pub enum Page {
     Connections,
     Logs,
     Rules,
+    Tailscale,
     Config,
     Settings,
 }
 
 const OVERVIEW_SAMPLES: usize = 60;
 
-pub const PAGES: [(Page, &str); 7] = [
+pub const PAGES: [(Page, &str); 8] = [
     (Page::Overview, "概览"),
     (Page::Proxies, "代理"),
     (Page::Connections, "连接"),
     (Page::Logs, "日志"),
     (Page::Rules, "规则"),
+    (Page::Tailscale, "Tailscale"),
     (Page::Config, "配置"),
     (Page::Settings, "设置"),
 ];
@@ -182,6 +185,7 @@ pub struct Workspace {
     proxy_ui: proxies::ProxyUi,
     sort: bool,
     settings_layout: settings::SettingsLayout,
+    tailscale: tailscale::TailscaleState,
     filter: Option<Entity<crate::search::Search>>,
     local: Option<crate::service::Snapshot>,
     modes: Vec<String>,
@@ -636,6 +640,9 @@ impl Workspace {
             proxy_ui: Default::default(),
             sort: prefs.proxy_sort_latency,
             settings_layout: Default::default(),
+            tailscale: tailscale::TailscaleState::with_collapsed_groups(
+                prefs.tailscale_collapsed_groups.iter().cloned(),
+            ),
             filter: None,
             local: None,
             modes: Vec::new(),
@@ -913,6 +920,8 @@ impl Workspace {
         if self.suspended {
             return;
         }
+        self.sync_tailscale(false, cx);
+        self.drain_tailscale(cx);
         let svc_busy = self.service_syncing
             || self.settings_layout.service_action.is_some()
             || self.settings_layout.pending.contains("service-op")
@@ -1551,7 +1560,7 @@ impl Workspace {
 
     pub fn header_scroll_progress(&self) -> f32 {
         match self.page {
-            Page::Overview | Page::Settings => {
+            Page::Overview | Page::Settings | Page::Tailscale => {
                 let scrolled = (-f32::from(self.page_scroll.offset().y)).max(0.);
                 scrolling::smoothstep(12., 36., scrolled)
             }
@@ -1643,6 +1652,11 @@ impl Workspace {
                     }
                     if this.page == Page::Settings && this.settings_layout.dialog.is_some() {
                         this.close_settings_dialog(cx);
+                        return;
+                    }
+                    if this.page == Page::Tailscale && this.tailscale.dialog.is_some() {
+                        this.tailscale.dialog = None;
+                        cx.notify();
                         return;
                     }
                 }
@@ -2527,7 +2541,7 @@ impl Workspace {
             Page::Connections if self.history => self.shown_closed().len(),
             Page::Connections => self.shown_active().len(),
             Page::Logs => self.frozen.as_ref().unwrap_or(&self.logs).len(),
-            Page::Overview | Page::Config | Page::Settings => 0,
+            Page::Overview | Page::Tailscale | Page::Config | Page::Settings => 0,
         }
     }
 
@@ -3000,6 +3014,7 @@ impl Render for Workspace {
             Page::Connections => self.connections_page(cx).pt(px(48.)).px(px(20.)).pb(px(16.)),
             Page::Logs => self.logs_page(window, cx).pt(px(48.)).px(px(20.)).pb(px(16.)),
             Page::Rules => self.rules_page(cx).pt(px(48.)).px(px(20.)).pb(px(16.)),
+            Page::Tailscale => self.tailscale_page(window, cx).pt(px(48.)),
             Page::Config => self.config_page(window, cx).pt(px(48.)),
             Page::Settings => self.settings_page(window, cx).pt(px(48.)),
         };

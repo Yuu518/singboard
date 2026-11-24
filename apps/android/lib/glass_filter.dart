@@ -400,6 +400,7 @@ class _GlassEnvironmentState extends State<GlassEnvironment> {
       backdropToneLight: dark ? _darkToneLight : _lightToneLight,
       headerToneLight: dark ? _darkHeaderToneLight : _lightHeaderToneLight,
       navBackdropRgb: dark ? _darkNavRgb : _lightNavRgb,
+      sourceWallpaper: _sourceImage,
       blurredWallpaper: _blurredImage,
       child: widget.child,
     );

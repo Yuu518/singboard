@@ -20,29 +20,24 @@ struct Sessions {
 
 static SESSIONS: LazyLock<Mutex<Sessions>> = LazyLock::new(Mutex::default);
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sb_service_api_open(dir: *const c_char) -> u64 {
-    catch_unwind(|| {
-        let Some(dir) = (unsafe { input(dir) }).filter(|s| !s.is_empty()) else {
-            return 0;
-        };
-        let mut sessions = SESSIONS.lock().unwrap();
-        let Some(id) = sessions.last_id.checked_add(1) else {
-            return 0;
-        };
-        let session = Session {
-            backend: tokio::sync::Mutex::new(ServiceApi::new(dir.into())),
-            closed: CancellationToken::new(),
-        };
-        sessions.last_id = id;
-        sessions.open.insert(id, Arc::new(session));
-        id
-    })
-    .unwrap_or(0)
+pub(super) fn open_session(dir: &str) -> u64 {
+    if dir.is_empty() {
+        return 0;
+    }
+    let mut sessions = SESSIONS.lock().unwrap();
+    let Some(id) = sessions.last_id.checked_add(1) else {
+        return 0;
+    };
+    let session = Session {
+        backend: tokio::sync::Mutex::new(ServiceApi::new(dir.into())),
+        closed: CancellationToken::new(),
+    };
+    sessions.last_id = id;
+    sessions.open.insert(id, Arc::new(session));
+    id
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sb_service_api_request(id: u64, request: *const c_char) -> *mut c_char {
+pub(super) fn request_session(id: u64, request: &str) -> String {
     let result = catch_unwind(AssertUnwindSafe(|| {
         let session = SESSIONS
             .lock()
@@ -51,7 +46,6 @@ pub unsafe extern "C" fn sb_service_api_request(id: u64, request: *const c_char)
             .get(&id)
             .cloned()
             .ok_or_else(|| ApiError::invalid("会话已关闭"))?;
-        let request = unsafe { input(request) }.ok_or_else(|| ApiError::invalid("无效的请求"))?;
         let command = serde_json::from_str(request)
             .map_err(|_| ApiError::invalid("无效的 Service API 操作或参数"))?;
         crate::runtime().block_on(async {
@@ -67,14 +61,39 @@ pub unsafe extern "C" fn sb_service_api_request(id: u64, request: *const c_char)
         Ok(Err(error)) => json!({"error": error}),
         Err(_) => json!({"error": {"code":"internal", "message":"内部执行异常"}}),
     };
-    output(reply.to_string())
+    reply.to_string()
+}
+
+pub(super) fn close_session(id: u64) {
+    if let Some(session) = SESSIONS.lock().unwrap().open.remove(&id) {
+        session.closed.cancel();
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sb_service_api_open(dir: *const c_char) -> u64 {
+    catch_unwind(|| {
+        let Some(dir) = (unsafe { input(dir) }) else {
+            return 0;
+        };
+        open_session(dir)
+    })
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sb_service_api_request(id: u64, request: *const c_char) -> *mut c_char {
+    let reply = catch_unwind(AssertUnwindSafe(|| {
+        let Some(request) = (unsafe { input(request) }) else {
+            return json!({"error": ApiError::invalid("无效的请求")}).to_string();
+        };
+        request_session(id, request)
+    }))
+    .unwrap_or_else(|_| json!({"error": {"code":"internal", "message":"内部执行异常"}}).to_string());
+    output(reply)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn sb_service_api_close(id: u64) {
-    let _ = catch_unwind(|| {
-        if let Some(session) = SESSIONS.lock().unwrap().open.remove(&id) {
-            session.closed.cancel();
-        }
-    });
+    let _ = catch_unwind(|| close_session(id));
 }

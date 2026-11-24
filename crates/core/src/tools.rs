@@ -375,6 +375,85 @@ fn endpoint_url(values: &Values) -> Result<String, String> {
     Ok(url.to_string())
 }
 
+fn service_connection(
+    values: &Values,
+) -> Result<Option<Option<crate::service_api::Connection>>, String> {
+    let has_keys = [
+        "service_present",
+        "service_url",
+        "service_host",
+        "service_port",
+        "service_protocol",
+        "service_secret",
+        "service_ca_pem",
+        "service_server_name",
+    ]
+    .iter()
+    .any(|key| values.contains_key(*key));
+    if !has_keys {
+        return Ok(None);
+    }
+    let raw_url = if values.contains_key("service_host") {
+        let host = value(values, "service_host").trim();
+        if host.is_empty() {
+            return Ok(Some(None));
+        }
+        let protocol = value(values, "service_protocol");
+        let protocol = if protocol.is_empty() { "http" } else { protocol };
+        if !matches!(protocol, "http" | "https") {
+            return Err("sing-box API 协议须为 HTTP 或 HTTPS".into());
+        }
+        let pasted = host.contains("://");
+        let address = if pasted {
+            host.to_owned()
+        } else {
+            format!("{protocol}://{host}")
+        };
+        let mut parsed =
+            url::Url::parse(&address).map_err(|_| "sing-box API 地址应为 http(s)://主机:端口")?;
+        if !matches!(parsed.scheme(), "http" | "https") || parsed.host().is_none() {
+            return Err("sing-box API 地址应为 http(s)://主机:端口".into());
+        }
+        let port = value(values, "service_port").trim();
+        if !pasted && !port.is_empty() {
+            let port = port
+                .parse::<u16>()
+                .ok()
+                .filter(|p| *p > 0)
+                .ok_or("sing-box API 端口须为 1 到 65535")?;
+            parsed
+                .set_port(Some(port))
+                .map_err(|_| "sing-box API 端口无效")?;
+        }
+        parsed.to_string().trim_end_matches('/').to_owned()
+    } else {
+        let raw = value(values, "service_url").trim();
+        if raw.is_empty() {
+            return Ok(Some(None));
+        }
+        raw.trim_end_matches('/').to_owned()
+    };
+    let parsed =
+        url::Url::parse(&raw_url).map_err(|_| "sing-box API 地址应为 http(s)://主机:端口")?;
+    let is_https = parsed.scheme() == "https";
+    let conn = crate::service_api::Connection {
+        url: raw_url,
+        secret: value(values, "service_secret").to_owned(),
+        ca_pem: if is_https {
+            value(values, "service_ca_pem").trim().to_owned()
+        } else {
+            String::new()
+        },
+        server_name: if is_https {
+            value(values, "service_server_name").trim().to_owned()
+        } else {
+            String::new()
+        },
+    };
+    conn.validate()?;
+    Ok(Some(Some(conn)))
+}
+
 pub async fn run(
     dir: &Path,
     action: &str,
@@ -454,6 +533,7 @@ pub async fn run(
         "setup" | "save_api" | "add_api" => {
             let url = endpoint_url(v)?;
             Clash::new(&url, get("secret"))?;
+            let service_api = service_connection(v)?;
             if get("name").trim().is_empty() {
                 return Err("请输入后端名称".into());
             }
@@ -527,6 +607,9 @@ pub async fn run(
                 endpoint.name = get("name").trim().into();
                 endpoint.url = url.clone();
                 endpoint.secret = get("secret").into();
+                if let Some(service_api) = service_api.clone() {
+                    endpoint.service_api = service_api;
+                }
                 p.active_clash_api_id = id;
                 p.setup_completed = true;
                 Ok(())

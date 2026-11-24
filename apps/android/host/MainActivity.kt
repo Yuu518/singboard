@@ -1,6 +1,8 @@
 package io.github.Yuu518.singboard
 
 import android.app.Activity
+import android.content.ComponentName
+import android.content.ContentResolver
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
@@ -8,11 +10,14 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Process
 import android.provider.OpenableColumns
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import android.util.AtomicFile
+import android.view.DragEvent
+import android.widget.Toast
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -20,11 +25,19 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.nio.charset.CharacterCodingException
 import java.security.MessageDigest
+import java.util.ArrayDeque
+import java.util.UUID
 import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private var picker: MethodChannel.Result? = null
+    private var multiPicker: MethodChannel.Result? = null
+    private var pemPicker: MethodChannel.Result? = null
+    private var savePicker: Pair<MethodChannel.Result, File>? = null
+    private val pendingShares = ArrayDeque<Map<String, Any>>()
+    private var stagingShares = 0
+    private var dartReady = false
     private var channel: MethodChannel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -39,6 +52,198 @@ class MainActivity : FlutterActivity() {
             window.isNavigationBarContrastEnforced = false
         }
         worker.execute { cleanupStaleFiles(null) }
+        handleShareIntent(intent)
+        setupDragAndDrop()
+    }
+
+    private fun setupDragAndDrop() {
+        window.decorView.setOnDragListener { _, event ->
+            when (event.action) {
+                DragEvent.ACTION_DRAG_STARTED -> true
+                DragEvent.ACTION_DROP -> {
+                    val clip = event.clipData ?: return@setOnDragListener false
+                    val uris = linkedSetOf<Uri>()
+                    val texts = mutableListOf<String>()
+                    for (i in 0 until clip.itemCount) {
+                        val item = clip.getItemAt(i)
+                        if (item.uri != null) {
+                            uris.add(item.uri)
+                        } else if (!item.text.isNullOrEmpty()) {
+                            texts.add(item.text.toString())
+                        }
+                    }
+                    if (uris.isEmpty() && texts.isEmpty()) return@setOnDragListener false
+                    val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        requestDragAndDropPermissions(event)
+                    } else {
+                        null
+                    }
+                    stagingShares++
+                    worker.execute {
+                        try {
+                            val payload = stageBatch("taildrop-share") { dir ->
+                                if (uris.isNotEmpty()) {
+                                    uris.map { stageUri(it, dir) }
+                                } else {
+                                    val file = File(dir, "dropped-text.txt")
+                                    file.writeText(texts.joinToString("\n"), Charsets.UTF_8)
+                                    listOf(
+                                        mapOf(
+                                            "path" to file.absolutePath,
+                                            "name" to file.name,
+                                            "size" to file.length(),
+                                        ),
+                                    )
+                                }
+                            } + ("fromExternal" to false)
+                            runOnUiThread {
+                                stagingShares--
+                                if (isFinishing || isDestroyed) {
+                                    File(payload["batchDir"] as String).deleteRecursively()
+                                } else {
+                                    pendingShares.addLast(payload)
+                                    if (dartReady) channel?.invokeMethod("taildropShareIncoming", null)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            runOnUiThread {
+                                stagingShares--
+                                if (!isFinishing && !isDestroyed) {
+                                    Toast.makeText(
+                                        this,
+                                        "无法导入拖入的文件：${e.localizedMessage}",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                            }
+                        } finally {
+                            perm?.release()
+                        }
+                    }
+                    true
+                }
+                else -> true
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleShareIntent(intent)
+    }
+
+    private fun handleShareIntent(intent: Intent?) {
+        val action = intent?.action ?: return
+        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return
+        stagingShares++
+        worker.execute {
+            try {
+                val uris = linkedSetOf<Uri>()
+                val grantUris = linkedSetOf<Uri>()
+                intent.data?.let { grantUris.add(it) }
+                intent.clipData?.let { clip ->
+                    for (i in 0 until clip.itemCount) {
+                        clip.getItemAt(i).uri?.let { grantUris.add(it) }
+                    }
+                }
+                @Suppress("DEPRECATION")
+                if (action == Intent.ACTION_SEND) {
+                    intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.add(it) }
+                } else {
+                    intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+                }
+                uris.addAll(grantUris)
+                val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+                require(uris.isNotEmpty() || !text.isNullOrEmpty()) { "分享内容为空" }
+                for (uri in uris) {
+                    val authority = uri.authority?.substringAfterLast('@')
+                    val read = Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    require(
+                        uri.scheme == ContentResolver.SCHEME_CONTENT && !authority.isNullOrEmpty() &&
+                            authority != "$packageName.updates" && uri in grantUris &&
+                            (intent.flags and read) != 0 &&
+                            checkUriPermission(uri, Process.myPid(), Process.myUid(), read) == PackageManager.PERMISSION_GRANTED
+                    ) { "分享内容缺少可用的读取授权" }
+                }
+                val payload = stageBatch("taildrop-share") { dir ->
+                    if (uris.isNotEmpty()) {
+                        uris.map { stageUri(it, dir) }
+                    } else {
+                        val file = File(dir, "shared-text.txt")
+                        file.writeText(requireNotNull(text), Charsets.UTF_8)
+                        listOf(mapOf("path" to file.absolutePath, "name" to file.name, "size" to file.length()))
+                    }
+                } + ("fromExternal" to true)
+                runOnUiThread {
+                    stagingShares--
+                    if (isFinishing || isDestroyed) {
+                        File(payload["batchDir"] as String).deleteRecursively()
+                    } else {
+                        pendingShares.addLast(payload)
+                        if (dartReady) channel?.invokeMethod("taildropShareIncoming", null)
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    stagingShares--
+                    if (!isFinishing && !isDestroyed) {
+                        Toast.makeText(this, "无法导入分享内容：${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun stageBatch(root: String, stage: (File) -> List<Map<String, Any>>): Map<String, Any> {
+        val dir = File(File(cacheDir, root), UUID.randomUUID().toString())
+        check(dir.mkdirs()) { "无法创建临时目录" }
+        try {
+            return mapOf("batchDir" to dir.absolutePath, "files" to stage(dir))
+        } catch (e: Exception) {
+            dir.deleteRecursively()
+            throw e
+        }
+    }
+
+    private fun queryDisplayName(uri: Uri, fallback: String): String {
+        val raw = runCatching {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                if (it.moveToFirst()) it.getString(0) else null
+            }
+        }.getOrNull()
+        val cleaned = (raw ?: fallback).replace(Regex("[\\\\/:*?\"<>|]"), "_").trim()
+        return if (cleaned.isEmpty() || cleaned == "." || cleaned == "..") fallback else cleaned
+    }
+
+    private fun uniqueFile(dir: File, name: String): File {
+        var candidate = File(dir, name)
+        if (!candidate.exists()) return candidate
+        val dot = name.lastIndexOf('.')
+        val stem = if (dot > 0) name.substring(0, dot) else name
+        val ext = if (dot > 0) name.substring(dot) else ""
+        var i = 1
+        while (candidate.exists()) {
+            candidate = File(dir, "$stem ($i)$ext")
+            i++
+        }
+        return candidate
+    }
+
+    private fun stageUri(uri: Uri, batchDir: File): Map<String, Any> {
+        val name = queryDisplayName(uri, "file-${System.currentTimeMillis()}")
+        val dest = uniqueFile(batchDir, name)
+        val input = contentResolver.openInputStream(uri) ?: error("无法读取分享文件")
+        input.use { src ->
+            dest.outputStream().use { dst ->
+                src.copyTo(dst, 65536)
+            }
+        }
+        return mapOf(
+            "path" to dest.absolutePath,
+            "name" to dest.name,
+            "size" to dest.length(),
+        )
     }
 
     private fun cleanupStaleFiles(keepUpdateDir: File?) {
@@ -48,10 +253,18 @@ class MainActivity : FlutterActivity() {
                 if (keepUpdateDir != null && child.canonicalFile == keepUpdateDir.canonicalFile) return@forEach
                 child.deleteRecursively()
             }
+            val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+            for (sub in listOf("taildrop-share", "taildrop-pick", "taildrop-download")) {
+                val root = File(cacheDir, sub)
+                root.listFiles()?.forEach { child ->
+                    if (child.lastModified() < System.currentTimeMillis() - 6L * 60 * 60 * 1000) {
+                        child.deleteRecursively()
+                    }
+                }
+            }
             val backups = filesDir.listFiles { file ->
                 file.isFile && file.name.startsWith("document-") && file.name.endsWith(".bak")
             }?.sortedByDescending { it.lastModified() } ?: emptyList()
-            val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
             backups.forEachIndexed { index, file ->
                 if (index >= 5 || file.lastModified() < cutoff) {
                     file.delete()
@@ -138,6 +351,103 @@ class MainActivity : FlutterActivity() {
                     target.baseFile.absolutePath
                 }
                 "read", "save", "backup" -> perform(result) { document(call) }
+                "consumePendingShare" -> {
+                    dartReady = true
+                    val data = pendingShares.pollFirst()
+                    if (data == null && stagingShares == 0 && call.argument<Boolean>("finishIfEmpty") == true) {
+                        moveTaskToBack(true)
+                    }
+                    result.success(data)
+                }
+                "clearStagedShare" -> perform(result) {
+                    val dirPath = call.argument<String>("batchDir")
+                    if (!dirPath.isNullOrEmpty()) {
+                        val target = File(dirPath).canonicalFile
+                        val roots = listOf("taildrop-share", "taildrop-pick").map { File(cacheDir, it).canonicalFile }
+                        val batchId = runCatching { UUID.fromString(target.name) }.getOrNull()
+                        if (roots.any { it == target.parentFile } && batchId?.toString() == target.name) {
+                            target.deleteRecursively()
+                        }
+                    }
+                    true
+                }
+                "setTaildropShareEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") == true
+                    try {
+                        val component = ComponentName(packageName, "$packageName.TaildropShareActivity")
+                        val state = if (enabled) {
+                            PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                        } else {
+                            PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                        }
+                        packageManager.setComponentEnabledSetting(
+                            component,
+                            state,
+                            PackageManager.DONT_KILL_APP,
+                        )
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("share", e.localizedMessage, null)
+                    }
+                }
+                "openUrl" -> {
+                    val url = call.argument<String>("url")
+                    if (url.isNullOrEmpty()) {
+                        result.error("url", "无效链接", null)
+                    } else {
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("url", e.localizedMessage, null)
+                        }
+                    }
+                }
+                "pickFiles" -> {
+                    if (multiPicker != null) {
+                        result.error("busy", "文件选择器已打开", null)
+                    } else {
+                        multiPicker = result
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+                            .addCategory(Intent.CATEGORY_OPENABLE)
+                            .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        intent.type = "*/*"
+                        try { startActivityForResult(intent, 9302) }
+                        catch (e: Exception) { multiPicker = null; result.error("open", e.localizedMessage, null) }
+                    }
+                }
+                "pickPemFile" -> {
+                    if (pemPicker != null) {
+                        result.error("busy", "文件选择器已打开", null)
+                    } else {
+                        pemPicker = result
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                        intent.type = "*/*"
+                        try { startActivityForResult(intent, 9303) }
+                        catch (e: Exception) { pemPicker = null; result.error("open", e.localizedMessage, null) }
+                    }
+                }
+                "taildropDownloadTemp" -> perform(result) {
+                    val name = (call.argument<String>("name") ?: "download").replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                    val dir = File(File(cacheDir, "taildrop-download"), UUID.randomUUID().toString())
+                    dir.mkdirs()
+                    File(dir, name).absolutePath
+                }
+                "saveTaildropDownload" -> {
+                    val srcPath = call.argument<String>("path")
+                    val name = call.argument<String>("name") ?: "download"
+                    if (savePicker != null || srcPath.isNullOrEmpty()) {
+                        result.error("busy", "保存选择器不可用", null)
+                    } else {
+                        savePicker = Pair(result, File(srcPath))
+                        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT)
+                            .addCategory(Intent.CATEGORY_OPENABLE)
+                            .putExtra(Intent.EXTRA_TITLE, name)
+                        intent.type = "*/*"
+                        try { startActivityForResult(intent, 9304) }
+                        catch (e: Exception) { savePicker = null; result.error("save", e.localizedMessage, null) }
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -236,10 +546,67 @@ class MainActivity : FlutterActivity() {
     @Deprecated("Android activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != 9301) return
-        val result = picker ?: return
-        picker = null
-        result.success(if (resultCode == Activity.RESULT_OK) data?.data?.toString() else null)
+        if (requestCode == 9301) {
+            val result = picker ?: return
+            picker = null
+            result.success(if (resultCode == Activity.RESULT_OK) data?.data?.toString() else null)
+            return
+        }
+        if (requestCode == 9302) {
+            val result = multiPicker ?: return
+            multiPicker = null
+            if (resultCode != Activity.RESULT_OK || data == null) {
+                result.success(null)
+                return
+            }
+            val uris = mutableListOf<Uri>()
+            val clip = data.clipData
+            if (clip != null) {
+                for (i in 0 until clip.itemCount) {
+                    clip.getItemAt(i).uri?.let { uris.add(it) }
+                }
+            } else {
+                data.data?.let { uris.add(it) }
+            }
+            if (uris.isEmpty()) {
+                result.success(null)
+                return
+            }
+            perform(result) {
+                stageBatch("taildrop-pick") { dir -> uris.map { stageUri(it, dir) } }
+            }
+            return
+        }
+        if (requestCode == 9303) {
+            val result = pemPicker ?: return
+            pemPicker = null
+            val uri = if (resultCode == Activity.RESULT_OK) data?.data else null
+            if (uri == null) {
+                result.success(null)
+                return
+            }
+            perform(result) { read(uri) }
+            return
+        }
+        if (requestCode == 9304) {
+            val pending = savePicker ?: return
+            savePicker = null
+            val (result, srcFile) = pending
+            val destUri = if (resultCode == Activity.RESULT_OK) data?.data else null
+            if (destUri == null) {
+                worker.execute { runCatching { srcFile.parentFile?.deleteRecursively() } }
+                result.success(false)
+                return
+            }
+            perform(result) {
+                val out = contentResolver.openOutputStream(destUri, "w") ?: error("无法写入目标文件")
+                srcFile.inputStream().use { src ->
+                    out.use { dst -> src.copyTo(dst, 65536) }
+                }
+                runCatching { srcFile.parentFile?.deleteRecursively() }
+                true
+            }
+        }
     }
 
     private fun perform(result: MethodChannel.Result, operation: () -> Any?) {
@@ -321,12 +688,22 @@ class MainActivity : FlutterActivity() {
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         channel?.setMethodCallHandler(null)
         channel = null
+        dartReady = false
         picker = null
+        multiPicker = null
+        pemPicker = null
+        savePicker = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 
     override fun onDestroy() {
         picker = null
+        multiPicker = null
+        pemPicker = null
+        savePicker = null
+        val abandoned = pendingShares.map { File(it["batchDir"] as String) }
+        pendingShares.clear()
+        worker.execute { abandoned.forEach { it.deleteRecursively() } }
         worker.shutdown()
         super.onDestroy()
     }

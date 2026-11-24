@@ -829,6 +829,12 @@ pub struct NavSelectionStyle {
     pub ink: gpui::Rgba,
 }
 
+pub struct ChipSelectionStyle {
+    pub tint: gpui::Rgba,
+    pub border: gpui::Rgba,
+    pub ink: gpui::Rgba,
+}
+
 fn sample_region_rgb(image: &RgbaImage, x0: u32, x1: u32, y0: u32, y1: u32) -> [f32; 3] {
     let w = image.width();
     let h = image.height();
@@ -1019,6 +1025,222 @@ pub fn nav_selection_style(
         .try_global::<CardBackdrop>()
         .map_or(fallback, |b| b.nav_backdrop);
     compute_nav_selection(backdrop, palette.floating(tint), palette.0)
+}
+
+pub fn compute_chip_selection(
+    backdrop_rgb: [f32; 3],
+    surface: gpui::Rgba,
+    dark: bool,
+) -> ChipSelectionStyle {
+    let surface_rgb = alpha_blend_rgb(surface, backdrop_rgb);
+    let luma = relative_luminance(surface_rgb);
+    let (h, s, _) = rgb_to_hsl(surface_rgb);
+    let tint_s = if s < 0.08 { 0. } else { (s * 0.36).min(0.24) };
+
+    let (tint, border) = if !dark {
+        if luma >= 0.34 {
+            let base = hsl_to_rgb(h, (s * 0.48).min(0.28), 0.22);
+            let alpha = 0.16 + 0.06 * ((luma - 0.34) / 0.66).clamp(0., 1.);
+            (make_rgba(base, alpha), make_rgba(base, (alpha * 1.65).min(0.42)))
+        } else {
+            let base = hsl_to_rgb(h, tint_s, 0.94);
+            let darkness = ((0.34 - luma) / 0.34).clamp(0., 1.);
+            let alpha = 0.44 + 0.22 * darkness;
+            (make_rgba(base, alpha), make_rgba([1., 1., 1.], 0.44 + 0.26 * darkness))
+        }
+    } else if luma < 0.42 {
+        let base = hsl_to_rgb(h, (s * 0.40).min(0.24), 0.88);
+        let alpha = 0.17 + 0.08 * (1. - (luma / 0.42).clamp(0., 1.));
+        (make_rgba(base, alpha), make_rgba(base, (alpha + 0.14).min(0.44)))
+    } else {
+        let base = hsl_to_rgb(h, tint_s, 0.12);
+        let lightness = ((luma - 0.42) / 0.58).clamp(0., 1.);
+        let alpha = 0.66 + 0.20 * lightness;
+        (make_rgba(base, alpha), make_rgba([1., 1., 1.], 0.30 + 0.14 * lightness))
+    };
+
+    let pill_rgb = alpha_blend_rgb(tint, surface_rgb);
+    let dark_ink = if tint_s > 0.01 {
+        hsl_to_rgb(h, (s * 0.35).min(0.24), 0.11)
+    } else {
+        [0.09, 0.10, 0.12]
+    };
+    let light_ink = if tint_s > 0.01 {
+        hsl_to_rgb(h, (s * 0.22).min(0.14), 0.97)
+    } else {
+        [0.98, 0.98, 0.99]
+    };
+    let dark_cr = contrast_ratio(dark_ink, pill_rgb);
+    let light_cr = contrast_ratio(light_ink, pill_rgb);
+    let ink_rgb = if dark_cr >= light_cr {
+        if dark_cr >= 7.0 {
+            dark_ink
+        } else {
+            [0.06, 0.07, 0.09]
+        }
+    } else if light_cr >= 7.0 {
+        light_ink
+    } else {
+        [1., 1., 1.]
+    };
+
+    ChipSelectionStyle {
+        tint,
+        border,
+        ink: make_rgba(ink_rgb, 1.),
+    }
+}
+
+pub fn adaptive_selection_chip(
+    palette: crate::theme::Palette,
+    cx: &App,
+) -> ChipSelectionStyle {
+    let fallback = if palette.0 {
+        [0.06, 0.08, 0.15]
+    } else {
+        [0.91, 0.94, 0.99]
+    };
+    let (backdrop, tint) = cx
+        .try_global::<CardBackdrop>()
+        .map_or((fallback, 0.5), |b| (b.nav_backdrop, b.tint));
+    compute_chip_selection(backdrop, palette.card_tinted(true, tint), palette.0)
+}
+
+fn sample_local_backdrop_stats(
+    source: &RgbaImage,
+    bounds: Bounds<Pixels>,
+    cover: Bounds<Pixels>,
+) -> (f32, f32) {
+    let cw = f32::from(cover.size.width).max(1.);
+    let ch = f32::from(cover.size.height).max(1.);
+    let u0 = ((f32::from(bounds.origin.x) - f32::from(cover.origin.x)) / cw).clamp(0., 1.);
+    let u1 = ((f32::from(bounds.origin.x + bounds.size.width) - f32::from(cover.origin.x)) / cw)
+        .clamp(0., 1.);
+    let v0 = ((f32::from(bounds.origin.y) - f32::from(cover.origin.y)) / ch).clamp(0., 1.);
+    let v1 = ((f32::from(bounds.origin.y + bounds.size.height) - f32::from(cover.origin.y)) / ch)
+        .clamp(0., 1.);
+    let w = source.width().max(1);
+    let h = source.height().max(1);
+    let mut sum = 0.0f32;
+    let mut min_l = 1.0f32;
+    let mut max_l = 0.0f32;
+    let mut count = 0u32;
+    for iy in 0..3u32 {
+        let vt = v0 + (v1 - v0) * ((iy as f32 + 0.5) / 3.);
+        let py = ((vt * h as f32).floor() as u32).min(h - 1);
+        for ix in 0..5u32 {
+            let ut = u0 + (u1 - u0) * ((ix as f32 + 0.5) / 5.);
+            let px = ((ut * w as f32).floor() as u32).min(w - 1);
+            let p = source.get_pixel(px, py);
+            let l = relative_luminance([
+                f32::from(p[0]) / 255.,
+                f32::from(p[1]) / 255.,
+                f32::from(p[2]) / 255.,
+            ]);
+            sum += l;
+            min_l = min_l.min(l);
+            max_l = max_l.max(l);
+            count += 1;
+        }
+    }
+    (sum / count.max(1) as f32, (max_l - min_l).max(0.))
+}
+
+pub fn adaptive_pill_layer(
+    palette: crate::theme::Palette,
+    radius: Pixels,
+    tint_overlay: Option<gpui::Rgba>,
+    border: gpui::Rgba,
+) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, cx| {
+            let r = radius
+                .min(bounds.size.width * 0.5)
+                .min(bounds.size.height * 0.5)
+                .max(px(0.));
+            let mut alpha = 0.34f32;
+            let mut painted_image = false;
+            if let Some(backdrop) = cx.try_global::<CardBackdrop>()
+                && backdrop.owner == Some(window.window_handle())
+            {
+                alpha = (0.26 + 0.28 * backdrop.tint).clamp(0.26, 0.54);
+                let viewport = Bounds::new(point(px(0.), px(0.)), window.viewport_size());
+                if let Some(source) = backdrop.source.as_ref()
+                    && backdrop.custom
+                {
+                    let src_cover = ObjectFit::Cover.get_bounds(
+                        viewport,
+                        size(
+                            DevicePixels(source.width() as i32),
+                            DevicePixels(source.height() as i32),
+                        ),
+                    );
+                    let (local_luma, spread) = sample_local_backdrop_stats(source, bounds, src_cover);
+                    if spread >= 0.16 {
+                        alpha = alpha.max(0.44);
+                    }
+                    if !palette.0 && local_luma < 0.36 {
+                        let boost = 0.48 + 0.14 * ((0.36 - local_luma) / 0.36).clamp(0., 1.);
+                        alpha = alpha.max(boost);
+                    } else if palette.0 && local_luma > 0.62 {
+                        let boost = 0.48 + 0.14 * ((local_luma - 0.62) / 0.38).clamp(0., 1.);
+                        alpha = alpha.max(boost);
+                    }
+                } else if backdrop.contrast {
+                    alpha = alpha.max(0.56);
+                }
+                if let Some(image) = backdrop.image.as_ref() {
+                    let cover = ObjectFit::Cover.get_bounds(viewport, image.size(0));
+                    painted_image = window
+                        .paint_image(bounds, cover, r.into(), image.clone(), 0, false)
+                        .is_ok();
+                }
+            }
+            if !painted_image {
+                alpha = alpha.max(0.52);
+            }
+            let wash = if palette.0 {
+                rgba(0x2c2c3000 | ((alpha * 255.).round() as u32))
+            } else {
+                rgba(0xffffff00 | ((alpha * 255.).round() as u32))
+            };
+            let bevel = if palette.0 {
+                rgba(0xffffff24)
+            } else {
+                rgba(0xffffff8a)
+            };
+            window.paint_quad(quad(
+                bounds,
+                r,
+                wash,
+                px(1.),
+                bevel,
+                BorderStyle::Solid,
+            ));
+            if let Some(overlay) = tint_overlay {
+                window.paint_quad(quad(
+                    bounds,
+                    r,
+                    overlay,
+                    px(0.),
+                    transparent_black(),
+                    BorderStyle::Solid,
+                ));
+            }
+            window.paint_quad(quad(
+                bounds,
+                r,
+                transparent_black(),
+                px(1.),
+                border,
+                BorderStyle::Solid,
+            ));
+        },
+    )
+    .absolute()
+    .inset_0()
+    .size_full()
 }
 
 pub fn backdrop_ink(palette: crate::theme::Palette, cx: &App) -> gpui::Rgba {
@@ -1560,6 +1782,39 @@ pub fn glass_input(
         )
 }
 
+pub fn glass_multiline_input(
+    id: impl Into<ElementId>,
+    editor: &Entity<gpui_component::input::EditorState>,
+    height: Pixels,
+    p: crate::theme::Palette,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .relative()
+        .overflow_hidden()
+        .w_full()
+        .min_w_0()
+        .h(height)
+        .rounded(px(10.))
+        .bg(p.fill())
+        .border_1()
+        .border_color(p.control_rim())
+        .font_family("Consolas")
+        .child(control_layer(p, px(9.), true))
+        .child(
+            div()
+                .relative()
+                .size_full()
+                .p_2()
+                .child(
+                    gpui_component::input::Editor::new(editor)
+                        .h_full()
+                        .appearance(false)
+                        .bordered(false),
+                ),
+        )
+}
+
 const GRAIN_TILE: u32 = 160;
 const GRAIN_SHEET: u32 = GRAIN_TILE * 6;
 
@@ -1673,6 +1928,24 @@ mod tests {
             let pill_rgb = super::alpha_blend_rgb(style.bg, surface_rgb);
             let cr = super::contrast_ratio([style.ink.r, style.ink.g, style.ink.b], pill_rgb);
             assert!(cr >= 7.0, "contrast ratio {cr} too low for backdrop {backdrop:?} dark={dark}");
+        }
+    }
+
+    #[test]
+    fn chip_selection_maintains_high_contrast_across_backdrops() {
+        let scenarios = [
+            ([0.75, 0.88, 0.98], gpui::Rgba { r: 1., g: 1., b: 1., a: 0.24 }, false),
+            ([0.96, 0.97, 0.99], gpui::Rgba { r: 1., g: 1., b: 1., a: 0.50 }, false),
+            ([0.24, 0.27, 0.46], gpui::Rgba { r: 1., g: 1., b: 1., a: 0.20 }, false),
+            ([0.12, 0.16, 0.28], gpui::Rgba { r: 0.17, g: 0.17, b: 0.19, a: 0.30 }, true),
+            ([0.92, 0.93, 0.95], gpui::Rgba { r: 0.17, g: 0.17, b: 0.19, a: 0.20 }, true),
+        ];
+        for (backdrop, surface, dark) in scenarios {
+            let style = super::compute_chip_selection(backdrop, surface, dark);
+            let surface_rgb = super::alpha_blend_rgb(surface, backdrop);
+            let pill = super::alpha_blend_rgb(style.tint, surface_rgb);
+            let cr = super::contrast_ratio([style.ink.r, style.ink.g, style.ink.b], pill);
+            assert!(cr >= 7.0, "chip contrast ratio {cr} too low for backdrop {backdrop:?} dark={dark}");
         }
     }
 

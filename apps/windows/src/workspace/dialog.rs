@@ -24,6 +24,7 @@ impl Workspace {
         match self.page {
             Page::Connections => self.detail.is_some() || self.confirm.is_some(),
             Page::Rules => self.rule_browser.detail.is_some() || self.rule_browser.inspect.is_some(),
+            Page::Tailscale => self.tailscale.dialog.is_some(),
             Page::Config => self.config_dialog.is_some(),
             Page::Settings => self.settings_layout.dialog.is_some(),
             _ => false,
@@ -34,6 +35,7 @@ impl Workspace {
         let visible = match self.page {
             Page::Connections => self.detail.is_some() || self.confirm.is_some(),
             Page::Rules => self.rule_browser.detail.is_some() || self.rule_browser.inspect.is_some(),
+            Page::Tailscale => self.tailscale.dialog.is_some(),
             Page::Config => self.config_dialog.is_some(),
             Page::Settings => self.settings_layout.dialog.is_some(),
             _ => false,
@@ -60,6 +62,7 @@ impl Workspace {
         let overlay = match self.page {
             Page::Connections => self.connection_overlay(window, cx),
             Page::Rules => self.rule_overlay(window, cx),
+            Page::Tailscale => self.render_tailscale_dialog(cx).map(|el| div().absolute().inset_0().child(el)),
             Page::Config => self.render_config_dialog(cx).map(|el| div().absolute().inset_0().child(el)),
             Page::Settings => self.render_settings_dialog(cx).map(|el| div().absolute().inset_0().child(el)),
             _ => None,

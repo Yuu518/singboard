@@ -84,7 +84,7 @@ impl Workspace {
                     InputState::new(w, cx)
                         .default_value(value.to_string())
                         .placeholder(hint)
-                        .masked(key == "secret")
+                        .masked(matches!(key, "secret" | "service_secret"))
                 }),
                 value.to_string(),
             )
@@ -677,6 +677,34 @@ impl Workspace {
             .child(self.result("service", p))
     }
 
+    fn service_ca_field(
+        &mut self,
+        value: &str,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<gpui_component::input::EditorState> {
+        let (editor, baseline) = self
+            .settings_layout
+            .service_ca_editor
+            .get_or_insert_with(|| {
+                (
+                    cx.new(|cx| {
+                        gpui_component::input::EditorState::new(w, cx)
+                            .line_number(false)
+                            .default_value(value.to_string())
+                    }),
+                    value.to_string(),
+                )
+            });
+        if baseline != value {
+            if editor.read(cx).value().as_str() == baseline {
+                editor.update(cx, |e, cx| e.set_value(value.to_string(), w, cx));
+            }
+            *baseline = value.to_string();
+        }
+        editor.clone()
+    }
+
     pub(super) fn endpoint_settings(
         &mut self,
         prefs: &Settings,
@@ -693,19 +721,25 @@ impl Workspace {
             .collect();
         let host_label = host_for_display(&self.endpoint);
         let api_state = self.api_state();
-        let status_text = if api_state == ApiState::Connected {
-            match self.summary["version"].as_str().filter(|version| !version.is_empty()) {
-                Some(version) => format!("已连接 {host_label} · {version} · 共 {} 个端点", prefs.clash_apis.len()),
-                None => format!("已连接 {host_label} · 共 {} 个端点", prefs.clash_apis.len()),
-            }
-        } else {
-            format!("{} · {host_label}", api_state.label())
+        let clash_dot = match api_state {
+            ApiState::Connected => p.success_dot(),
+            ApiState::Waiting => p.warning_dot(),
+            ApiState::Disconnected => p.muted(),
+            ApiState::AuthFailed | ApiState::Unreachable => p.danger_fill(),
         };
-        let (dot_color, halo_color, is_err) = match api_state {
-            ApiState::Connected => (p.success_dot(), p.success_soft(), false),
-            ApiState::Waiting => (p.warning_dot(), p.warning_soft(), false),
-            ApiState::Disconnected => (p.muted(), p.fill(), false),
-            ApiState::AuthFailed | ApiState::Unreachable => (p.danger_fill(), p.danger_soft(), true),
+        let clash_chip_text = match api_state {
+            ApiState::Connected => host_label,
+            ApiState::Waiting => format!("连接中 · {host_label}"),
+            ApiState::Disconnected => "未连接".into(),
+            ApiState::AuthFailed => "认证失败".into(),
+            ApiState::Unreachable => "不可达".into(),
+        };
+        let (service_chip_text, service_tone) = self.tailscale_status_chip();
+        let service_dot = match service_tone {
+            crate::workspace::tailscale::StatusTone::Ok => p.success_dot(),
+            crate::workspace::tailscale::StatusTone::Warn => p.warning_dot(),
+            crate::workspace::tailscale::StatusTone::Error => p.danger_fill(),
+            crate::workspace::tailscale::StatusTone::Muted => p.muted(),
         };
 
         let edit_open = self.settings_layout.api_edit == Some(false);
@@ -714,19 +748,7 @@ impl Workspace {
             .flex()
             .items_center()
             .gap(px(4.))
-            .when(!narrow, |d| d.w(px(340.)).flex_none())
-            .child(
-                div()
-                    .size(px(14.))
-                    .mx(px(4.))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(halo_color)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(div().size(px(8.)).rounded_full().bg(dot_color)),
-            )
+            .when(!narrow, |d| d.w(px(320.)).flex_none())
             .child(div().flex_1().min_w_0().child(picker(
                 "saved-endpoints",
                 api.id.clone(),
@@ -744,7 +766,18 @@ impl Workspace {
                         } else {
                             v.settings_layout.api_edit = Some(false);
                             v.settings_layout.protocol = None;
-                            for k in ["name", "host", "port", "secret"] {
+                            v.settings_layout.service_protocol = None;
+                            v.settings_layout.service_ca_editor = None;
+                            for k in [
+                                "name",
+                                "host",
+                                "port",
+                                "secret",
+                                "service_host",
+                                "service_port",
+                                "service_secret",
+                                "service_server_name",
+                            ] {
                                 v.settings_layout.fields.remove(k);
                             }
                         }
@@ -760,7 +793,18 @@ impl Workspace {
                         } else {
                             v.settings_layout.api_edit = Some(true);
                             v.settings_layout.protocol = None;
-                            for k in ["name", "host", "port", "secret"] {
+                            v.settings_layout.service_protocol = None;
+                            v.settings_layout.service_ca_editor = None;
+                            for k in [
+                                "name",
+                                "host",
+                                "port",
+                                "secret",
+                                "service_host",
+                                "service_port",
+                                "service_secret",
+                                "service_server_name",
+                            ] {
                                 v.settings_layout.fields.remove(k);
                             }
                         }
@@ -768,6 +812,21 @@ impl Workspace {
                     },
                 )),
             );
+
+        let status_chip = |dot: Rgba, label: &'static str, value: String| {
+            div()
+                .px_2()
+                .py(px(2.))
+                .rounded_full()
+                .bg(p.fill())
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .text_xs()
+                .child(div().size(px(6.)).rounded_full().bg(dot))
+                .child(div().text_color(p.muted()).child(label))
+                .child(div().font_family("Consolas").text_color(p.ink()).child(value))
+        };
 
         let top_row = div()
             .w_full()
@@ -783,19 +842,33 @@ impl Workspace {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap(px(2.))
+                    .gap(px(5.))
                     .child(
                         div()
-                            .text_size(crate::theme::text_px(13.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("当前端点"),
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_size(crate::theme::text_px(13.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("当前端点"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(p.muted())
+                                    .child(format!("共 {} 个", prefs.clash_apis.len())),
+                            ),
                     )
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(if is_err { p.danger() } else { p.muted() })
-                            .truncate()
-                            .child(status_text),
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(status_chip(clash_dot, "Clash", clash_chip_text))
+                            .child(status_chip(service_dot, "sing-box", service_chip_text)),
                     ),
             )
             .child(controls);
@@ -830,6 +903,40 @@ impl Workspace {
                         .unwrap_or_default()
                 })
                 .unwrap_or_else(|| if new { String::new() } else { api.url.clone() });
+
+            let svc = if new {
+                None
+            } else {
+                api.service_api.as_ref()
+            };
+            let svc_parsed = svc.and_then(|c| reqwest::Url::parse(&c.url).ok());
+            let svc_port_val = svc_parsed
+                .as_ref()
+                .and_then(|u| u.port())
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            let svc_scheme = match svc_parsed.as_ref().map(|u| u.scheme()) {
+                Some("https") => "https",
+                _ => "http",
+            };
+            let service_protocol = self
+                .settings_layout
+                .service_protocol
+                .clone()
+                .unwrap_or_else(|| svc_scheme.to_owned());
+            let svc_host_val = svc_parsed
+                .map(|mut u| {
+                    let _ = u.set_port(None);
+                    u.as_str()
+                        .split_once("://")
+                        .map(|(_, v)| v.trim_end_matches('/').to_string())
+                        .unwrap_or_default()
+                })
+                .unwrap_or_else(|| svc.map(|c| c.url.clone()).unwrap_or_default());
+            let svc_secret_val = svc.map(|c| c.secret.as_str()).unwrap_or_default();
+            let svc_sni_val = svc.map(|c| c.server_name.as_str()).unwrap_or_default();
+            let svc_ca_val = svc.map(|c| c.ca_pem.as_str()).unwrap_or_default();
+
             let field_wrap = |label: &'static str| {
                 div()
                     .flex()
@@ -864,6 +971,36 @@ impl Workspace {
                 cx,
             );
 
+            let svc_host_input = self.field(
+                "service_host",
+                &svc_host_val,
+                "留空自动发现，如 127.0.0.1",
+                w,
+                cx,
+            );
+            let svc_port_input = self.field("service_port", &svc_port_val, "9095", w, cx);
+            let svc_secret_input =
+                self.field("service_secret", svc_secret_val, "留空表示无密钥", w, cx);
+            let svc_sni_input = self.field(
+                "service_server_name",
+                svc_sni_val,
+                "可选，如 router.internal",
+                w,
+                cx,
+            );
+            let svc_ca_editor = self.service_ca_field(svc_ca_val, w, cx);
+            let svc_protocol_control = picker(
+                "service-api-protocol",
+                service_protocol.clone(),
+                ["http", "https"].map(|v| (v.into(), v.into())).to_vec(),
+                |v, s, cx| {
+                    v.settings_layout.service_protocol = Some(s);
+                    cx.notify();
+                },
+                cx,
+            );
+            let svc_https = service_protocol == "https";
+
             let can_delete = !new && prefs.clash_apis.len() > 1;
             let delete_id = api.id.clone();
             let delete_name = api.name.clone();
@@ -875,6 +1012,7 @@ impl Workspace {
                 .unwrap_or_default();
             let save_id = api.id.clone();
             let save_proto = protocol.clone();
+            let save_svc_proto = service_protocol.clone();
 
             let actions = div()
                 .flex()
@@ -913,9 +1051,30 @@ impl Workspace {
                             p,
                         )
                         .on_click(cx.listener(move |v, _, _, cx| {
-                            let mut values = v.values(&["name", "host", "port", "secret"], cx);
+                            let mut values = v.values(
+                                &[
+                                    "name",
+                                    "host",
+                                    "port",
+                                    "secret",
+                                    "service_host",
+                                    "service_port",
+                                    "service_secret",
+                                    "service_server_name",
+                                ],
+                                cx,
+                            );
+                            let ca_pem = v
+                                .settings_layout
+                                .service_ca_editor
+                                .as_ref()
+                                .map(|(e, _)| e.read(cx).value().trim().to_owned())
+                                .unwrap_or_default();
                             values.insert("protocol".into(), save_proto.clone());
                             values.insert("id".into(), save_id.clone());
+                            values.insert("service_present".into(), "1".into());
+                            values.insert("service_protocol".into(), save_svc_proto.clone());
+                            values.insert("service_ca_pem".into(), ca_pem);
                             v.run_setting(
                                 "api",
                                 if new { "add_api" } else { "save_api" },
@@ -925,6 +1084,10 @@ impl Workspace {
                         })),
                     ),
                 );
+
+            let svc_host_fill = svc_host_input.clone();
+            let svc_port_fill = svc_port_input.clone();
+            let ca_import_editor = svc_ca_editor.clone();
 
             let fields = div()
                 .px_4()
@@ -945,35 +1108,278 @@ impl Workspace {
                         )
                         .child(
                             div().text_xs().text_color(p.muted()).child(if new {
-                                "新增后会自动切换到这个端点。主机里可以直接粘贴完整地址，如 http://127.0.0.1:9090。"
+                                "新增后会自动切换到这个端点。主机里可以直接粘贴完整地址。"
                             } else {
-                                "保存后面板会立即重新连接。主机里可以直接粘贴完整地址，如 http://127.0.0.1:9090。"
+                                "保存后面板会立即重新连接。主机里可以直接粘贴完整地址。"
                             }),
                         ),
                 )
-                .child(field_wrap("名称").child(glass_input("api-name-input", &name, false, p)))
+                .child(field_wrap("端点名称").child(glass_input("api-name-input", &name, false, p)))
+                .child(divider(p))
                 .child(
                     div()
                         .flex()
-                        .gap(px(10.))
-                        .when(narrow, |s| s.flex_col())
+                        .flex_col()
+                        .gap_2p5()
                         .child(
-                            field_wrap("协议")
-                                .when(!narrow, |s| s.w(px(96.)).flex_none())
-                                .child(protocol_control),
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(p.ink())
+                                .child("Clash API"),
                         )
                         .child(
-                            field_wrap("主机")
-                                .when(!narrow, |s| s.flex_1().min_w_0())
-                                .child(glass_input("api-host-input", &host_input, true, p)),
+                            div()
+                                .flex()
+                                .gap(px(10.))
+                                .when(narrow, |s| s.flex_col())
+                                .child(
+                                    field_wrap("协议")
+                                        .when(!narrow, |s| s.w(px(96.)).flex_none())
+                                        .child(protocol_control),
+                                )
+                                .child(
+                                    field_wrap("主机")
+                                        .when(!narrow, |s| s.flex_1().min_w_0())
+                                        .child(glass_input("api-host-input", &host_input, true, p)),
+                                )
+                                .child(
+                                    field_wrap("端口")
+                                        .when(!narrow, |s| s.w(px(96.)).flex_none())
+                                        .child(glass_input("api-port-input", &port_input, true, p)),
+                                ),
                         )
                         .child(
-                            field_wrap("端口")
-                                .when(!narrow, |s| s.w(px(96.)).flex_none())
-                                .child(glass_input("api-port-input", &port_input, true, p)),
+                            field_wrap("访问密钥")
+                                .child(glass_input("api-secret-input", &secret, true, p)),
                         ),
                 )
-                .child(field_wrap("访问密钥").child(glass_input("api-secret-input", &secret, true, p)))
+                .child(divider(p))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2p5()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(p.ink())
+                                                .child("sing-box API（可选）"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(p.muted())
+                                                .child("用于 Tailscale 等原生服务；本地端点留空可自动发现。"),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .id("discover-service-api")
+                                        .cursor_pointer()
+                                        .px_2p5()
+                                        .py_1()
+                                        .rounded_full()
+                                        .bg(p.primary_soft())
+                                        .text_color(p.accent())
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child("自动发现本地配置")
+                                        .on_click(cx.listener(move |v, _, window, cx| {
+                                            let host_ent = svc_host_fill.clone();
+                                            let port_ent = svc_port_fill.clone();
+                                            let handle = window.window_handle();
+                                            let task = singboard_core::runtime().spawn(async move {
+                                                let dir = crate::service::data_dir()?;
+                                                let mut api = singboard_core::service_api::ServiceApi::new(dir);
+                                                api.execute(singboard_core::service_api::Command::Discover)
+                                                    .await
+                                                    .map_err(|e| e.message)
+                                            });
+                                            cx.spawn(async move |weak, cx| {
+                                                let res = task.await.unwrap_or_else(|e| Err(e.to_string()));
+                                                let _ = handle.update(cx, |_, window, cx| {
+                                                    let _ = weak.update(cx, |this, cx| {
+                                                        match res {
+                                                            Ok(val) => {
+                                                                if let Some(first) = val.as_array().and_then(|a| a.first())
+                                                                    && let Some(url_str) = first["url"].as_str()
+                                                                    && let Ok(parsed) = reqwest::Url::parse(url_str)
+                                                                {
+                                                                    let scheme = parsed.scheme().to_owned();
+                                                                    let host = parsed.host_str().unwrap_or("127.0.0.1").to_owned();
+                                                                    let port = parsed.port().map(|p| p.to_string()).unwrap_or_default();
+                                                                    this.settings_layout.service_protocol = Some(scheme);
+                                                                    host_ent.update(cx, |i, cx| i.set_value(host, window, cx));
+                                                                    port_ent.update(cx, |i, cx| i.set_value(port, window, cx));
+                                                                    this.message(format!("已填入自动发现的地址：{url_str}"), false, cx);
+                                                                } else {
+                                                                    this.message("本地配置中未发现 type 为 api 的服务".into(), true, cx);
+                                                                }
+                                                            }
+                                                            Err(e) => this.message(format!("自动发现失败：{e}"), true, cx),
+                                                        }
+                                                        cx.notify();
+                                                    });
+                                                });
+                                            })
+                                            .detach();
+                                            let _ = v;
+                                        })),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap(px(10.))
+                                .when(narrow, |s| s.flex_col())
+                                .child(
+                                    field_wrap("协议")
+                                        .when(!narrow, |s| s.w(px(96.)).flex_none())
+                                        .child(svc_protocol_control),
+                                )
+                                .child(
+                                    field_wrap("主机")
+                                        .when(!narrow, |s| s.flex_1().min_w_0())
+                                        .child(glass_input(
+                                            "service-api-host-input",
+                                            &svc_host_input,
+                                            true,
+                                            p,
+                                        )),
+                                )
+                                .child(
+                                    field_wrap("端口")
+                                        .when(!narrow, |s| s.w(px(96.)).flex_none())
+                                        .child(glass_input(
+                                            "service-api-port-input",
+                                            &svc_port_input,
+                                            true,
+                                            p,
+                                        )),
+                                ),
+                        )
+                        .child(
+                            field_wrap("密钥 (Bearer Secret)").child(glass_input(
+                                "service-api-secret-input",
+                                &svc_secret_input,
+                                true,
+                                p,
+                            )),
+                        )
+                        .when(svc_https, |el| {
+                            el.child(field_wrap("TLS Server Name（可选）").child(glass_input(
+                                "service-api-sni-input",
+                                &svc_sni_input,
+                                true,
+                                p,
+                            )))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(6.))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(p.muted())
+                                                    .child("CA 证书 PEM（可选）"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("settings-import-ca")
+                                                    .cursor_pointer()
+                                                    .px_2p5()
+                                                    .py(px(2.))
+                                                    .rounded_full()
+                                                    .bg(p.primary_soft())
+                                                    .text_color(p.accent())
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child("从文件导入")
+                                                    .on_click(cx.listener(
+                                                        move |_, _, window, cx| {
+                                                            let ed = ca_import_editor.clone();
+                                                            let picker = cx.prompt_for_paths(
+                                                                PathPromptOptions {
+                                                                    files: true,
+                                                                    directories: false,
+                                                                    multiple: false,
+                                                                    prompt: Some(
+                                                                        "选择 CA 证书 PEM 文件"
+                                                                            .into(),
+                                                                    ),
+                                                                },
+                                                            );
+                                                            let handle = window.window_handle();
+                                                            cx.spawn(async move |weak, cx| {
+                                                                if let Ok(Ok(Some(paths))) =
+                                                                    picker.await
+                                                                    && let Some(path) =
+                                                                        paths.into_iter().next()
+                                                                {
+                                                                    let res = std::fs::read_to_string(
+                                                                        &path,
+                                                                    );
+                                                                    let _ = handle.update(
+                                                                        cx,
+                                                                        |_, window, cx| {
+                                                                            let _ = weak.update(
+                                                                                cx,
+                                                                                |this, cx| {
+                                                                                    match res {
+                                                                                        Ok(pem) => {
+                                                                                            ed.update(cx, |e, cx| {
+                                                                                                e.set_value(pem, window, cx)
+                                                                                            });
+                                                                                        }
+                                                                                        Err(e) => {
+                                                                                            this.message(
+                                                                                                format!("读取证书失败：{e}"),
+                                                                                                true,
+                                                                                                cx,
+                                                                                            );
+                                                                                        }
+                                                                                    }
+                                                                                    cx.notify();
+                                                                                },
+                                                                            );
+                                                                        },
+                                                                    );
+                                                                }
+                                                            })
+                                                            .detach();
+                                                        },
+                                                    )),
+                                            ),
+                                    )
+                                    .child(crate::glass::glass_multiline_input(
+                                        "service-api-ca-input",
+                                        &svc_ca_editor,
+                                        px(84.),
+                                        p,
+                                    )),
+                            )
+                        }),
+                )
                 .child(actions);
 
             form = form.child(divider(p)).child(fields);

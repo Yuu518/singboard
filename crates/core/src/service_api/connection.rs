@@ -40,6 +40,10 @@ impl Interceptor for Auth {
 }
 
 impl Connection {
+    pub(crate) fn validate(&self) -> std::result::Result<(), String> {
+        self.transport().map(|_| ()).map_err(|e| e.message)
+    }
+
     pub(super) fn transport(&self) -> Result<(GrpcEndpoint, Auth)> {
         let invalid = || ApiError::invalid("Service API 地址应为 http(s)://主机:端口");
         let url: Url = self.url.parse().map_err(|_| invalid())?;

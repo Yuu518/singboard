@@ -13,6 +13,8 @@ import 'native_stream.dart';
 import 'maintenance_page.dart';
 import 'settings_page.dart';
 import 'setup_wizard.dart';
+import 'tailscale_page.dart';
+import 'tailscale_service.dart';
 import 'tools_page.dart';
 
 final _theme = ValueNotifier(ThemeMode.system);
@@ -152,6 +154,15 @@ class Panel extends StatelessWidget {
           brightness: Brightness.light,
         ),
         scaffoldBackgroundColor: Colors.transparent,
+        pageTransitionsTheme: const PageTransitionsTheme(
+          builders: {
+            TargetPlatform.android: GlassPageTransitionsBuilder(),
+            TargetPlatform.iOS: GlassPageTransitionsBuilder(),
+            TargetPlatform.linux: GlassPageTransitionsBuilder(),
+            TargetPlatform.macOS: GlassPageTransitionsBuilder(),
+            TargetPlatform.windows: GlassPageTransitionsBuilder(),
+          },
+        ),
       ),
       darkTheme: ThemeData(
         useMaterial3: true,
@@ -160,6 +171,15 @@ class Panel extends StatelessWidget {
           brightness: Brightness.dark,
         ),
         scaffoldBackgroundColor: Colors.transparent,
+        pageTransitionsTheme: const PageTransitionsTheme(
+          builders: {
+            TargetPlatform.android: GlassPageTransitionsBuilder(),
+            TargetPlatform.iOS: GlassPageTransitionsBuilder(),
+            TargetPlatform.linux: GlassPageTransitionsBuilder(),
+            TargetPlatform.macOS: GlassPageTransitionsBuilder(),
+            TargetPlatform.windows: GlassPageTransitionsBuilder(),
+          },
+        ),
       ),
       builder: (ctx, navigator) {
         final dark = Theme.of(ctx).brightness == Brightness.dark;
@@ -179,9 +199,11 @@ class Panel extends StatelessWidget {
             tint: _glassTint.value,
             wallpaperPath: _wallpaper.value,
             wallpaperRevision: _wallpaperRev.value,
-            child: _FontScaleTransition(
-              scale: factor,
-              child: GlassToastHost(child: navigator ?? const SizedBox.shrink()),
+            child: GlassBackdrop(
+              child: _FontScaleTransition(
+                scale: factor,
+                child: GlassToastHost(child: navigator ?? const SizedBox.shrink()),
+              ),
             ),
           ),
         );
@@ -227,6 +249,9 @@ class _PagerPanelState extends State<_PagerPanel> with AutomaticKeepAliveClientM
 class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   static const limit = 5000;
   final _logSearchCtrl = TextEditingController();
+  final _tailscale = TailscaleController();
+  bool _drainingShares = false;
+  bool _shareRequested = false;
   NativeStream? logs;
   NativeStream? traffic;
   NativeStream? connections;
@@ -858,11 +883,71 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     }
   }
 
+  void _onTailscaleChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _checkPendingShare() async {
+    _shareRequested = true;
+    if (_drainingShares) return;
+    _drainingShares = true;
+    var finishIfEmpty = false;
+    try {
+      while (mounted) {
+        _shareRequested = false;
+        final raw = await _platformChannel.invokeMethod<Map>('consumePendingShare', {
+          'finishIfEmpty': finishIfEmpty,
+        });
+        if (!mounted) {
+          if (raw != null) {
+            await _platformChannel.invokeMethod<void>('clearStagedShare', {'batchDir': raw['batchDir']});
+          }
+          return;
+        }
+        if (raw == null) {
+          if (_shareRequested) continue;
+          break;
+        }
+        finishIfEmpty = await _openShareSheet(Map<String, dynamic>.from(raw));
+      }
+    } on PlatformException catch (e) {
+      if (mounted) showGlassToast(context, '无法打开分享：${e.message}', error: true);
+    } finally {
+      _drainingShares = false;
+    }
+  }
+
+  Future<bool> _openShareSheet(Map<String, dynamic> payload) async {
+    final batchDir = payload['batchDir']?.toString() ?? '';
+    final files = (payload['files'] as List? ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    if (batchDir.isEmpty || files.isEmpty) return false;
+    final fromExternal = payload['fromExternal'] == true;
+    return await showGlassSheet<bool>(
+      context: context,
+      builder: (_) => TaildropQuickShareSheet(
+        controller: _tailscale,
+        batchDir: batchDir,
+        files: files,
+        fromExternal: fromExternal,
+      ),
+    ) ?? false;
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     HardwareKeyboard.instance.addHandler(_logShortcut);
+    _tailscale.addListener(_onTailscaleChanged);
+    _platformChannel.setMethodCallHandler((call) async {
+      if (call.method == 'taildropShareIncoming') {
+        unawaited(_checkPendingShare());
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkPendingShare());
     unawaited(_loadWallpaper());
     loadPreferences(initial: true);
   }
@@ -880,6 +965,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       final prefs =
           await configRequest(dir, 'preferences') as Map<String, dynamic>;
       if (!mounted) return;
+      unawaited(_tailscale.sync());
       final previousEndpoint = endpoint, previousSecret = secret;
       if (preferences['nativeRootEnabled'] != prefs['nativeRootEnabled']) {
         _rootGeneration++;
@@ -948,7 +1034,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
         unawaited(
           checkPanelUpdate(dir)
               .then((info) async {
-                if (mounted &&
+                if (mounted && !_drainingShares &&
                     (info['available'] == true || info['reinstall'] == true)) {
                   await showPanelUpdate(context, info);
                 }
@@ -1213,6 +1299,9 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     clearedTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     HardwareKeyboard.instance.removeHandler(_logShortcut);
+    _platformChannel.setMethodCallHandler(null);
+    _tailscale.removeListener(_onTailscaleChanged);
+    _tailscale.dispose();
     _logSearchCtrl.dispose();
     _pager.dispose();
     _headerScroll.dispose();
@@ -2417,6 +2506,136 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
             ],
           ),
         ),
+        if (_tailscale.hasEndpoints) ...[
+          const SizedBox(height: 12),
+          Builder(
+            builder: (_) {
+              final ep = _tailscale.currentEndpoint ?? const <String, dynamic>{};
+              final selfPeer =
+                  (ep['self'] as Map?)?.cast<String, dynamic>() ?? const {};
+              final exitNode =
+                  (ep['exitNode'] as Map?)?.cast<String, dynamic>() ?? const {};
+              final peers = tailscaleAllPeers(ep);
+              final online = peers.where((p) => p['online'] == true).length;
+              final network = ep['networkName']?.toString() ?? 'Tailnet';
+              final selfIp = tailscalePrimaryIp(selfPeer);
+              final exitName = exitNode['hostName']?.toString() ?? '';
+              return GlassCard(
+                padding: EdgeInsets.zero,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(20),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => TailscalePage(
+                        controller: _tailscale,
+                        preferences: preferences,
+                      ),
+                    ),
+                  ),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: padX,
+                      vertical: 14,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 30,
+                              height: 30,
+                              decoration: BoxDecoration(
+                                color: c.primarySoft,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Center(
+                                child: PanelIcon(
+                                  'tailscale',
+                                  size: 16,
+                                  color: c.selectionInk,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Text(
+                                        'Tailscale',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                          color: c.ink,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        width: 7,
+                                        height: 7,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: ep['backendState'] == 'Running'
+                                              ? c.success
+                                              : c.warning,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Text(
+                                    '$network · $online/${peers.length} 设备在线',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontSize: 12, color: c.muted),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            PanelIcon('chevron', size: 15, color: c.muted),
+                          ],
+                        ),
+                        if (selfIp.isNotEmpty || exitName.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Divider(
+                            height: 0.5,
+                            thickness: 0.5,
+                            color: c.hairline,
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              if (selfIp.isNotEmpty)
+                                Text(
+                                  selfIp,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontFamily: 'monospace',
+                                    color: c.muted,
+                                  ),
+                                ),
+                              const Spacer(),
+                              Text(
+                                exitName.isEmpty ? '未启用出口节点' : '出口 · $exitName',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: c.ink,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
         const SizedBox(height: 12),
         GlassCard(
           padding: EdgeInsets.zero,
@@ -3455,6 +3674,8 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       preferences: preferences,
       summary: summary,
       endpoint: endpoint,
+      tailscale: _tailscale,
+      clashConnected: overviewLive,
       rootStatus: switch (rootService['state']) {
         'running' => '运行中',
         'stopped' => '已停止',

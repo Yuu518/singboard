@@ -14,6 +14,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("connections", include_bytes!("../../android/assets/icons/connections.svg")),
     ("logs", include_bytes!("../../android/assets/icons/logs.svg")),
     ("rules", include_bytes!("../../android/assets/icons/rules.svg")),
+    ("tailscale", include_bytes!("../../android/assets/icons/tailscale.svg")),
     ("config", include_bytes!("../assets/config.svg")),
     ("settings", include_bytes!("../../android/assets/icons/settings.svg")),
     ("topology-pause", include_bytes!("../../android/assets/icons/topology-pause.svg")),
@@ -109,10 +110,11 @@ impl Overview {
         let local_running = ws.local_state == CoreState::Running;
         let local_stopped = ws.local_state.is_stopped();
         let transition = ws.service_transition();
-        let mut status_label = ws.core_status_label().to_owned();
-        if local_running && transition.is_none() && let Some(uptime) = ws.uptime() {
-            status_label = format!("{status_label} · {uptime}");
-        }
+        let status_label = if local_running && transition.is_none() {
+            ws.uptime().unwrap_or_else(|| "运行中".into())
+        } else {
+            ws.core_status_label().to_owned()
+        };
         let (dot_color, halo_color) = if transition.is_some() {
             (palette.warning_dot(), palette.warning_soft())
         } else if local_running {
@@ -155,16 +157,21 @@ impl Overview {
                             .child("singboard"),
                     ),
             );
+        let has_tailscale = ws.has_tailscale_endpoints();
         let nav_sel = crate::glass::nav_selection_style(palette, tint, cx);
         let mut nav = div().px_2().py_1().flex().flex_col().gap(px(2.)).flex_1();
         for (i, (page, label)) in PAGES.into_iter().enumerate() {
+            if page == super::workspace::Page::Tailscale && !has_tailscale {
+                continue;
+            }
             let selected = page == active;
             nav = nav.child(
                 div()
                     .id(("nav", i))
                     .flex()
                     .items_center()
-                    .gap(px(12.))
+                    .justify_between()
+                    .gap(px(8.))
                     .px_3()
                     .h(crate::theme::text_px(35.))
                     .rounded(px(12.))
@@ -179,24 +186,31 @@ impl Overview {
                     })
                     .when(!selected, |item| item.hover(|s| s.bg(palette.hover())))
                     .child(
-                        svg()
-                            .path(match page {
-                                super::workspace::Page::Overview => "overview",
-                                super::workspace::Page::Proxies => "proxies",
-                                super::workspace::Page::Connections => "connections",
-                                super::workspace::Page::Logs => "logs",
-                                super::workspace::Page::Rules => "rules",
-                                super::workspace::Page::Config => "config",
-                                super::workspace::Page::Settings => "settings",
-                            })
-                            .size(px(18.))
-                            .text_color(if selected {
-                                nav_sel.ink
-                            } else {
-                                palette.muted()
-                            }),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(12.))
+                            .child(
+                                svg()
+                                    .path(match page {
+                                        super::workspace::Page::Overview => "overview",
+                                        super::workspace::Page::Proxies => "proxies",
+                                        super::workspace::Page::Connections => "connections",
+                                        super::workspace::Page::Logs => "logs",
+                                        super::workspace::Page::Rules => "rules",
+                                        super::workspace::Page::Tailscale => "tailscale",
+                                        super::workspace::Page::Config => "config",
+                                        super::workspace::Page::Settings => "settings",
+                                    })
+                                    .size(px(18.))
+                                    .text_color(if selected {
+                                        nav_sel.ink
+                                    } else {
+                                        palette.muted()
+                                    }),
+                            )
+                            .child(label),
                     )
-                    .child(label)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.workspace.update(cx, |state, cx| state.open(page, cx));
                         cx.notify();
@@ -316,11 +330,7 @@ impl Overview {
                             .justify_center()
                             .child(div().size(px(8.)).rounded_full().bg(dot_color)),
                     )
-                    .child(
-                        div().min_w_0().flex().flex_col()
-                            .child(div().truncate().text_color(palette.ink()).child(status_label))
-                            .child(div().truncate().text_color(palette.muted()).child(ws.api_status_label())),
-                    )
+                    .child(div().min_w_0().truncate().text_color(palette.ink()).child(status_label))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let action = if local_running { "stop" } else { "start" };
                         this.workspace.update(cx, |state, cx| {

@@ -1,10 +1,13 @@
 import 'dart:ui' as ui;
 
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'config_page.dart';
 import 'glass_ui.dart';
 import 'native_stream.dart';
+
+const _wizardChannel = MethodChannel('singboard/config');
 
 class SetupWizardOverlay extends StatefulWidget {
   final Map<String, dynamic> preferences;
@@ -27,12 +30,34 @@ class SetupWizardOverlay extends StatefulWidget {
 }
 
 class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
+  Map<String, dynamic> get _activeServiceApi {
+    final apis = (widget.preferences['clashApis'] as List? ?? const [])
+        .whereType<Map>();
+    final active = apis
+        .where((a) => a['id'] == widget.preferences['activeClashApiId'])
+        .firstOrNull;
+    final svc = active?['serviceApi'];
+    return svc is Map ? Map<String, dynamic>.from(svc) : const {};
+  }
+
   late final _urlCtrl = TextEditingController(
     text: widget.initialUrl.isEmpty
         ? 'http://127.0.0.1:9090'
         : widget.initialUrl,
   );
   late final _secretCtrl = TextEditingController(text: widget.initialSecret);
+  late final _serviceUrlCtrl = TextEditingController(
+    text: _activeServiceApi['url']?.toString() ?? '',
+  );
+  late final _serviceSecretCtrl = TextEditingController(
+    text: _activeServiceApi['secret']?.toString() ?? '',
+  );
+  late final _serviceSniCtrl = TextEditingController(
+    text: _activeServiceApi['serverName']?.toString() ?? '',
+  );
+  late final _serviceCaCtrl = TextEditingController(
+    text: _activeServiceApi['caPem']?.toString() ?? '',
+  );
   late final _workDirCtrl = TextEditingController(
     text: (widget.preferences['workingDir'] as String? ?? ''),
   );
@@ -41,11 +66,40 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
   String _error = '';
 
   @override
+  void initState() {
+    super.initState();
+    _serviceUrlCtrl.addListener(_onServiceUrlChanged);
+  }
+
+  void _onServiceUrlChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   void dispose() {
+    _serviceUrlCtrl.removeListener(_onServiceUrlChanged);
     _urlCtrl.dispose();
     _secretCtrl.dispose();
+    _serviceUrlCtrl.dispose();
+    _serviceSecretCtrl.dispose();
+    _serviceSniCtrl.dispose();
+    _serviceCaCtrl.dispose();
     _workDirCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _importPem() async {
+    try {
+      final pem = await _wizardChannel.invokeMethod<String>('pickPemFile');
+      if (pem != null && mounted) {
+        setState(() {
+          _serviceCaCtrl.text = pem;
+          _error = '';
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    }
   }
 
   Future<void> _goToSettings() async {
@@ -111,6 +165,11 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
           'url': apiUrl,
           'secret': apiSecret,
           'workdir': _rootMode ? workDir : '',
+          'service_present': '1',
+          'service_url': _serviceUrlCtrl.text.trim(),
+          'service_secret': _serviceSecretCtrl.text,
+          'service_server_name': _serviceSniCtrl.text.trim(),
+          'service_ca_pem': _serviceCaCtrl.text.trim(),
         },
       });
       if (mounted) widget.onCompleted();
@@ -230,6 +289,119 @@ class _SetupWizardOverlayState extends State<SetupWizardOverlay> {
                               c: c,
                               obscure: true,
                             ),
+                            const SizedBox(height: 14),
+                            Divider(height: 0.5, thickness: 0.5, color: c.hairline),
+                            const SizedBox(height: 12),
+                            Text(
+                              'sing-box API（可选）',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: c.ink,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '填写后可接入 Tailscale 等原生服务；本机留空可自动发现。输入 https:// 时自动展开 TLS 配置。',
+                              style: TextStyle(fontSize: 12, color: c.muted),
+                            ),
+                            const SizedBox(height: 10),
+                            _fieldLabel('sing-box API 地址', c),
+                            _styledField(
+                              controller: _serviceUrlCtrl,
+                              hint: '留空自动发现，或填 http(s)://主机:端口',
+                              c: c,
+                              mono: true,
+                              keyboardType: TextInputType.url,
+                            ),
+                            const SizedBox(height: 10),
+                            _fieldLabel('sing-box API 密钥', c),
+                            _styledField(
+                              controller: _serviceSecretCtrl,
+                              hint: '留空表示无密钥',
+                              c: c,
+                              obscure: true,
+                            ),
+                            if (_serviceUrlCtrl.text
+                                .trim()
+                                .toLowerCase()
+                                .startsWith('https://')) ...[
+                              const SizedBox(height: 10),
+                              _fieldLabel('TLS Server Name（可选）', c),
+                              _styledField(
+                                controller: _serviceSniCtrl,
+                                hint: '可选，如 router.internal',
+                                c: c,
+                                mono: true,
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      'CA 证书 PEM（可选）',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: c.muted,
+                                      ),
+                                    ),
+                                  ),
+                                  GestureDetector(
+                                    onTap: _saving ? null : _importPem,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 3,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: c.primarySoft,
+                                        borderRadius: BorderRadius.circular(999),
+                                      ),
+                                      child: Text(
+                                        '从文件导入',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w500,
+                                          color: c.selectionInk,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: c.fill,
+                                  borderRadius: BorderRadius.circular(11),
+                                  border: Border.all(
+                                    color: c.hairline,
+                                    width: 0.6,
+                                  ),
+                                ),
+                                child: TextField(
+                                  controller: _serviceCaCtrl,
+                                  minLines: 3,
+                                  maxLines: 5,
+                                  autocorrect: false,
+                                  enabled: !_saving,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontFamily: 'monospace',
+                                    color: c.ink,
+                                  ),
+                                  decoration: InputDecoration(
+                                    border: InputBorder.none,
+                                    contentPadding: const EdgeInsets.all(10),
+                                    hintText: '-----BEGIN CERTIFICATE-----',
+                                    hintStyle: TextStyle(
+                                      fontSize: 12,
+                                      color: c.muted,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 14),
                             Container(
                               padding: const EdgeInsets.symmetric(

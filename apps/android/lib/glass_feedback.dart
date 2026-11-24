@@ -156,6 +156,248 @@ Future<T?> showGlassDialog<T>({
   return navigator.push(route);
 }
 
+class GlassPageTransitionsBuilder extends PageTransitionsBuilder {
+  const GlassPageTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    if (MediaQuery.disableAnimationsOf(context)) return child;
+    return _GlassPageTransition(
+      animation: animation,
+      secondaryAnimation: secondaryAnimation,
+      child: child,
+    );
+  }
+}
+
+class _GlassPageTransition extends StatefulWidget {
+  final Animation<double> animation;
+  final Animation<double> secondaryAnimation;
+  final Widget child;
+
+  const _GlassPageTransition({
+    required this.animation,
+    required this.secondaryAnimation,
+    required this.child,
+  });
+
+  @override
+  State<_GlassPageTransition> createState() => _GlassPageTransitionState();
+}
+
+class _GlassPageTransitionState extends State<_GlassPageTransition> {
+  late CurvedAnimation _enterCurve;
+  late CurvedAnimation _exitCurve;
+  late Animation<double> _exitOpacity;
+
+  void _initAnimations() {
+    _enterCurve = CurvedAnimation(
+      parent: widget.animation,
+      curve: const Interval(0.15, 1.0, curve: Curves.easeOut),
+      reverseCurve: const Interval(0.0, 0.75, curve: Curves.easeIn),
+    );
+    _exitCurve = CurvedAnimation(
+      parent: widget.secondaryAnimation,
+      curve: const Interval(0.0, 0.55, curve: Curves.easeOut),
+      reverseCurve: const Interval(0.25, 1.0, curve: Curves.easeIn),
+    );
+    _exitOpacity = Tween<double>(begin: 1.0, end: 0.0).animate(_exitCurve);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _initAnimations();
+  }
+
+  @override
+  void didUpdateWidget(_GlassPageTransition old) {
+    super.didUpdateWidget(old);
+    if (old.animation != widget.animation ||
+        old.secondaryAnimation != widget.secondaryAnimation) {
+      _enterCurve.dispose();
+      _exitCurve.dispose();
+      _initAnimations();
+    }
+  }
+
+  @override
+  void dispose() {
+    _enterCurve.dispose();
+    _exitCurve.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FadeTransition(
+    opacity: _enterCurve,
+    child: FadeTransition(
+      opacity: _exitOpacity,
+      child: widget.child,
+    ),
+  );
+}
+
+Future<T?> showGlassSheet<T>({
+  required BuildContext context,
+  required WidgetBuilder builder,
+  bool barrierDismissible = true,
+}) {
+  final navigator = Navigator.of(context, rootNavigator: true);
+  final themes = InheritedTheme.capture(from: context, to: navigator.context);
+  final reduceMotion = MediaQuery.disableAnimationsOf(context);
+  final dark = SingboardColors.of(context).dark;
+  CurvedAnimation? fade, slide;
+  final route = RawDialogRoute<T>(
+    barrierDismissible: barrierDismissible,
+    traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop,
+    barrierColor: Colors.transparent,
+    barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+    transitionDuration: Duration(milliseconds: reduceMotion ? 0 : 240),
+    pageBuilder: (sheetContext, _, __) => themes.wrap(
+      Align(
+        alignment: Alignment.bottomCenter,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            10,
+            MediaQuery.paddingOf(sheetContext).top + 16,
+            10,
+            MediaQuery.viewInsetsOf(sheetContext).bottom +
+                MediaQuery.paddingOf(sheetContext).bottom +
+                10,
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Material(
+              type: MaterialType.transparency,
+              child: _GlassSheetDragDismiss(
+                enabled: barrierDismissible,
+                child: Builder(builder: builder),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+    transitionBuilder: (_, animation, __, child) {
+      final opacity = (fade ??= _feedbackCurve(
+        animation,
+        const Interval(0, 180 / 240, curve: Curves.easeOut),
+      )).value;
+      final offset = (slide ??= _feedbackCurve(
+        animation,
+        const Cubic(.32, .72, 0, 1),
+      )).value;
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              child: ClipRect(
+                child: BackdropFilter(
+                  filter: ui.ImageFilter.blur(
+                    sigmaX: opacity * 14,
+                    sigmaY: opacity * 14,
+                  ),
+                  child: ColoredBox(
+                    color: Colors.black.withValues(
+                      alpha: opacity * (dark ? 0.36 : 0.18),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: Opacity(
+              opacity: opacity,
+              child: FractionalTranslation(
+                translation: Offset(0, 0.16 * (1 - offset)),
+                child: child,
+              ),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+  route.completed.whenComplete(() {
+    fade?.dispose();
+    slide?.dispose();
+  });
+  return navigator.push(route);
+}
+
+class _GlassSheetDragDismiss extends StatefulWidget {
+  final bool enabled;
+  final Widget child;
+  const _GlassSheetDragDismiss({required this.enabled, required this.child});
+
+  @override
+  State<_GlassSheetDragDismiss> createState() => _GlassSheetDragDismissState();
+}
+
+class _GlassSheetDragDismissState extends State<_GlassSheetDragDismiss>
+    with SingleTickerProviderStateMixin {
+  double _offset = 0.0;
+  late final AnimationController _reset = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 200),
+  );
+  double _resetStart = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _reset.addListener(() {
+      final t = Curves.easeOutCubic.transform(_reset.value);
+      setState(() => _offset = _resetStart * (1.0 - t));
+    });
+  }
+
+  @override
+  void dispose() {
+    _reset.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.enabled) return widget.child;
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onVerticalDragStart: (_) => _reset.stop(),
+      onVerticalDragUpdate: (d) {
+        setState(() => _offset = (_offset + d.delta.dy).clamp(0.0, 480.0));
+      },
+      onVerticalDragEnd: (d) {
+        final v = d.primaryVelocity ?? 0.0;
+        if (_offset > 96.0 || v > 650.0) {
+          Navigator.of(context).maybePop();
+        } else if (_offset > 0.0) {
+          _resetStart = _offset;
+          _reset.forward(from: 0.0);
+        }
+      },
+      onVerticalDragCancel: () {
+        if (_offset > 0.0) {
+          _resetStart = _offset;
+          _reset.forward(from: 0.0);
+        }
+      },
+      child: Transform.translate(
+        offset: Offset(0, _offset),
+        child: widget.child,
+      ),
+    );
+  }
+}
+
 class GlassToastHost extends StatefulWidget {
   const GlassToastHost({super.key, required this.child});
   final Widget child;

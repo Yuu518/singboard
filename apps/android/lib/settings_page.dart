@@ -8,12 +8,15 @@ import 'config_page.dart';
 import 'glass_ui.dart';
 import 'maintenance_page.dart';
 import 'native_stream.dart';
+import 'tailscale_service.dart';
 import 'wallpaper_editor.dart';
 
 class SettingsPage extends StatefulWidget {
   final Map<String, dynamic> preferences;
   final Map<String, dynamic> summary;
   final String endpoint;
+  final TailscaleController? tailscale;
+  final bool clashConnected;
   final String rootStatus;
   final bool rootRunning;
   final bool probing;
@@ -37,6 +40,8 @@ class SettingsPage extends StatefulWidget {
     required this.preferences,
     required this.summary,
     required this.endpoint,
+    this.tailscale,
+    this.clashConnected = false,
     required this.rootStatus,
     required this.rootRunning,
     required this.probing,
@@ -110,6 +115,7 @@ class _SettingsPageState extends State<SettingsPage>
   bool _showDnsHistory = false;
   bool? _newApi, _boot;
   String _protocol = 'http';
+  String _serviceProtocol = 'http';
 
   @override
   void initState() {
@@ -905,6 +911,26 @@ class _SettingsPageState extends State<SettingsPage>
         : (parts.group(2)! +
               (parts.group(4) == '/' ? '' : parts.group(4) ?? ''));
     _input('port').text = parts?.group(3) ?? '';
+
+    final svc = add
+        ? const <String, dynamic>{}
+        : (api['serviceApi'] is Map
+            ? Map<String, dynamic>.from(api['serviceApi'] as Map)
+            : const <String, dynamic>{});
+    final svcUrl = svc['url']?.toString() ?? '';
+    final svcParts = RegExp(
+      r'^(https?)://(\[[^\]]+\]|[^/:?#]+)(?::([0-9]+))?(.*)$',
+    ).firstMatch(svcUrl);
+    _serviceProtocol = svcParts?.group(1) == 'https' ? 'https' : 'http';
+    _input('service_host').text = svcParts == null
+        ? svcUrl
+        : (svcParts.group(2)! +
+              (svcParts.group(4) == '/' ? '' : svcParts.group(4) ?? ''));
+    _input('service_port').text = svcParts?.group(3) ?? '';
+    _input('service_secret').text = svc['secret']?.toString() ?? '';
+    _input('service_server_name').text = svc['serverName']?.toString() ?? '';
+    _input('service_ca_pem').text = svc['caPem']?.toString() ?? '';
+
     setState(() {
       _newApi = add;
       _messages.remove('api');
@@ -1108,6 +1134,82 @@ class _SettingsPageState extends State<SettingsPage>
     );
     final id = api['id']?.toString() ?? '';
     final busy = _busy.contains('api');
+    final parsedClash = Uri.tryParse(widget.endpoint);
+    final clashHost = (parsedClash != null && parsedClash.host.isNotEmpty)
+        ? (parsedClash.hasPort
+            ? '${parsedClash.host}:${parsedClash.port}'
+            : parsedClash.host)
+        : widget.endpoint;
+
+    Widget statusChip(Color dot, String label, String value) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: c.fill,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: dot),
+          ),
+          const SizedBox(width: 5),
+          Text(label, style: TextStyle(fontSize: 11, color: c.muted)),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                fontFamily: 'monospace',
+                color: c.ink,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    Future<void> discoverServiceApi() async {
+      final ts = widget.tailscale;
+      if (ts == null) return;
+      try {
+        final list = await ts.discover();
+        if (!mounted) return;
+        if (list.isEmpty) {
+          showGlassToast(context, '本地配置中未发现 type 为 api 的服务', error: true);
+          return;
+        }
+        final urlStr = list.first['url']?.toString() ?? '';
+        final parsed = Uri.tryParse(urlStr);
+        if (parsed != null && parsed.host.isNotEmpty) {
+          setState(() {
+            _serviceProtocol = parsed.scheme == 'https' ? 'https' : 'http';
+            _input('service_host').text = parsed.host;
+            _input('service_port').text =
+                parsed.hasPort ? '${parsed.port}' : '';
+          });
+          showGlassToast(context, '已填入自动发现的地址：$urlStr', error: false);
+        }
+      } catch (e) {
+        if (mounted) showGlassToast(context, '自动发现失败：$e', error: true);
+      }
+    }
+
+    Future<void> importCaPem() async {
+      try {
+        final pem = await _channel.invokeMethod<String>('pickPemFile');
+        if (pem != null && mounted) {
+          setState(() => _input('service_ca_pem').text = pem);
+        }
+      } catch (e) {
+        if (mounted) showGlassToast(context, '读取证书失败：$e', error: true);
+      }
+    }
 
     Future<void> submit(String action) async {
       if (action == 'delete_api') {
@@ -1121,49 +1223,115 @@ class _SettingsPageState extends State<SettingsPage>
       final ok = await _run('api', action, {
         'id': id,
         'protocol': _protocol,
-        for (final k in ['name', 'host', 'port', 'secret']) k: _input(k).text,
+        'service_present': '1',
+        'service_protocol': _serviceProtocol,
+        for (final k in [
+          'name',
+          'host',
+          'port',
+          'secret',
+          'service_host',
+          'service_port',
+          'service_secret',
+          'service_server_name',
+          'service_ca_pem',
+        ])
+          k: _input(k).text,
       });
       if (ok && action != 'probe' && mounted) setState(() => _newApi = null);
     }
 
-    return _card([
-      SettingsRow(
-        title: '控制端点',
-        subtitle: '面板连接的 Clash API，共 ${apis.length} 个。',
-        trailing: Row(
+    final ts = widget.tailscale;
+    Widget buildSummaryHeader() {
+      final svcText = ts?.chipText ?? '未配置';
+      final svcDot = switch (ts?.chipTone ?? ServiceChipTone.muted) {
+        ServiceChipTone.ok => c.success,
+        ServiceChipTone.warn => c.warning,
+        ServiceChipTone.error => c.error,
+        ServiceChipTone.muted => c.muted,
+      };
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: _glassSelect(
-                '选择后端',
-                id,
-                {for (final a in apis) a['id'] as String: a['name'] as String},
-                busy
-                    ? null
-                    : (v) async {
-                        if (await _run('api', 'switch_api', {'id': v}) &&
-                            mounted) {
-                          setState(() => _newApi = null);
-                        }
-                      },
-                mono: true,
-              ),
+            Row(
+              children: [
+                Text(
+                  '当前端点',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: c.ink,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '共 ${apis.length} 个',
+                  style: TextStyle(fontSize: 12, color: c.muted),
+                ),
+              ],
             ),
-            const SizedBox(width: 4),
-            _iconBtn(
-              'edit',
-              '编辑当前后端',
-              busy || apis.isEmpty ? null : () => _editApi(false, api),
-              selected: _newApi == false,
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                statusChip(
+                  widget.clashConnected ? c.success : c.warning,
+                  'Clash',
+                  clashHost.isEmpty ? '未配置' : clashHost,
+                ),
+                statusChip(svcDot, 'sing-box', svcText),
+              ],
             ),
-            _iconBtn(
-              'plus',
-              '新增后端',
-              busy ? null : () => _editApi(true, api),
-              selected: _newApi == true,
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _glassSelect(
+                    '选择后端',
+                    id,
+                    {for (final a in apis) a['id'] as String: a['name'] as String},
+                    busy
+                        ? null
+                        : (v) async {
+                            if (await _run('api', 'switch_api', {'id': v}) &&
+                                mounted) {
+                              setState(() => _newApi = null);
+                            }
+                          },
+                    mono: true,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                _iconBtn(
+                  'edit',
+                  '编辑当前后端',
+                  busy || apis.isEmpty ? null : () => _editApi(false, api),
+                  selected: _newApi == false,
+                ),
+                _iconBtn(
+                  'plus',
+                  '新增后端',
+                  busy ? null : () => _editApi(true, api),
+                  selected: _newApi == true,
+                ),
+              ],
             ),
           ],
         ),
-      ),
+      );
+    }
+
+    return _card([
+      if (ts != null)
+        ListenableBuilder(
+          listenable: ts,
+          builder: (_, __) => buildSummaryHeader(),
+        )
+      else
+        buildSummaryHeader(),
       if (_newApi != null)
         Padding(
           padding: const EdgeInsets.all(16),
@@ -1171,7 +1339,7 @@ class _SettingsPageState extends State<SettingsPage>
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                _newApi! ? '新增控制端点' : '编辑当前端点',
+                _newApi! ? '新增端点' : '编辑当前端点',
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
@@ -1184,9 +1352,20 @@ class _SettingsPageState extends State<SettingsPage>
                 style: TextStyle(fontSize: 12, color: c.muted),
               ),
               const SizedBox(height: 12),
-              Text('名称', style: TextStyle(fontSize: 12, color: c.muted)),
+              Text('端点名称', style: TextStyle(fontSize: 12, color: c.muted)),
               const SizedBox(height: 6),
-              _glassInput('name', _newApi! ? '后端 2' : '默认后端'),
+              _glassInput('name', _newApi! ? '端点 2' : '默认端点'),
+              const SizedBox(height: 14),
+              Divider(height: 0.5, thickness: 0.5, color: c.hairline),
+              const SizedBox(height: 12),
+              Text(
+                'Clash API',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: c.ink,
+                ),
+              ),
               const SizedBox(height: 10),
               Row(
                 children: [
@@ -1246,7 +1425,178 @@ class _SettingsPageState extends State<SettingsPage>
               Text('访问密钥', style: TextStyle(fontSize: 12, color: c.muted)),
               const SizedBox(height: 6),
               _glassInput('secret', '留空表示无密钥', secret: true, mono: true),
+              const SizedBox(height: 14),
+              Divider(height: 0.5, thickness: 0.5, color: c.hairline),
               const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'sing-box API（可选）',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: c.ink,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '用于 Tailscale 等原生服务；本机留空可自动发现。',
+                          style: TextStyle(fontSize: 11, color: c.muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (ts != null)
+                    GestureDetector(
+                      onTap: busy ? null : discoverServiceApi,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: c.primarySoft,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          '自动发现',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: c.selectionInk,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  SizedBox(
+                    width: 92,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '协议',
+                          style: TextStyle(fontSize: 12, color: c.muted),
+                        ),
+                        const SizedBox(height: 6),
+                        _glassSelect(
+                          'sing-box API 协议',
+                          _serviceProtocol,
+                          {'http': 'http', 'https': 'https'},
+                          (s) => setState(() => _serviceProtocol = s),
+                          mono: true,
+                          height: 36,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '主机',
+                          style: TextStyle(fontSize: 12, color: c.muted),
+                        ),
+                        const SizedBox(height: 6),
+                        _glassInput('service_host', '留空自动发现', mono: true),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 82,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '端口',
+                          style: TextStyle(fontSize: 12, color: c.muted),
+                        ),
+                        const SizedBox(height: 6),
+                        _glassInput('service_port', '9095', mono: true),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text('密钥 (Bearer Secret)', style: TextStyle(fontSize: 12, color: c.muted)),
+              const SizedBox(height: 6),
+              _glassInput('service_secret', '留空表示无密钥', secret: true, mono: true),
+              if (_serviceProtocol == 'https') ...[
+                const SizedBox(height: 10),
+                Text('TLS Server Name（可选）', style: TextStyle(fontSize: 12, color: c.muted)),
+                const SizedBox(height: 6),
+                _glassInput('service_server_name', '可选，如 router.internal', mono: true),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'CA 证书 PEM（可选）',
+                        style: TextStyle(fontSize: 12, color: c.muted),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: busy ? null : importCaPem,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: c.primarySoft,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          '从文件导入',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: c.selectionInk,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  decoration: BoxDecoration(
+                    color: c.fill,
+                    borderRadius: BorderRadius.circular(11),
+                    border: Border.all(color: c.hairline, width: 0.6),
+                  ),
+                  child: TextField(
+                    controller: _input('service_ca_pem'),
+                    minLines: 3,
+                    maxLines: 5,
+                    autocorrect: false,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      color: c.ink,
+                    ),
+                    decoration: InputDecoration(
+                      border: InputBorder.none,
+                      contentPadding: const EdgeInsets.all(10),
+                      hintText: '-----BEGIN CERTIFICATE-----',
+                      hintStyle: TextStyle(fontSize: 12, color: c.muted),
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 14),
               Row(
                 children: [
                   if (!_newApi!)
@@ -2212,7 +2562,7 @@ class _SettingsPageState extends State<SettingsPage>
                   ],
                   if (_messages.containsKey('root')) _note('root'),
                 ]),
-                const SettingsSectionHeader('后端'),
+                const SettingsSectionHeader('API 设置'),
                 _backends(prefs),
                 const SettingsSectionHeader('网络测试'),
                 _network(prefs),

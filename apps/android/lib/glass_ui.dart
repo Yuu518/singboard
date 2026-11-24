@@ -122,6 +122,7 @@ class GlassScope extends InheritedWidget {
   final bool? backdropToneLight;
   final bool? headerToneLight;
   final Color? navBackdropRgb;
+  final ui.Image? sourceWallpaper;
   final ui.Image? blurredWallpaper;
   final bool inPopover;
 
@@ -135,6 +136,7 @@ class GlassScope extends InheritedWidget {
     this.backdropToneLight,
     this.headerToneLight,
     this.navBackdropRgb,
+    this.sourceWallpaper,
     this.blurredWallpaper,
     this.inPopover = false,
     required super.child,
@@ -257,6 +259,102 @@ class GlassScope extends InheritedWidget {
     return (bg: bg, border: border, ink: ink);
   }
 
+  Color adaptivePillBg(SingboardColors c, {Color? tintOverlay}) {
+    final t = tint.clamp(0.0, 1.0);
+    final base = Color.lerp(
+      c.fill,
+      (c.dark ? const Color(0xFF2C2C30) : Colors.white).withValues(
+        alpha: c.dark ? 0.14 : 0.24,
+      ),
+      1.0 - t,
+    )!;
+    return tintOverlay == null ? base : Color.alphaBlend(tintOverlay, base);
+  }
+
+  Color adaptivePillBorder(SingboardColors c, {Color? accent}) {
+    if (accent != null) {
+      return accent.withValues(alpha: c.dark ? 0.45 : 0.36);
+    }
+    final t = tint.clamp(0.0, 1.0);
+    if (hasWallpaper) {
+      return Color.lerp(
+        c.hairline,
+        Colors.white.withValues(alpha: c.dark ? 0.20 : 0.55),
+        1.0 - t,
+      )!;
+    }
+    return c.dark ? const Color(0x28FFFFFF) : const Color(0x18000000);
+  }
+
+  ({Color bg, Color border, Color ink}) adaptiveSelectionChip(
+    SingboardColors c,
+  ) {
+    final fallback = c.dark ? const Color(0xFF0E1626) : const Color(0xFFE7F0FA);
+    final backdrop = hasWallpaper ? (navBackdropRgb ?? fallback) : fallback;
+    final t = tint.clamp(0.0, 1.0);
+    final cardAlpha = (0.12 + 0.24 * t + 0.38 * t * t).clamp(0.0, 1.0);
+    final surface = c.glassRgb.withValues(alpha: cardAlpha);
+    final surfaceRgb = Color.alphaBlend(surface, backdrop);
+    final luma = surfaceRgb.computeLuminance();
+    final hsl = HSLColor.fromColor(surfaceRgb);
+    final h = hsl.hue;
+    final s = hsl.saturation;
+    final tintS = s < 0.08 ? 0.0 : math.min(s * 0.36, 0.24);
+
+    Color bg;
+    Color border;
+    if (!c.dark) {
+      if (luma >= 0.22) {
+        final base = HSLColor.fromAHSL(1.0, h, math.min(s * 0.50, 0.30), 0.22).toColor();
+        final a = 0.16 + 0.08 * ((luma - 0.22) / 0.78).clamp(0.0, 1.0);
+        bg = base.withValues(alpha: a);
+        border = base.withValues(alpha: math.min(a * 1.7, 0.44));
+      } else {
+        final base = HSLColor.fromAHSL(1.0, h, tintS, 0.92).toColor();
+        final darkness = ((0.22 - luma) / 0.22).clamp(0.0, 1.0);
+        final a = 0.34 + 0.18 * darkness;
+        bg = base.withValues(alpha: a);
+        border = Colors.white.withValues(alpha: 0.42 + 0.22 * darkness);
+      }
+    } else if (luma < 0.42) {
+      final base = HSLColor.fromAHSL(1.0, h, math.min(s * 0.40, 0.24), 0.88).toColor();
+      final a = 0.17 + 0.08 * (1.0 - (luma / 0.42).clamp(0.0, 1.0));
+      bg = base.withValues(alpha: a);
+      border = base.withValues(alpha: math.min(a + 0.14, 0.44));
+    } else {
+      final base = HSLColor.fromAHSL(1.0, h, tintS, 0.12).toColor();
+      final lightness = ((luma - 0.42) / 0.58).clamp(0.0, 1.0);
+      final a = 0.56 + 0.20 * lightness;
+      bg = base.withValues(alpha: a);
+      border = Colors.white.withValues(alpha: 0.28 + 0.14 * lightness);
+    }
+
+    final pillRgb = Color.alphaBlend(bg, surfaceRgb);
+    final pillLuma = pillRgb.computeLuminance();
+    final darkInk = tintS > 0.01
+        ? HSLColor.fromAHSL(1.0, h, math.min(s * 0.35, 0.24), 0.11).toColor()
+        : const Color(0xFF171A1F);
+    final lightInk = tintS > 0.01
+        ? HSLColor.fromAHSL(1.0, h, math.min(s * 0.22, 0.14), 0.97).toColor()
+        : const Color(0xFFFAFAFC);
+    double ratio(Color fg) {
+      final l = fg.computeLuminance();
+      final hi = math.max(l, pillLuma);
+      final lo = math.min(l, pillLuma);
+      return (hi + 0.05) / (lo + 0.05);
+    }
+
+    final darkCr = ratio(darkInk);
+    final lightCr = ratio(lightInk);
+    final Color ink;
+    if (darkCr >= lightCr) {
+      ink = darkCr >= 7.0 ? darkInk : const Color(0xFF0F1217);
+    } else {
+      ink = lightCr >= 7.0 ? lightInk : Colors.white;
+    }
+    return (bg: bg, border: border, ink: ink);
+  }
+
   static GlassScope of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<GlassScope>() ??
       const GlassScope(
@@ -276,6 +374,7 @@ class GlassScope extends InheritedWidget {
       navBackdropRgb != old.navBackdropRgb ||
       wallpaperPath != old.wallpaperPath ||
       wallpaperRevision != old.wallpaperRevision ||
+      !identical(sourceWallpaper, old.sourceWallpaper) ||
       !identical(blurredWallpaper, old.blurredWallpaper) ||
       inPopover != old.inPopover;
 }
@@ -379,43 +478,71 @@ class _DefaultAuroraPainter extends CustomPainter {
   bool shouldRepaint(_DefaultAuroraPainter old) => old.dark != dark;
 }
 
+class _GlassBackdropHost extends InheritedWidget {
+  const _GlassBackdropHost({required super.child});
+
+  @override
+  bool updateShouldNotify(_GlassBackdropHost old) => false;
+}
+
 class GlassBackdrop extends StatelessWidget {
   final Widget child;
   const GlassBackdrop({super.key, required this.child});
 
   @override
   Widget build(BuildContext context) {
+    if (context.dependOnInheritedWidgetOfExactType<_GlassBackdropHost>() != null) {
+      return child;
+    }
     final c = SingboardColors.of(context);
     final scope = GlassScope.of(context);
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        if (scope.hasWallpaper) ...[
-          ColoredBox(color: c.page),
-          Image.file(
-            File(scope.wallpaperPath!),
-            key: ValueKey('${scope.wallpaperPath}:${scope.wallpaperRevision}'),
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
-            errorBuilder: (_, __, ___) => RepaintBoundary(
-              child: CustomPaint(
-                painter: _DefaultAuroraPainter(c.dark),
-                isComplex: true,
-                willChange: false,
-              ),
-            ),
-          ),
-          ColoredBox(color: c.backdropVeil),
-        ] else
+    final source = scope.sourceWallpaper;
+    return _GlassBackdropHost(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
           RepaintBoundary(
-            child: CustomPaint(
-              painter: _DefaultAuroraPainter(c.dark),
-              isComplex: true,
-              willChange: false,
-            ),
+            child: scope.hasWallpaper
+                ? Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      ColoredBox(color: c.page),
+                      Image.file(
+                        File(scope.wallpaperPath!),
+                        key: ValueKey(
+                          '${scope.wallpaperPath}:${scope.wallpaperRevision}',
+                        ),
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                        frameBuilder: (_, img, frame, sync) {
+                          if (sync || frame != null) return img;
+                          if (source != null) {
+                            return RawImage(
+                              image: source,
+                              fit: BoxFit.cover,
+                              filterQuality: FilterQuality.medium,
+                            );
+                          }
+                          return const SizedBox.shrink();
+                        },
+                        errorBuilder: (_, __, ___) => CustomPaint(
+                          painter: _DefaultAuroraPainter(c.dark),
+                          isComplex: true,
+                          willChange: false,
+                        ),
+                      ),
+                      ColoredBox(color: c.backdropVeil),
+                    ],
+                  )
+                : CustomPaint(
+                    painter: _DefaultAuroraPainter(c.dark),
+                    isComplex: true,
+                    willChange: false,
+                  ),
           ),
-        child,
-      ],
+          child,
+        ],
+      ),
     );
   }
 }
@@ -509,11 +636,16 @@ class GlassCard extends StatelessWidget {
     final lens = _glassLensStrength(t);
     final useBackdrop = scope.hasWallpaper || popover || floating;
     final alpha = popover
-        ? scope.alpha(0.26 + 0.22 * t + 0.32 * t * t, 0.78)
+        ? scope.alpha(
+            math.max(0.26 + 0.22 * t + 0.32 * t * t, c.dark ? 0.68 : 0.72),
+            0.82,
+          )
         : floating
         ? scope.alpha(0.08 + 0.22 * t + 0.40 * t * t, 0.58)
         : scope.alpha(0.12 + 0.24 * t + 0.38 * t * t, 0.64);
-    final blur = useBackdrop ? _glassBlurSigma(t) : 0.0;
+    final blur = useBackdrop
+        ? (popover ? math.max(_glassBlurSigma(t), 22.0) : _glassBlurSigma(t))
+        : 0.0;
     final bg = tintColor ?? c.glassRgb.withValues(alpha: alpha);
     final border =
         borderColor ??
@@ -585,6 +717,7 @@ class GlassCard extends StatelessWidget {
             backdropToneLight: scope.backdropToneLight,
             headerToneLight: scope.headerToneLight,
             navBackdropRgb: scope.navBackdropRgb,
+            sourceWallpaper: scope.sourceWallpaper,
             blurredWallpaper: scope.blurredWallpaper,
             inPopover: true,
             child: child,
@@ -1281,6 +1414,135 @@ class _BackdropScrimPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_BackdropScrimPainter old) => old.light != light;
+}
+
+class GlassSubpageHeader extends StatelessWidget {
+  final String title;
+  final VoidCallback? onBack;
+  final Widget? trailing;
+
+  const GlassSubpageHeader({
+    super.key,
+    required this.title,
+    this.onBack,
+    this.trailing,
+  });
+
+  static double totalHeight(BuildContext context) =>
+      MediaQuery.paddingOf(context).top + 48;
+
+  static BoxDecoration pillDecoration(
+    SingboardColors c,
+    GlassScope scope,
+  ) {
+    final t = scope.tint.clamp(0.0, 1.0);
+    return BoxDecoration(
+      color: Color.lerp(
+        c.fill,
+        Colors.white.withValues(alpha: c.dark ? .12 : .28),
+        1.0 - t,
+      ),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(
+        color: Color.lerp(
+          c.hairline,
+          Colors.white.withValues(alpha: c.dark ? .19 : .55),
+          1.0 - t,
+        )!,
+        width: 0.75,
+      ),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(
+            alpha: c.dark ? (.16 + .14 * (1.0 - t)) : (.04 + .06 * (1.0 - t)),
+          ),
+          blurRadius: 8,
+          spreadRadius: -2,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SingboardColors.of(context);
+    final scope = GlassScope.of(context);
+    final t = scope.tint.clamp(0.0, 1.0);
+    final pad = MediaQuery.paddingOf(context);
+    final gutter = panelGutter(context);
+    final blur = scope.hasWallpaper ? _glassBlurSigma(t) : 0.0;
+    final bar = Container(
+      padding: EdgeInsets.only(
+        top: pad.top,
+        left: gutter + 4 + pad.left,
+        right: gutter + 4 + pad.right,
+      ),
+      decoration: BoxDecoration(
+        color: c.glassRgb.withValues(
+          alpha: scope.hasWallpaper
+              ? scope.alpha(0.35 + 0.45 * t, .6)
+              : (0.72 + 0.16 * t),
+        ),
+        image: scope.grain,
+        border: Border(
+          bottom: BorderSide(color: c.hairline, width: 0.5),
+        ),
+      ),
+      child: SizedBox(
+        height: 48,
+        child: Row(
+          children: [
+            Tooltip(
+              message: '返回',
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: onBack ?? () => Navigator.maybePop(context),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    alignment: Alignment.center,
+                    decoration: pillDecoration(c, scope),
+                    child: PanelIcon('back', size: 14, color: c.ink),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -0.2,
+                  color: c.ink,
+                ),
+              ),
+            ),
+            if (trailing != null) ...[
+              const SizedBox(width: 8),
+              trailing!,
+            ],
+          ],
+        ),
+      ),
+    );
+    if (blur > 0) {
+      return ClipRect(
+        child: _GlassFilter(
+          blur: blur,
+          lens: false,
+          child: bar,
+        ),
+      );
+    }
+    return bar;
+  }
 }
 
 class GlassBackdropHeading extends StatelessWidget {

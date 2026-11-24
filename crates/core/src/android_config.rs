@@ -68,6 +68,7 @@ enum Command {
     CheckUpdate { installed_apk: Option<std::path::PathBuf> },
     SetProxySort { enabled: bool },
     SetProxyGroupOpen { group: String, open: bool },
+    SetTailscaleGroupCollapsed { group: String, collapsed: bool },
     UpdateProgress,
     CancelUpdate { ticket: String },
     DnsLookup { domain: String, record: String, server: Option<String>, geo: bool },
@@ -560,6 +561,14 @@ pub async fn request(dir: PathBuf, input: &str) -> Result<Value, String> {
             crate::settings::Settings::edit(&dir, |s| {
                 s.expanded_proxy_groups.retain(|existing| existing != &group);
                 if open { s.expanded_proxy_groups.push(group); }
+                Ok(())
+            })?;
+            Value::Null
+        }
+        Command::SetTailscaleGroupCollapsed { group, collapsed } => {
+            crate::settings::Settings::edit(&dir, |s| {
+                s.tailscale_collapsed_groups.retain(|existing| existing != &group);
+                if collapsed { s.tailscale_collapsed_groups.push(group); }
                 Ok(())
             })?;
             Value::Null

@@ -11,6 +11,43 @@ use tokio_stream::wrappers::ReceiverStream;
 
 const CHUNK_SIZE: usize = 16 * 1024 - 64;
 
+#[derive(Default)]
+struct UploadProgress {
+    completed: usize,
+    completed_bytes: u64,
+}
+
+impl UploadProgress {
+    fn record(
+        &mut self,
+        sizes: &[i64],
+        progress: &TaildropSendProgress,
+    ) -> Result<serde_json::Value> {
+        let Some(&size) = sizes.get(self.completed) else {
+            return Err(ApiError::new("protocol", "收到额外的文件进度"));
+        };
+        if usize::try_from(progress.file_index).ok() != Some(self.completed)
+            || !(0..=size).contains(&progress.sent_bytes)
+            || (progress.file_completed && progress.sent_bytes != size)
+        {
+            return Err(ApiError::new("protocol", "文件进度与发送批次不符"));
+        }
+        let total = self
+            .completed_bytes
+            .checked_add(progress.sent_bytes as u64)
+            .ok_or_else(|| ApiError::new("protocol", "文件总大小溢出"))?;
+        if progress.file_completed {
+            self.completed += 1;
+            self.completed_bytes = total;
+        }
+        Ok(json!({
+            "data": progress,
+            "completedFiles": self.completed,
+            "totalSentBytes": total,
+        }))
+    }
+}
+
 pub(super) async fn upload(
     mut client: Client,
     endpoint_tag: String,
@@ -40,7 +77,7 @@ pub(super) async fn upload(
         });
         files.push((file, size));
     }
-    let count = files.len();
+    let sizes: Vec<_> = descriptions.iter().map(|file| file.size).collect();
     let (tx, rx) = mpsc::channel(8);
     use taildrop_send_client_message::Message;
     let send = async move {
@@ -92,19 +129,13 @@ pub(super) async fn upload(
             .send_taildrop_files(ReceiverStream::new(rx))
             .await?
             .into_inner();
-        let mut completed = 0usize;
+        let mut batch = UploadProgress::default();
         while let Some(reply) = replies.message().await? {
             if let Some(taildrop_send_server_message::Message::Progress(progress)) = reply.message {
-                if progress.file_completed {
-                    if usize::try_from(progress.file_index).ok() != Some(completed) {
-                        return Err(ApiError::new("protocol", "文件确认顺序异常"));
-                    }
-                    completed += 1;
-                }
-                events.update(json!({"data": progress, "completedFiles": completed}));
+                events.update(batch.record(&sizes, &progress)?);
             }
         }
-        if completed != count {
+        if batch.completed != sizes.len() {
             return Err(ApiError::new("incomplete", "服务端未确认全部文件"));
         }
         Ok(())
@@ -164,4 +195,32 @@ pub(super) async fn download(
         json!({"data": {"receivedBytes": received, "size": header.size, "completed": true}}),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_includes_completed_files_and_preserves_per_file_counts() {
+        let sizes = [8, 0, 5];
+        let mut batch = UploadProgress::default();
+        for (index, bytes, done, count, total) in [
+            (0, 3, false, 0, 3),
+            (0, 8, true, 1, 8),
+            (1, 0, true, 2, 8),
+            (2, 1, false, 2, 9),
+            (2, 5, true, 3, 13),
+        ] {
+            let progress = TaildropSendProgress {
+                file_index: index,
+                sent_bytes: bytes,
+                file_completed: done,
+            };
+            let event = batch.record(&sizes, &progress).unwrap();
+            assert_eq!(event["data"]["sentBytes"], bytes);
+            assert_eq!(event["completedFiles"], count);
+            assert_eq!(event["totalSentBytes"], total);
+        }
+    }
 }

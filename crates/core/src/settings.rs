@@ -40,6 +40,7 @@ pub struct Settings {
     pub connection_sort: String,
     pub proxy_sort_latency: bool,
     pub expanded_proxy_groups: Vec<String>,
+    pub tailscale_collapsed_groups: Vec<String>,
     pub native_root_enabled: bool,
     pub github_token: String,
     pub setup_completed: bool,
