@@ -797,6 +797,27 @@ fn set_cached_auto_launch(enabled: bool) {
     }
 }
 
+static SHELL_TAILDROP_CACHE: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
+fn cached_shell_taildrop() -> bool {
+    if let Ok(guard) = SHELL_TAILDROP_CACHE.lock()
+        && let Some(val) = *guard
+    {
+        return val;
+    }
+    let val = crate::taildrop_share::is_registered();
+    if let Ok(mut guard) = SHELL_TAILDROP_CACHE.lock() {
+        *guard = Some(val);
+    }
+    val
+}
+
+fn set_cached_shell_taildrop(enabled: bool) {
+    if let Ok(mut guard) = SHELL_TAILDROP_CACHE.lock() {
+        *guard = Some(enabled);
+    }
+}
+
 impl Workspace {
     pub(super) fn settings_page(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let palette = crate::theme::Palette::get(cx);
@@ -810,6 +831,7 @@ impl Workspace {
             .unwrap_or_else(|| cx.global::<crate::theme::Appearance>().font_scale)
             .clamp(FONT_SCALE_MIN, FONT_SCALE_MAX);
         let auto_launch = cached_auto_launch();
+        let shell_taildrop = cached_shell_taildrop();
         let close_to_tray = prefs.close_to_tray.unwrap_or(false);
         let vp = window.viewport_size();
         let width = (f32::from(vp.width) - 256.).min(760.);
@@ -1945,6 +1967,33 @@ impl Workspace {
                                 },false,cx);
                             }
                             Err(e) => this.message(e,true,cx),
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                false,
+                palette,
+            ))
+            .child(divider(palette))
+            .child(setting_row(
+                "资源管理器右键发送",
+                "在文件右键菜单添加「通过 Taildrop 发送」，免启动主面板直接传输。",
+                pill_switch("set-toggle-shell-taildrop", shell_taildrop, palette)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        match crate::taildrop_share::set_registered(!shell_taildrop) {
+                            Ok(()) => {
+                                set_cached_shell_taildrop(!shell_taildrop);
+                                this.message(
+                                    if !shell_taildrop {
+                                        "已添加资源管理器右键发送".into()
+                                    } else {
+                                        "已移除资源管理器右键发送".into()
+                                    },
+                                    false,
+                                    cx,
+                                );
+                            }
+                            Err(e) => this.message(e, true, cx),
                         }
                         cx.notify();
                     }))

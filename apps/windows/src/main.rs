@@ -12,6 +12,7 @@ mod maintenance;
 mod search;
 mod service;
 mod setup_wizard;
+mod taildrop_share;
 mod theme;
 mod tray_menu;
 mod wallpaper_editor;
@@ -292,6 +293,15 @@ fn run() -> Result<(), String> {
         }
         return service::install(Path::new(&args[1]), Path::new(&args[2]));
     }
+    if args
+        .first()
+        .is_some_and(|v| v == taildrop_share::DELEGATE_FLAG)
+    {
+        return taildrop_share::run_delegate();
+    }
+    if args.first().is_some_and(|v| v == taildrop_share::SEND_FLAG) {
+        return taildrop_share::run_send(&args[1..]);
+    }
     let hidden = args.iter().any(|a| a == "--hidden");
     if let Some(digest) = args
         .iter()
@@ -312,6 +322,7 @@ fn run() -> Result<(), String> {
         .transpose()?;
     let wallpaper_file = cli_wallpaper.or_else(wallpaper_editor::saved_path);
     settings::repair_auto_launch();
+    taildrop_share::repair();
     let Some(instance) = window_state::instance(hidden)? else {
         return Ok(());
     };
