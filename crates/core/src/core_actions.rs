@@ -152,6 +152,7 @@ pub async fn run(
     let mirror = (!get("mirror").is_empty()).then(|| get("mirror").trim().into());
     let result = update::platform::perform_core_update(
         context,
+        info.asset_name,
         info.asset_url,
         info.asset_size,
         info.asset_digest,

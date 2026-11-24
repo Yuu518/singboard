@@ -5,28 +5,71 @@ use std::time::Duration;
 use crate::root::{self, SERVICE_HOME, quote};
 
 use super::{
-    CORE_PROGRESS_EVENT, CoreUpdateResult, STAGED_MANIFEST, StagedCore, UPDATE_LOCK, apply_mirror,
-    core_asset_hash, download_asset, emit_progress, staged_matches, verify_archive,
+    AssetTarget, CORE_PROGRESS_EVENT, CoreUpdateResult, STAGED_MANIFEST, StagedCore, TargetArch,
+    TargetOs, UPDATE_LOCK, apply_mirror, core_asset_hash, download_asset, emit_progress,
+    staged_matches, verify_archive,
 };
 
 const CORE_BIN_NAME: &str = "sing-box";
+const STAGED_ASSET_FILE: &str = "core.asset";
 const MAX_CORE_EXTRACT_BYTES: u64 = 256 * 1024 * 1024;
 
-fn arch_names() -> Result<&'static [&'static str], String> {
+pub(super) fn asset_target() -> Result<AssetTarget, String> {
     match std::env::consts::ARCH {
-        "aarch64" => Ok(&["arm64", "arm64-v8a"]),
-        "arm" => Ok(&["arm", "armv7", "armeabi-v7a"]),
-        "x86_64" => Ok(&["amd64", "x86_64"]),
-        "x86" => Ok(&["386", "x86"]),
+        "aarch64" => Ok(AssetTarget {
+            os: TargetOs::Android,
+            arch: TargetArch::Arm64,
+        }),
+        "arm" => Ok(AssetTarget {
+            os: TargetOs::Android,
+            arch: TargetArch::Arm,
+        }),
+        "x86_64" => Ok(AssetTarget {
+            os: TargetOs::Android,
+            arch: TargetArch::Amd64,
+        }),
+        "x86" => Ok(AssetTarget {
+            os: TargetOs::Android,
+            arch: TargetArch::X86,
+        }),
         other => Err(format!("不支持的 CPU 架构: {}", other)),
     }
 }
 
-pub(super) fn asset_suffixes() -> Result<Vec<String>, String> {
-    Ok(arch_names()?
-        .iter()
-        .map(|arch| format!("-android-{arch}.tar.gz"))
-        .collect())
+fn is_tar_gz_asset(asset_name: &str) -> bool {
+    let lower = asset_name.trim().to_ascii_lowercase();
+    lower.ends_with(".tar.gz") || lower.ends_with(".tgz")
+}
+
+fn is_candidate_core_bin(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if !(lower.starts_with("sing-box") || lower.starts_with("singbox")) {
+        return false;
+    }
+    !matches!(
+        lower.rsplit_once('.').map(|(_, ext)| ext),
+        Some(
+            "md" | "txt"
+                | "json"
+                | "yaml"
+                | "yml"
+                | "service"
+                | "sh"
+                | "conf"
+                | "cfg"
+                | "ini"
+                | "toml"
+                | "sig"
+                | "asc"
+                | "sha256"
+                | "sha512"
+                | "exe"
+                | "dll"
+                | "so"
+                | "dylib"
+                | "plist"
+        )
+    )
 }
 
 pub(crate) async fn probe_core_version(target: &Path) -> Result<String, String> {
@@ -48,28 +91,56 @@ fn staging_dir(app: &super::UpdateContext) -> Result<PathBuf, String> {
     Ok(app.directory.join("core-update"))
 }
 
-fn take_staged(staging: &Path, asset_url: &str, asset_size: u64, asset_digest: &str) -> bool {
+fn take_staged(
+    staging: &Path,
+    asset_name: &str,
+    asset_url: &str,
+    asset_size: u64,
+    asset_digest: &str,
+) -> bool {
     staged_matches(staging, asset_url, asset_size, asset_digest)
         && extract_core(
-            &staging.join("core.tar.gz"),
+            &staging.join(STAGED_ASSET_FILE),
+            asset_name,
             &staging.join("files"),
             asset_digest,
         )
         .is_ok()
 }
 
-fn extract_core(archive_path: &Path, files_dir: &Path, asset_digest: &str) -> Result<(), String> {
-    let bytes = verify_archive(archive_path, asset_digest)?;
+fn write_staged_binary(files_dir: &Path, data: &[u8]) -> Result<(), String> {
     if files_dir.exists() {
         std::fs::remove_dir_all(files_dir).map_err(|e| format!("清理临时目录失败: {}", e))?;
     }
     std::fs::create_dir_all(files_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
+    std::fs::write(files_dir.join(CORE_BIN_NAME), data)
+        .map_err(|e| format!("写入临时文件失败: {}", e))
+}
+
+fn extract_core(
+    asset_path: &Path,
+    asset_name: &str,
+    files_dir: &Path,
+    asset_digest: &str,
+) -> Result<(), String> {
+    let bytes = verify_archive(asset_path, asset_digest)?;
+    if !is_tar_gz_asset(asset_name) {
+        if bytes.len() as u64 > MAX_CORE_EXTRACT_BYTES {
+            return Err("核心文件超过大小上限".into());
+        }
+        if !bytes.starts_with(b"\x7fELF") {
+            return Err("下载的文件不是有效的 Android 可执行文件".into());
+        }
+        return write_staged_binary(files_dir, &bytes);
+    }
 
     let decoder = flate2::read::GzDecoder::new(std::io::Cursor::new(bytes));
     let mut archive = tar::Archive::new(decoder);
     let entries = archive
         .entries()
         .map_err(|e| format!("读取压缩包失败: {}", e))?;
+    let mut fallback: Option<Vec<u8>> = None;
+    let mut ambiguous = false;
     for entry in entries {
         let entry = entry.map_err(|e| format!("读取压缩包失败: {}", e))?;
         if !entry.header().entry_type().is_file() {
@@ -80,20 +151,38 @@ fn extract_core(archive_path: &Path, files_dir: &Path, asset_digest: &str) -> Re
             .ok()
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_default();
-        if name != CORE_BIN_NAME {
-            continue;
+        if name == CORE_BIN_NAME {
+            let mut data = Vec::new();
+            entry
+                .take(MAX_CORE_EXTRACT_BYTES + 1)
+                .read_to_end(&mut data)
+                .map_err(|e| format!("解压失败: {}", e))?;
+            if data.len() as u64 > MAX_CORE_EXTRACT_BYTES {
+                return Err("解压后的核心文件超过大小上限".into());
+            }
+            return write_staged_binary(files_dir, &data);
         }
-        let mut data = Vec::new();
-        entry
-            .take(MAX_CORE_EXTRACT_BYTES + 1)
-            .read_to_end(&mut data)
-            .map_err(|e| format!("解压失败: {}", e))?;
-        if data.len() as u64 > MAX_CORE_EXTRACT_BYTES {
-            return Err("解压后的核心文件超过大小上限".into());
+        if is_candidate_core_bin(&name) {
+            if fallback.is_some() || ambiguous {
+                ambiguous = true;
+                fallback = None;
+                continue;
+            }
+            let mut data = Vec::new();
+            entry
+                .take(MAX_CORE_EXTRACT_BYTES + 1)
+                .read_to_end(&mut data)
+                .map_err(|e| format!("解压失败: {}", e))?;
+            if data.len() as u64 > MAX_CORE_EXTRACT_BYTES {
+                return Err("解压后的核心文件超过大小上限".into());
+            }
+            fallback = Some(data);
         }
-        std::fs::write(files_dir.join(CORE_BIN_NAME), data)
-            .map_err(|e| format!("写入临时文件失败: {}", e))?;
-        return Ok(());
+    }
+    if !ambiguous
+        && let Some(data) = fallback
+    {
+        return write_staged_binary(files_dir, &data);
     }
     Err(format!("压缩包内未找到 {}", CORE_BIN_NAME))
 }
@@ -101,6 +190,7 @@ fn extract_core(archive_path: &Path, files_dir: &Path, asset_digest: &str) -> Re
 async fn download_and_extract(
     app: &super::UpdateContext,
     staging: &Path,
+    asset_name: &str,
     asset_url: &str,
     asset_size: u64,
     asset_digest: &str,
@@ -108,7 +198,7 @@ async fn download_and_extract(
 ) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(staging);
     std::fs::create_dir_all(staging).map_err(|e| format!("创建临时目录失败: {}", e))?;
-    let archive = staging.join("core.tar.gz");
+    let archive = staging.join(STAGED_ASSET_FILE);
     download_asset(
         app,
         CORE_PROGRESS_EVENT,
@@ -120,10 +210,11 @@ async fn download_and_extract(
 
     emit_progress(app, CORE_PROGRESS_EVENT, "extract", 0, 0);
     let staging = staging.to_path_buf();
+    let asset_name = asset_name.to_string();
     let asset_url = asset_url.to_string();
     let asset_digest = asset_digest.to_string();
     tokio::task::spawn_blocking(move || {
-        extract_core(&archive, &staging.join("files"), &asset_digest)?;
+        extract_core(&archive, &asset_name, &staging.join("files"), &asset_digest)?;
         let manifest = serde_json::to_string(&StagedCore {
             asset_url,
             asset_size,
@@ -211,6 +302,7 @@ async fn swap_core(staged: &Path, target: &str) -> Result<(String, bool), String
 
 pub async fn perform_core_update(
     app: super::UpdateContext,
+    asset_name: String,
     asset_url: String,
     asset_size: u64,
     asset_digest: String,
@@ -238,18 +330,27 @@ pub async fn perform_core_update(
 
     let reusable = {
         let staging = staging.clone();
+        let asset_name = asset_name.clone();
         let asset_url = asset_url.clone();
         let asset_digest = asset_digest.clone();
         tokio::task::spawn_blocking(move || {
-            take_staged(&staging, &asset_url, asset_size, &asset_digest)
+            take_staged(&staging, &asset_name, &asset_url, asset_size, &asset_digest)
         })
         .await
         .map_err(|e| format!("任务执行失败: {}", e))?
     };
     if !reusable {
-        download_and_extract(&app, &staging, &asset_url, asset_size, &asset_digest, &mirror)
-            .await
-            .map_err(cleanup)?;
+        download_and_extract(
+            &app,
+            &staging,
+            &asset_name,
+            &asset_url,
+            asset_size,
+            &asset_digest,
+            &mirror,
+        )
+        .await
+        .map_err(cleanup)?;
     }
 
     emit_progress(&app, CORE_PROGRESS_EVENT, "replace", 0, 0);
@@ -286,17 +387,56 @@ mod tests {
             builder.append_data(&mut header, name, body).unwrap();
         }
         let archive = builder.into_inner().unwrap().finish().unwrap();
-        let archive_path = dir.join("core.tar.gz");
+        let archive_path = dir.join(STAGED_ASSET_FILE);
         std::fs::write(&archive_path, &archive).unwrap();
         let digest = format!("sha256:{:x}", Sha256::digest(&archive));
 
         let files = dir.join("files");
-        extract_core(&archive_path, &files, &digest).unwrap();
+        extract_core(
+            &archive_path,
+            "sing-box-1.0.0-android-arm64.tar.gz",
+            &files,
+            &digest,
+        )
+        .unwrap();
         assert_eq!(std::fs::read(files.join("sing-box")).unwrap(), b"core-binary");
         assert!(!files.join("LICENSE").exists());
 
         let wrong = format!("sha256:{}", "0".repeat(64));
-        assert!(extract_core(&archive_path, &files, &wrong).is_err());
+        assert!(
+            extract_core(
+                &archive_path,
+                "sing-box-1.0.0-android-arm64.tar.gz",
+                &files,
+                &wrong,
+            )
+            .is_err()
+        );
+
+        let raw = b"\x7fELF-raw-android-core";
+        std::fs::write(&archive_path, raw).unwrap();
+        let raw_digest = format!("sha256:{:x}", Sha256::digest(raw));
+        extract_core(
+            &archive_path,
+            "sing-box_v1.15.0_android_arm64",
+            &files,
+            &raw_digest,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(files.join("sing-box")).unwrap(), raw);
+
+        let bad_raw = b"not-elf";
+        std::fs::write(&archive_path, bad_raw).unwrap();
+        let bad_digest = format!("sha256:{:x}", Sha256::digest(bad_raw));
+        assert!(
+            extract_core(
+                &archive_path,
+                "sing-box_v1.15.0_android_arm64",
+                &files,
+                &bad_digest,
+            )
+            .is_err()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

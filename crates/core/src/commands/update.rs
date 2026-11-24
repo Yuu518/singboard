@@ -96,7 +96,7 @@ pub(crate) fn core_asset_hash(asset_digest: &str) -> Result<&str, String> {
 
 pub(crate) fn verify_archive(archive: &Path, asset_digest: &str) -> Result<Vec<u8>, String> {
     let expected = core_asset_hash(asset_digest)?;
-    let bytes = std::fs::read(archive).map_err(|e| format!("打开压缩包失败: {}", e))?;
+    let bytes = std::fs::read(archive).map_err(|e| format!("打开下载文件失败: {}", e))?;
     if !format!("{:x}", Sha256::digest(&bytes)).eq_ignore_ascii_case(expected) {
         return Err("核心文件 SHA-256 校验失败，已中止更新".into());
     }
@@ -226,24 +226,379 @@ pub(crate) async fn github_get_with_token(
     Ok(resp)
 }
 
-fn asset_label(suffix: &str) -> &str {
-    let suffix = suffix.trim_start_matches('-');
-    suffix
-        .strip_suffix(".tar.gz")
-        .or_else(|| suffix.strip_suffix(".zip"))
-        .unwrap_or(suffix)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum TargetOs {
+    Windows,
+    Android,
 }
 
-fn pick_asset(release: &GhRelease, suffixes: &[String]) -> Result<CoreUpdateInfo, String> {
-    let asset = suffixes
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum TargetArch {
+    Amd64,
+    Arm64,
+    Arm,
+    X86,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AssetTarget {
+    pub(crate) os: TargetOs,
+    pub(crate) arch: TargetArch,
+}
+
+impl AssetTarget {
+    fn label(self) -> &'static str {
+        match (self.os, self.arch) {
+            (TargetOs::Windows, TargetArch::Amd64) => "windows-amd64",
+            (TargetOs::Windows, TargetArch::Arm64) => "windows-arm64",
+            (TargetOs::Windows, TargetArch::Arm) => "windows-arm",
+            (TargetOs::Windows, TargetArch::X86) => "windows-386",
+            (TargetOs::Android, TargetArch::Arm64) => "android-arm64",
+            (TargetOs::Android, TargetArch::Arm) => "android-arm",
+            (TargetOs::Android, TargetArch::Amd64) => "android-amd64",
+            (TargetOs::Android, TargetArch::X86) => "android-386",
+        }
+    }
+}
+
+const BLOCKED_EXTENSIONS: &[&str] = &[
+    ".sha256",
+    ".sha256sum",
+    ".sha512",
+    ".sha512sum",
+    ".md5",
+    ".sig",
+    ".asc",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".sbom",
+    ".spdx",
+    ".pem",
+    ".crt",
+    ".deb",
+    ".rpm",
+    ".pkg",
+    ".dmg",
+    ".appimage",
+    ".apk",
+    ".aab",
+    ".ipa",
+    ".msi",
+    ".msix",
+    ".pdb",
+    ".dsym",
+    ".db",
+    ".srs",
+    ".mmdb",
+    ".dat",
+    ".tar.xz",
+    ".tar.zst",
+    ".tar.bz2",
+    ".7z",
+    ".rar",
+    ".xz",
+    ".zst",
+    ".bz2",
+];
+
+const NON_BINARY_EXTENSIONS: &[&str] = &[
+    "zip", "exe", "gz", "tar", "so", "dll", "dylib", "a", "o", "lib", "md", "sh", "bat", "cmd",
+    "ps1", "html", "htm", "xml", "pdf", "png", "jpg", "jpeg", "webp", "svg", "ico", "log", "conf",
+    "cfg", "ini", "toml", "csv", "service", "plist", "go", "rs", "py", "js", "ts", "java", "kt",
+    "swift", "c", "h", "cpp", "hpp",
+];
+
+fn valid_asset_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains("..")
+        && !name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '/' | '\\' | '?' | '#'))
+}
+
+fn parse_asset_format(lower: &str, os: TargetOs) -> Option<(&str, u8)> {
+    if BLOCKED_EXTENSIONS.iter().any(|ext| lower.ends_with(ext)) {
+        return None;
+    }
+    match os {
+        TargetOs::Windows => {
+            if let Some(stem) = lower.strip_suffix(".zip") {
+                Some((stem, 0))
+            } else {
+                lower.strip_suffix(".exe").map(|stem| (stem, 1))
+            }
+        }
+        TargetOs::Android => {
+            if let Some(stem) = lower
+                .strip_suffix(".tar.gz")
+                .or_else(|| lower.strip_suffix(".tgz"))
+            {
+                return Some((stem, 0));
+            }
+            if let Some(stem) = lower.strip_suffix(".bin") {
+                return Some((stem, 1));
+            }
+            if let Some((_, ext)) = lower.rsplit_once('.')
+                && NON_BINARY_EXTENSIONS.contains(&ext)
+            {
+                return None;
+            }
+            Some((lower, 1))
+        }
+    }
+}
+
+fn is_microarch_suffix(tokens: &[&str], index: usize) -> bool {
+    let Some(token) = tokens.get(index) else {
+        return false;
+    };
+    if !matches!(*token, "v2" | "v3" | "v4") {
+        return false;
+    }
+    !tokens
+        .get(index + 1)
+        .is_some_and(|next| !next.is_empty() && next.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn score_asset(name: &str, target: AssetTarget) -> Option<(u8, u8, u8, u8, usize)> {
+    let trimmed = name.trim();
+    if !valid_asset_name(trimmed) {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let (stem, format_rank) = parse_asset_format(&lower, target.os)?;
+    let tokens: Vec<&str> = stem
+        .split(['-', '_', '.'])
+        .filter(|s| !s.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    if tokens.iter().any(|t| {
+        matches!(
+            *t,
+            "source"
+                | "src"
+                | "debug"
+                | "symbols"
+                | "sym"
+                | "updater"
+                | "installer"
+                | "setup"
+                | "gui"
+                | "desktop"
+                | "service"
+                | "checksum"
+                | "checksums"
+                | "sha256sums"
+                | "geoip"
+                | "geosite"
+                | "ruleset"
+        )
+    }) {
+        return None;
+    }
+
+    match target.os {
+        TargetOs::Windows => {
+            if tokens.iter().any(|t| {
+                matches!(
+                    *t,
+                    "linux"
+                        | "darwin"
+                        | "macos"
+                        | "osx"
+                        | "android"
+                        | "androideabi"
+                        | "freebsd"
+                        | "openbsd"
+                        | "netbsd"
+                        | "ios"
+                        | "illumos"
+                        | "solaris"
+                        | "openwrt"
+                )
+            }) {
+                return None;
+            }
+            let has_win = tokens
+                .iter()
+                .any(|t| matches!(*t, "windows" | "win" | "win64" | "win32"));
+            if !has_win {
+                return None;
+            }
+            if tokens.contains(&"win64") && target.arch != TargetArch::Amd64 {
+                return None;
+            }
+            if tokens.contains(&"win32") && target.arch != TargetArch::X86 {
+                return None;
+            }
+        }
+        TargetOs::Android => {
+            if tokens.iter().any(|t| {
+                matches!(
+                    *t,
+                    "windows"
+                        | "win"
+                        | "win32"
+                        | "win64"
+                        | "darwin"
+                        | "macos"
+                        | "osx"
+                        | "freebsd"
+                        | "openbsd"
+                        | "netbsd"
+                        | "ios"
+                        | "illumos"
+                        | "solaris"
+                        | "openwrt"
+                )
+            }) {
+                return None;
+            }
+            if !tokens.iter().any(|t| matches!(*t, "android" | "androideabi")) {
+                return None;
+            }
+        }
+    }
+
+    let mut matched_arch_rank: Option<u8> = None;
+    let mut has_other_arch = false;
+    let mut has_microarch_variant = false;
+
+    let mut i = 0;
+    while i < tokens.len() {
+        let mut detected: Option<(TargetArch, u8)> = None;
+        match tokens[i] {
+            "x86" if tokens.get(i + 1) == Some(&"64") => {
+                if is_microarch_suffix(&tokens, i + 2) {
+                    has_microarch_variant = true;
+                    i += 3;
+                } else {
+                    detected = Some((TargetArch::Amd64, 1));
+                    i += 2;
+                }
+            }
+            "arm64" => {
+                if tokens.get(i + 1) == Some(&"v8a") {
+                    detected = Some((TargetArch::Arm64, 1));
+                    i += 2;
+                } else {
+                    detected = Some((TargetArch::Arm64, 0));
+                    i += 1;
+                }
+            }
+            "armeabi" => {
+                detected = Some((TargetArch::Arm, 2));
+                i += if tokens.get(i + 1) == Some(&"v7a") {
+                    2
+                } else {
+                    1
+                };
+            }
+            "amd64" => {
+                if is_microarch_suffix(&tokens, i + 1) {
+                    has_microarch_variant = true;
+                    i += 2;
+                } else {
+                    detected = Some((TargetArch::Amd64, 0));
+                    i += 1;
+                }
+            }
+            "x64" => {
+                if is_microarch_suffix(&tokens, i + 1) {
+                    has_microarch_variant = true;
+                    i += 2;
+                } else {
+                    detected = Some((TargetArch::Amd64, 2));
+                    i += 1;
+                }
+            }
+            "amd64v2" | "amd64v3" | "amd64v4" | "x64v2" | "x64v3" | "x64v4" | "x86_64v2"
+            | "x86_64v3" | "x86_64v4" => {
+                has_microarch_variant = true;
+                i += 1;
+            }
+            "aarch64" => {
+                detected = Some((TargetArch::Arm64, 2));
+                i += 1;
+            }
+            "arm" => {
+                detected = Some((TargetArch::Arm, 0));
+                i += 1;
+            }
+            "armv7" | "armv7a" | "armv7l" => {
+                detected = Some((TargetArch::Arm, 1));
+                i += 1;
+            }
+            "386" => {
+                detected = Some((TargetArch::X86, 0));
+                i += 1;
+            }
+            "i386" | "i686" | "ia32" | "x86" => {
+                detected = Some((TargetArch::X86, 1));
+                i += 1;
+            }
+            "armv5" | "armv6" | "armel" | "armhf" | "mips" | "mips64" | "mipsle" | "mips64le"
+            | "riscv64" | "s390x" | "ppc64" | "ppc64le" | "loong64" => {
+                has_other_arch = true;
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+        if let Some((arch, rank)) = detected {
+            if arch == target.arch {
+                matched_arch_rank = Some(matched_arch_rank.map_or(rank, |cur| cur.min(rank)));
+            } else {
+                has_other_arch = true;
+            }
+        }
+    }
+
+    if matched_arch_rank.is_none()
+        && !has_other_arch
+        && !has_microarch_variant
+        && target.os == TargetOs::Windows
+    {
+        if target.arch == TargetArch::Amd64 && tokens.contains(&"win64") {
+            matched_arch_rank = Some(3);
+        } else if target.arch == TargetArch::X86 && tokens.contains(&"win32") {
+            matched_arch_rank = Some(3);
+        }
+    }
+
+    if has_other_arch || has_microarch_variant {
+        return None;
+    }
+    let arch_rank = matched_arch_rank?;
+    let variant_rank = u8::from(tokens.iter().any(|t| {
+        matches!(
+            *t,
+            "legacy" | "fips" | "musl" | "lite" | "mini" | "win7" | "compat"
+        )
+    }));
+    let core_name_rank = u8::from(!(lower.contains("sing-box") || lower.contains("singbox")));
+    Some((variant_rank, format_rank, arch_rank, core_name_rank, lower.len()))
+}
+
+fn pick_asset(release: &GhRelease, target: AssetTarget) -> Result<CoreUpdateInfo, String> {
+    let asset = release
+        .assets
         .iter()
-        .find_map(|suffix| release.assets.iter().find(|a| a.name.ends_with(suffix.as_str())))
+        .filter_map(|asset| score_asset(&asset.name, target).map(|score| (score, asset)))
+        .min_by_key(|(score, _)| *score)
+        .map(|(_, asset)| asset)
         .ok_or_else(|| {
-            let labels: Vec<&str> = suffixes.iter().map(|s| asset_label(s)).collect();
             format!(
                 "{} 未提供适用于 {} 的资产",
                 release.tag_name,
-                labels.join(" / ")
+                target.label()
             )
         })?;
     Ok(CoreUpdateInfo {
@@ -275,7 +630,7 @@ pub async fn check_core_update(
 ) -> Result<CoreUpdateInfo, String> {
     let repo = repo.trim().to_string();
     validate_repo(&repo)?;
-    let suffixes = platform::asset_suffixes()?;
+    let target = platform::asset_target()?;
     let token = github_token.as_deref();
 
     let release = if channel == "testing" {
@@ -295,7 +650,7 @@ pub async fn check_core_update(
             .map_err(|e| format!("解析 GitHub API 响应失败: {}", e))?
     };
 
-    pick_asset(&release, &suffixes)
+    pick_asset(&release, target)
 }
 
 #[cfg(test)]
@@ -656,10 +1011,6 @@ mod tests {
         }
     }
 
-    fn suffixes(items: &[&str]) -> Vec<String> {
-        items.iter().map(|s| s.to_string()).collect()
-    }
-
     #[test]
     fn testing_channel_prefers_the_highest_version_over_the_latest_published() {
         let releases = vec![
@@ -704,20 +1055,107 @@ mod tests {
     }
 
     #[test]
-    fn picks_windows_asset_by_exact_suffix() {
-        let release = release_with(&[
+    fn picks_windows_assets_across_naming_variants_and_formats() {
+        let win_amd64 = AssetTarget {
+            os: TargetOs::Windows,
+            arch: TargetArch::Amd64,
+        };
+        let win_arm64 = AssetTarget {
+            os: TargetOs::Windows,
+            arch: TargetArch::Arm64,
+        };
+        let win_x86 = AssetTarget {
+            os: TargetOs::Windows,
+            arch: TargetArch::X86,
+        };
+
+        let official = release_with(&[
             "sing-box-1.0.0-windows-amd64v3.zip",
+            "sing-box-1.0.0-windows-amd64-legacy.zip",
             "sing-box-1.0.0-windows-amd64.zip",
             "sing-box-1.0.0-windows-arm64.zip",
         ]);
-        let picked = pick_asset(&release, &suffixes(&["windows-amd64.zip"])).unwrap();
-        assert_eq!(picked.asset_name, "sing-box-1.0.0-windows-amd64.zip");
-        let error = pick_asset(&release, &suffixes(&["windows-386.zip"])).err().unwrap();
-        assert_eq!(error, "v1.0.0 未提供适用于 windows-386 的资产");
+        assert_eq!(
+            pick_asset(&official, win_amd64).unwrap().asset_name,
+            "sing-box-1.0.0-windows-amd64.zip"
+        );
+        assert_eq!(
+            pick_asset(&official, win_arm64).unwrap().asset_name,
+            "sing-box-1.0.0-windows-arm64.zip"
+        );
+        assert_eq!(
+            pick_asset(&official, win_x86).err().unwrap(),
+            "v1.0.0 未提供适用于 windows-386 的资产"
+        );
+
+        let raw_exe_underscore = release_with(&[
+            "sing-box_v1.15.0-alpha.13-xireiki.1_windows_amd64.exe",
+            "sing-box_v1.15.0-alpha.13-xireiki.1_windows_amd64.exe.sha256",
+        ]);
+        assert_eq!(
+            pick_asset(&raw_exe_underscore, win_amd64).unwrap().asset_name,
+            "sing-box_v1.15.0-alpha.13-xireiki.1_windows_amd64.exe"
+        );
+
+        let zip_over_raw = release_with(&[
+            "sing-box_v1.15.0_windows_amd64.exe",
+            "sing-box_v1.15.0_windows_amd64.zip",
+        ]);
+        assert_eq!(
+            pick_asset(&zip_over_raw, win_amd64).unwrap().asset_name,
+            "sing-box_v1.15.0_windows_amd64.zip"
+        );
+
+        let alias_and_case = release_with(&[
+            "Sing-Box_1.15.0_Windows_x86_64.zip",
+            "Sing-Box_1.15.0_Windows_aarch64.exe",
+        ]);
+        assert_eq!(
+            pick_asset(&alias_and_case, win_amd64).unwrap().asset_name,
+            "Sing-Box_1.15.0_Windows_x86_64.zip"
+        );
+        assert_eq!(
+            pick_asset(&alias_and_case, win_arm64).unwrap().asset_name,
+            "Sing-Box_1.15.0_Windows_aarch64.exe"
+        );
+
+        let version_v3_not_microarch = release_with(&["sing-box-windows-amd64-v3.0.0.zip"]);
+        assert_eq!(
+            pick_asset(&version_v3_not_microarch, win_amd64)
+                .unwrap()
+                .asset_name,
+            "sing-box-windows-amd64-v3.0.0.zip"
+        );
+
+        let rejected = release_with(&[
+            "sing-box-1.0.0-windows-amd64-v3.zip",
+            "sing-box-1.0.0-windows-amd64.zip.sha256",
+            "sing-box-1.0.0-windows-amd64.msi",
+            "sing-box-1.0.0-windows-amd64.tar.gz",
+            "sing-box-1.0.0-linux-amd64.zip",
+            "geoip-windows-amd64.zip",
+        ]);
+        assert_eq!(
+            pick_asset(&rejected, win_amd64).err().unwrap(),
+            "v1.0.0 未提供适用于 windows-amd64 的资产"
+        );
     }
 
     #[test]
-    fn picks_android_asset_by_go_or_abi_arch_name() {
+    fn picks_android_assets_by_go_abi_underscore_and_raw_binary() {
+        let arm64 = AssetTarget {
+            os: TargetOs::Android,
+            arch: TargetArch::Arm64,
+        };
+        let arm = AssetTarget {
+            os: TargetOs::Android,
+            arch: TargetArch::Arm,
+        };
+        let amd64 = AssetTarget {
+            os: TargetOs::Android,
+            arch: TargetArch::Amd64,
+        };
+
         let go_style = release_with(&[
             "sing-box-1.0.0-android-arm.tar.gz",
             "sing-box-1.0.0-android-arm64.tar.gz",
@@ -728,31 +1166,47 @@ mod tests {
             "sing-box-1.0.0-Yuu-android-armeabi-v7a.tar.gz",
             "sing-box-1.0.0-Yuu-android-arm64-v8a.tar.gz",
         ]);
-        let arm64 = suffixes(&["-android-arm64.tar.gz", "-android-arm64-v8a.tar.gz"]);
-        let arm = suffixes(&[
-            "-android-arm.tar.gz",
-            "-android-armv7.tar.gz",
-            "-android-armeabi-v7a.tar.gz",
+        let underscore_and_raw = release_with(&[
+            "sing-box_v1.15.0_android_arm64_v8a",
+            "sing-box_v1.15.0_android_arm64.zip",
+            "sing-box_v1.15.0_android_armv7.tgz",
+            "sing-box_v1.15.0_android_arm64.sha256",
         ]);
-        let amd64 = suffixes(&["-android-amd64.tar.gz", "-android-x86_64.tar.gz"]);
 
-        let pick = |release: &GhRelease, suffixes: &[String]| {
-            pick_asset(release, suffixes).map(|info| info.asset_name)
+        let pick = |release: &GhRelease, target: AssetTarget| {
+            pick_asset(release, target).map(|info| info.asset_name)
         };
-        assert_eq!(pick(&go_style, &arm64).unwrap(), "sing-box-1.0.0-android-arm64.tar.gz");
-        assert_eq!(pick(&go_style, &arm).unwrap(), "sing-box-1.0.0-android-arm.tar.gz");
-        assert_eq!(pick(&go_style, &amd64).unwrap(), "sing-box-1.0.0-android-amd64.tar.gz");
         assert_eq!(
-            pick(&abi_style, &arm64).unwrap(),
+            pick(&go_style, arm64).unwrap(),
+            "sing-box-1.0.0-android-arm64.tar.gz"
+        );
+        assert_eq!(
+            pick(&go_style, arm).unwrap(),
+            "sing-box-1.0.0-android-arm.tar.gz"
+        );
+        assert_eq!(
+            pick(&go_style, amd64).unwrap(),
+            "sing-box-1.0.0-android-amd64.tar.gz"
+        );
+        assert_eq!(
+            pick(&abi_style, arm64).unwrap(),
             "sing-box-1.0.0-Yuu-android-arm64-v8a.tar.gz"
         );
         assert_eq!(
-            pick(&abi_style, &arm).unwrap(),
+            pick(&abi_style, arm).unwrap(),
             "sing-box-1.0.0-Yuu-android-armeabi-v7a.tar.gz"
         );
         assert_eq!(
-            pick(&abi_style, &amd64).unwrap_err(),
-            "v1.0.0 未提供适用于 android-amd64 / android-x86_64 的资产"
+            pick(&abi_style, amd64).unwrap_err(),
+            "v1.0.0 未提供适用于 android-amd64 的资产"
+        );
+        assert_eq!(
+            pick(&underscore_and_raw, arm64).unwrap(),
+            "sing-box_v1.15.0_android_arm64_v8a"
+        );
+        assert_eq!(
+            pick(&underscore_and_raw, arm).unwrap(),
+            "sing-box_v1.15.0_android_armv7.tgz"
         );
     }
 
