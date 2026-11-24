@@ -124,8 +124,12 @@ pub fn start_with_snapshot(
     } else {
         service
     };
-    if !restart && scm::query_service_status(service)?.state == "running" {
-        return Ok(());
+    if !restart {
+        match scm::query_service_status(service)?.state.as_str() {
+            "running" => return Ok(()),
+            "starting" => return scm::start_service(service),
+            _ => {}
+        }
     }
     let current = runtime::Snapshot::read(service)?;
     let snapshot = current.refresh_config()?;

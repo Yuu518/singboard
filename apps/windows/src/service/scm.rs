@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{ERROR_SERVICE_DOES_NOT_EXIST, GetLastError};
 use windows_sys::Win32::System::Services::*;
@@ -92,6 +92,26 @@ pub struct ServiceStatus {
     pub state: String,
     pub pid: Option<u32>,
     pub uptime_seconds: Option<u64>,
+    #[serde(skip)]
+    pub exit_code: u32,
+}
+
+fn process_status(svc: ScHandle) -> Result<SERVICE_STATUS_PROCESS, String> {
+    unsafe {
+        let mut status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
+        let mut bytes_needed = 0;
+        let ok = QueryServiceStatusEx(
+            svc,
+            SC_STATUS_PROCESS_INFO,
+            &mut status as *mut _ as *mut u8,
+            std::mem::size_of_val(&status) as u32,
+            &mut bytes_needed,
+        );
+        if ok == 0 {
+            return Err(format!("QueryServiceStatusEx failed: error {}", GetLastError()));
+        }
+        Ok(status)
+    }
 }
 
 pub fn query_service_status(service_name: &str) -> Result<ServiceStatus, String> {
@@ -105,6 +125,7 @@ pub fn query_service_status(service_name: &str) -> Result<ServiceStatus, String>
                     state: "not_installed".into(),
                     pid: None,
                     uptime_seconds: None,
+                    exit_code: 0,
                 });
             }
             Err(e) => {
@@ -113,22 +134,10 @@ pub fn query_service_status(service_name: &str) -> Result<ServiceStatus, String>
             }
         };
 
-        let mut status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
-        let mut bytes_needed: u32 = 0;
-        let ok = QueryServiceStatusEx(
-            svc,
-            SC_STATUS_PROCESS_INFO,
-            &mut status as *mut _ as *mut u8,
-            std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
-            &mut bytes_needed,
-        );
-
-        let error = GetLastError();
+        let status = process_status(svc);
         CloseServiceHandle(svc);
         CloseServiceHandle(scm);
-        if ok == 0 {
-            return Err(format!("QueryServiceStatusEx failed: error {error}"));
-        }
+        let status = status?;
 
         let state = match status.dwCurrentState {
             SERVICE_RUNNING => "running",
@@ -151,279 +160,163 @@ pub fn query_service_status(service_name: &str) -> Result<ServiceStatus, String>
             state: state.into(),
             pid,
             uptime_seconds: None,
+            exit_code: status.dwWin32ExitCode,
         })
+    }
+}
+
+fn settled_service_state(svc: ScHandle) -> Result<u32, String> {
+    let mut progress = None;
+    let mut deadline = Instant::now();
+    loop {
+        let status = process_status(svc)?;
+        if !matches!(
+            status.dwCurrentState,
+            SERVICE_START_PENDING | SERVICE_STOP_PENDING | SERVICE_CONTINUE_PENDING | SERVICE_PAUSE_PENDING
+        ) {
+            return Ok(status.dwCurrentState);
+        }
+        let checkpoint = Some((status.dwCurrentState, status.dwCheckPoint));
+        let now = Instant::now();
+        if progress != checkpoint {
+            progress = checkpoint;
+            let wait_ms = status.dwWaitHint.clamp(10_000, 60_000);
+            deadline = now + Duration::from_millis(wait_ms.into());
+        } else if now >= deadline {
+            return Err("等待服务状态变更超时，请刷新服务状态".into());
+        }
+        thread::sleep(Duration::from_millis(250));
     }
 }
 
 pub fn start_service(service_name: &str) -> Result<(), String> {
     unsafe {
         let scm = open_scm(SC_MANAGER_CONNECT)?;
-        let svc = open_service_handle(
-            scm,
-            service_name,
-            SERVICE_START | SERVICE_QUERY_STATUS | SERVICE_STOP,
-        )?;
-
-        {
-            let mut status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
-            let mut bytes_needed: u32 = 0;
-            let qok = QueryServiceStatusEx(
-                svc,
-                SC_STATUS_PROCESS_INFO,
-                &mut status as *mut _ as *mut u8,
-                std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
-                &mut bytes_needed,
-            );
-            if qok != 0
-                && (status.dwCurrentState == SERVICE_START_PENDING
-                    || status.dwCurrentState == SERVICE_STOP_PENDING)
-            {
-                let mut last_checkpoint = status.dwCheckPoint;
-                let mut stagnant_ticks = 0u32;
-                let mut settled = false;
-                for _ in 0..30 {
-                    thread::sleep(Duration::from_millis(500));
-                    let qok2 = QueryServiceStatusEx(
-                        svc,
-                        SC_STATUS_PROCESS_INFO,
-                        &mut status as *mut _ as *mut u8,
-                        std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
-                        &mut bytes_needed,
-                    );
-                    if qok2 == 0 {
-                        continue;
-                    }
-                    if status.dwCurrentState == SERVICE_RUNNING {
-                        CloseServiceHandle(svc);
-                        CloseServiceHandle(scm);
-                        return Ok(());
-                    }
-                    if status.dwCurrentState == SERVICE_STOPPED {
-                        settled = true;
-                        break;
-                    }
-                    if status.dwCheckPoint != last_checkpoint {
-                        last_checkpoint = status.dwCheckPoint;
-                        stagnant_ticks = 0;
-                    } else {
-                        stagnant_ticks += 1;
-                        if stagnant_ticks >= 20 {
-                            break;
-                        }
-                    }
-                }
-                if !settled && status.dwProcessId != 0 {
-                    let handle = windows_sys::Win32::System::Threading::OpenProcess(
-                        windows_sys::Win32::System::Threading::PROCESS_TERMINATE,
-                        0,
-                        status.dwProcessId,
-                    );
-                    if !handle.is_null() {
-                        windows_sys::Win32::System::Threading::TerminateProcess(handle, 1);
-                        windows_sys::Win32::Foundation::CloseHandle(handle);
-                    }
-                    for _ in 0..20 {
-                        thread::sleep(Duration::from_millis(500));
-                        let qok2 = QueryServiceStatusEx(
-                            svc,
-                            SC_STATUS_PROCESS_INFO,
-                            &mut status as *mut _ as *mut u8,
-                            std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
-                            &mut bytes_needed,
-                        );
-                        if qok2 != 0 && status.dwCurrentState == SERVICE_STOPPED {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut start_retried = false;
-        let ok = StartServiceW(svc, 0, ptr::null());
-
-        if ok == 0 {
-            let err = GetLastError();
-            if err != 1056 {
-                CloseServiceHandle(svc);
-                CloseServiceHandle(scm);
-                return Err(format!("StartService failed: error {}", err));
-            }
-        }
-
-        for _ in 0..240 {
-            thread::sleep(Duration::from_millis(250));
-            let mut status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
-            let mut bytes_needed: u32 = 0;
-            let qok = QueryServiceStatusEx(
-                svc,
-                SC_STATUS_PROCESS_INFO,
-                &mut status as *mut _ as *mut u8,
-                std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
-                &mut bytes_needed,
-            );
-            if qok == 0 {
-                continue;
-            }
-            match status.dwCurrentState {
-                SERVICE_RUNNING => {
-                    CloseServiceHandle(svc);
-                    CloseServiceHandle(scm);
-                    return Ok(());
-                }
-                SERVICE_STOPPED => {
-                    if ok == 0 && !start_retried {
-                        start_retried = true;
-                        if StartServiceW(svc, 0, ptr::null()) != 0 {
-                            continue;
-                        }
-                    }
-                    CloseServiceHandle(svc);
-                    CloseServiceHandle(scm);
-                    let detail = read_service_error_log(service_name).unwrap_or_default();
-                    let msg = if detail.is_empty() {
-                        "服务启动后立即退出，可能是配置文件有误，请检查配置".to_string()
-                    } else {
-                        format!("服务启动失败:\n{}", detail)
-                    };
-                    return Err(msg);
-                }
-                _ => continue,
-            }
-        }
-
-        CloseServiceHandle(svc);
+        let svc = open_service_handle(scm, service_name, SERVICE_START | SERVICE_QUERY_STATUS);
         CloseServiceHandle(scm);
-        Err("等待服务启动超时，请刷新服务状态".into())
+        let svc = svc?;
+        let result = (|| {
+            if settled_service_state(svc)? == SERVICE_RUNNING {
+                return Ok(());
+            }
+            let mut retried = false;
+            loop {
+                let started = StartServiceW(svc, 0, ptr::null()) != 0;
+                if !started {
+                    let error = GetLastError();
+                    if error != windows_sys::Win32::Foundation::ERROR_SERVICE_ALREADY_RUNNING {
+                        return Err(format!("StartService failed: error {error}"));
+                    }
+                }
+                match settled_service_state(svc)? {
+                    SERVICE_RUNNING => return Ok(()),
+                    SERVICE_STOPPED if !started && !retried => retried = true,
+                    SERVICE_STOPPED => {
+                        let detail = read_service_error_log(service_name).unwrap_or_default();
+                        return Err(if detail.is_empty() {
+                            "服务启动后立即退出，可能是配置文件有误，请检查配置".to_string()
+                        } else {
+                            format!("服务启动失败:\n{detail}")
+                        });
+                    }
+                    state => return Err(format!("服务未进入运行状态，当前状态码: {state}")),
+                }
+            }
+        })();
+        CloseServiceHandle(svc);
+        result
     }
 }
 
 pub fn stop_service(service_name: &str) -> Result<(), String> {
     unsafe {
         let scm = open_scm(SC_MANAGER_CONNECT)?;
-        let svc = open_service_handle(scm, service_name, SERVICE_STOP | SERVICE_QUERY_STATUS)?;
-
-        let mut old_pid = 0u32;
-        {
-            let mut bytes_needed: u32 = 0;
-            let mut proc_status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
-            if QueryServiceStatusEx(
-                svc,
-                SC_STATUS_PROCESS_INFO,
-                &mut proc_status as *mut _ as *mut u8,
-                std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
-                &mut bytes_needed,
-            ) != 0
-            {
-                old_pid = proc_status.dwProcessId;
-            }
-        }
-
-        let mut status: SERVICE_STATUS = std::mem::zeroed();
-        let mut ok = ControlService(svc, SERVICE_CONTROL_STOP, &mut status);
-
-        if ok == 0 {
-            let mut err = GetLastError();
-            if err == 1061 {
-                for _ in 0..50 {
-                    thread::sleep(Duration::from_millis(500));
-                    let mut bytes_needed: u32 = 0;
-                    let mut proc_status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
-                    if QueryServiceStatusEx(
-                        svc,
-                        SC_STATUS_PROCESS_INFO,
-                        &mut proc_status as *mut _ as *mut u8,
-                        std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
-                        &mut bytes_needed,
-                    ) == 0
-                    {
-                        continue;
-                    }
-                    if proc_status.dwProcessId != 0 {
-                        old_pid = proc_status.dwProcessId;
-                    }
-                    if proc_status.dwCurrentState == SERVICE_STOPPED {
-                        err = 1062;
-                        break;
-                    }
-                    if proc_status.dwCurrentState == SERVICE_RUNNING {
-                        ok = ControlService(svc, SERVICE_CONTROL_STOP, &mut status);
-                        if ok != 0 {
-                            break;
-                        }
-                        err = GetLastError();
-                        if err != 1061 {
-                            break;
-                        }
-                    }
-                }
-            }
-            if ok == 0 {
-                CloseServiceHandle(svc);
-                CloseServiceHandle(scm);
-                if err == 1062 {
-                    if old_pid != 0 {
-                        let handle = windows_sys::Win32::System::Threading::OpenProcess(
-                            windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE,
-                            0,
-                            old_pid,
-                        );
-                        if !handle.is_null() {
-                            windows_sys::Win32::System::Threading::WaitForSingleObject(handle, 5000);
-                            windows_sys::Win32::Foundation::CloseHandle(handle);
-                        }
-                    }
-                    return Ok(());
-                }
-                return Err(format!("ControlService(STOP) failed: error {}", err));
-            }
-        }
-
-        let mut stopped = false;
-        for _ in 0..50 {
-            thread::sleep(Duration::from_millis(500));
-            let mut bytes_needed: u32 = 0;
-            let mut proc_status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
-            QueryServiceStatusEx(
-                svc,
-                SC_STATUS_PROCESS_INFO,
-                &mut proc_status as *mut _ as *mut u8,
-                std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
-                &mut bytes_needed,
-            );
-            if proc_status.dwProcessId != 0 {
-                old_pid = proc_status.dwProcessId;
-            }
-            if proc_status.dwCurrentState == SERVICE_STOPPED {
-                stopped = true;
-                break;
-            }
-        }
-
-        CloseServiceHandle(svc);
+        let svc = open_service_handle(scm, service_name, SERVICE_STOP | SERVICE_QUERY_STATUS);
         CloseServiceHandle(scm);
-        if stopped {
-            if old_pid != 0 {
-                let handle = windows_sys::Win32::System::Threading::OpenProcess(
-                    windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE,
-                    0,
-                    old_pid,
-                );
-                if !handle.is_null() {
-                    windows_sys::Win32::System::Threading::WaitForSingleObject(handle, 5000);
-                    windows_sys::Win32::Foundation::CloseHandle(handle);
+        let svc = svc?;
+        let result = stop_open_service(svc);
+        CloseServiceHandle(svc);
+        result
+    }
+}
+
+fn stop_open_service(svc: ScHandle) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::{ERROR_SERVICE_CANNOT_ACCEPT_CTRL, ERROR_SERVICE_NOT_ACTIVE};
+
+    wait_for_service_stop(|| process_status(svc), || {
+        let mut status = unsafe { std::mem::zeroed() };
+        if unsafe { ControlService(svc, SERVICE_CONTROL_STOP, &mut status) } != 0 {
+            return Ok(true);
+        }
+        let error = unsafe { GetLastError() };
+        if matches!(error, ERROR_SERVICE_CANNOT_ACCEPT_CTRL | ERROR_SERVICE_NOT_ACTIVE) {
+            Ok(false)
+        } else {
+            Err(format!("ControlService(STOP) failed: error {error}"))
+        }
+    })
+}
+
+fn wait_for_service_stop(
+    mut query: impl FnMut() -> Result<SERVICE_STATUS_PROCESS, String>,
+    mut request_stop: impl FnMut() -> Result<bool, String>,
+) -> Result<(), String> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::{
+        ERROR_INVALID_PARAMETER, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
+    use windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE;
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
+
+    let mut host = None;
+    let mut stop_sent = false;
+    let mut progress = None;
+    let mut deadline = Instant::now();
+    loop {
+        let status = query()?;
+        if status.dwCurrentState == SERVICE_STOPPED {
+            break;
+        }
+        if let Some((pid, _)) = &host {
+            if status.dwProcessId != 0 && status.dwProcessId != *pid {
+                return Err("服务进程已更换，已取消后续操作".into());
+            }
+        } else if status.dwProcessId != 0 {
+            let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, status.dwProcessId) };
+            if !handle.is_null() {
+                host = Some((status.dwProcessId, unsafe { OwnedHandle::from_raw_handle(handle) }));
+            } else {
+                let error = unsafe { GetLastError() };
+                if error != ERROR_INVALID_PARAMETER {
+                    return Err(format!("打开旧服务进程失败: {error}"));
                 }
             }
-            Ok(())
-        } else {
-            Err("等待服务停止超时，已取消后续操作".into())
+        }
+        if !stop_sent && matches!(status.dwCurrentState, SERVICE_RUNNING | SERVICE_PAUSED) {
+            stop_sent = request_stop()?;
+        }
+        let now = Instant::now();
+        let checkpoint = Some((status.dwCurrentState, status.dwCheckPoint));
+        if checkpoint != progress {
+            progress = checkpoint;
+            deadline = now + Duration::from_millis(status.dwWaitHint.clamp(10_000, 60_000).into());
+        } else if now >= deadline {
+            return Err("等待服务停止超时，已取消后续操作".into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    if let Some((_, host)) = host {
+        match unsafe { WaitForSingleObject(host.as_raw_handle(), 5_000) } {
+            WAIT_OBJECT_0 => {}
+            WAIT_TIMEOUT => return Err("旧服务进程尚未退出，已取消后续操作".into()),
+            _ => return Err(format!("等待旧服务进程退出失败: {}", std::io::Error::last_os_error())),
         }
     }
+    Ok(())
 }
 
 pub fn restart_service(service_name: &str) -> Result<(), String> {
     stop_service(service_name)?;
-    thread::sleep(Duration::from_millis(500));
     start_service(service_name)
 }
 
@@ -757,6 +650,38 @@ pub fn startup_task_exists(service_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stop_waits_for_the_host_when_the_core_crashes_during_stop() {
+        use std::os::windows::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        if std::env::var_os("SINGBOARD_TEST_EXIT_DURING_STOP").is_some() {
+            thread::sleep(Duration::from_millis(500));
+            std::process::exit(1);
+        }
+        let mut host = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "service::scm::tests::stop_waits_for_the_host_when_the_core_crashes_during_stop"])
+            .env("SINGBOARD_TEST_EXIT_DURING_STOP", "1")
+            .creation_flags(0x08000000)
+            .stdout(Stdio::null())
+            .spawn().unwrap();
+        let mut first = true;
+        let mut stops = 0;
+        wait_for_service_stop(|| {
+            let mut status: SERVICE_STATUS_PROCESS = unsafe { std::mem::zeroed() };
+            if std::mem::take(&mut first) {
+                status.dwCurrentState = SERVICE_RUNNING;
+                status.dwProcessId = host.id();
+            } else {
+                status.dwCurrentState = SERVICE_STOPPED;
+                status.dwWin32ExitCode = 1;
+            }
+            Ok(status)
+        }, || { stops += 1; Ok(true) }).unwrap();
+        assert_eq!(stops, 1);
+        assert_eq!(host.try_wait().unwrap().unwrap().code(), Some(1));
+    }
+
     #[test]
     fn queries_windows_service_without_manager_write_access() {
         let status = query_service_status("EventLog").unwrap();

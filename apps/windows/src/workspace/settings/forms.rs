@@ -522,7 +522,7 @@ impl Workspace {
                                     )
                                     .child(div().text_xs().text_color(p.muted()).child("秒")),
                             )
-                            .when(!self.local_state.contains("未安装"), |row| {
+                            .when(self.local_state != CoreState::NotInstalled, |row| {
                                 row.child(
                                     action_btn("enable-svc-autostart", "启用自启", busy, p)
                                         .when(!busy, |b| {
@@ -691,33 +691,21 @@ impl Workspace {
             .iter()
             .map(|a| (a.id.clone(), a.name.clone()))
             .collect();
-        let connected = self.traffic_status == "已连接";
-        let connecting = self.traffic_status == "连接中";
         let host_label = host_for_display(&self.endpoint);
-        let (dot_color, halo_color, status_text, is_err) = if connected {
-            (
-                p.success_dot(),
-                p.success_soft(),
-                format!("已连接 {host_label} · 共 {} 个端点", prefs.clash_apis.len()),
-                false,
-            )
-        } else if connecting {
-            (
-                p.warning_dot(),
-                p.warning_soft(),
-                format!(
-                    "正在连接 {host_label} · 共 {} 个端点",
-                    prefs.clash_apis.len()
-                ),
-                false,
-            )
+        let api_state = self.api_state();
+        let status_text = if api_state == ApiState::Connected {
+            match self.summary["version"].as_str().filter(|version| !version.is_empty()) {
+                Some(version) => format!("已连接 {host_label} · {version} · 共 {} 个端点", prefs.clash_apis.len()),
+                None => format!("已连接 {host_label} · 共 {} 个端点", prefs.clash_apis.len()),
+            }
         } else {
-            (
-                p.danger_fill(),
-                p.danger_soft(),
-                format!("无法连接 {host_label}"),
-                true,
-            )
+            format!("{} · {host_label}", api_state.label())
+        };
+        let (dot_color, halo_color, is_err) = match api_state {
+            ApiState::Connected => (p.success_dot(), p.success_soft(), false),
+            ApiState::Waiting => (p.warning_dot(), p.warning_soft(), false),
+            ApiState::Disconnected => (p.muted(), p.fill(), false),
+            ApiState::AuthFailed | ApiState::Unreachable => (p.danger_fill(), p.danger_soft(), true),
         };
 
         let edit_open = self.settings_layout.api_edit == Some(false);

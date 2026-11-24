@@ -147,7 +147,36 @@ pub fn run_child(pipe: &str, pid: u32) -> Result<(), String> {
     admin::run_child(pipe, pid, |_, _, _, _| Err("该操作不属于服务管理".into()))
 }
 
-pub async fn runtime_status() -> Result<(String, Option<u64>), String> {
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum CoreState {
+    #[default]
+    Unknown,
+    NotInstalled,
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Failed(u32),
+}
+
+impl CoreState {
+    pub fn is_stopped(self) -> bool {
+        matches!(self, Self::Stopped | Self::Failed(_))
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unknown => "核心状态未知",
+            Self::NotInstalled => "未安装服务",
+            Self::Starting => "正在启动",
+            Self::Running => "核心已启动",
+            Self::Stopping => "正在停止",
+            Self::Stopped | Self::Failed(_) => "核心已停止",
+        }
+    }
+}
+
+pub async fn runtime_status() -> Result<(CoreState, Option<u64>, Option<String>), String> {
     let (name, mut status) = tokio::task::spawn_blocking(|| {
         let name = service_name()?;
         let status = scm::query_service_status(&name)?;
@@ -158,7 +187,8 @@ pub async fn runtime_status() -> Result<(String, Option<u64>), String> {
     if status.state == "running" {
         if let Some(pid) = status.pid {
             let uptime = singboard_service::telemetry::query(&name, pid).await;
-            status = tokio::task::spawn_blocking(move || scm::query_service_status(&name))
+            let service = name.clone();
+            status = tokio::task::spawn_blocking(move || scm::query_service_status(&service))
                 .await
                 .map_err(|err| err.to_string())??;
             if status.pid == Some(pid) && status.state == "running" {
@@ -167,19 +197,21 @@ pub async fn runtime_status() -> Result<(String, Option<u64>), String> {
         }
     }
     let state = match status.state.as_str() {
-        "running" => "运行中",
-        "stopped" => "已停止",
-        "not_installed" => "未安装",
-        "starting" => "启动中",
-        "stopping" => "停止中",
-        s => s,
+        "running" => CoreState::Running,
+        "stopped" if status.exit_code != 0 => CoreState::Failed(status.exit_code),
+        "stopped" => CoreState::Stopped,
+        "not_installed" => CoreState::NotInstalled,
+        "starting" => CoreState::Starting,
+        "stopping" => CoreState::Stopping,
+        _ => CoreState::Unknown,
     };
-    let description = format!(
-        "本机服务 · {state}{}",
-        status
-            .uptime_seconds
-            .map(|t| format!(" · 运行 {} 小时 {} 分钟", t / 3600, (t % 3600) / 60))
-            .unwrap_or_default()
-    );
-    Ok((description, status.uptime_seconds))
+    let error = if let CoreState::Failed(code) = state {
+        let log = tokio::task::spawn_blocking(move || scm::read_service_error_log(&name))
+            .await.ok().and_then(Result::ok);
+        Some(log.as_deref().and_then(|text| text.lines().rfind(|line| !line.trim().is_empty()))
+            .map(str::to_owned).unwrap_or_else(|| format!("服务退出码 {code}")))
+    } else {
+        None
+    };
+    Ok((state, status.uptime_seconds, error))
 }

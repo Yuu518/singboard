@@ -1,3 +1,4 @@
+use crate::service::CoreState;
 use super::{Overview, workspace::PAGES};
 use gpui::{prelude::*, *};
 use std::borrow::Cow;
@@ -105,20 +106,16 @@ impl Overview {
         }
         let opacity = self.title_opacity;
         let page_title = PAGES.iter().find(|(page, _)| *page == active).map(|(_, label)| *label).unwrap_or("");
-        let connected = ws.overview_live();
-        let local_running = ws.local_state.contains("运行中");
-        let local_stopped = ws.local_state.contains("已停止");
-        let uptime = ws.uptime();
-        let status_label = if local_running {
-            uptime.as_deref().unwrap_or("运行中")
-        } else if connected {
-            "已连接"
-        } else if local_stopped {
-            "已停止"
-        } else {
-            ws.traffic_status
-        };
-        let (dot_color, halo_color) = if local_running || connected {
+        let local_running = ws.local_state == CoreState::Running;
+        let local_stopped = ws.local_state.is_stopped();
+        let transition = ws.service_transition();
+        let mut status_label = ws.core_status_label().to_owned();
+        if local_running && transition.is_none() && let Some(uptime) = ws.uptime() {
+            status_label = format!("{status_label} · {uptime}");
+        }
+        let (dot_color, halo_color) = if transition.is_some() {
+            (palette.warning_dot(), palette.warning_soft())
+        } else if local_running {
             (palette.success_dot(), palette.success_soft())
         } else if local_stopped {
             (palette.danger_fill(), palette.danger_soft())
@@ -294,6 +291,7 @@ impl Overview {
             div().p_3().flex().child(
                 div()
                     .id("sidebar-status-pill")
+                    .min_w_0().max_w_full()
                     .flex()
                     .gap_2()
                     .items_center()
@@ -310,7 +308,7 @@ impl Overview {
                     .font_weight(FontWeight::MEDIUM)
                     .child(
                         div()
-                            .size(px(14.))
+                            .size(px(14.)).flex_none()
                             .rounded_full()
                             .bg(halo_color)
                             .flex()
@@ -318,7 +316,11 @@ impl Overview {
                             .justify_center()
                             .child(div().size(px(8.)).rounded_full().bg(dot_color)),
                     )
-                    .child(div().text_color(palette.ink()).child(status_label.to_owned()))
+                    .child(
+                        div().min_w_0().flex().flex_col()
+                            .child(div().truncate().text_color(palette.ink()).child(status_label))
+                            .child(div().truncate().text_color(palette.muted()).child(ws.api_status_label())),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let action = if local_running { "stop" } else { "start" };
                         this.workspace.update(cx, |state, cx| {

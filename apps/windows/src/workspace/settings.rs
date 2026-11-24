@@ -822,26 +822,21 @@ impl Workspace {
         };
         let win_ratio = (f32::from(vp.width) / f32::from(vp.height).max(1.)).clamp(0.5, 3.0);
 
-        let local_running = self.local_state.contains("运行中");
-        let local_stopped = self.local_state.contains("已停止");
-        let local_not_installed = self.local_state.contains("未安装");
-        let connected = self.traffic_status == "已连接";
+        let local_running = self.local_state == CoreState::Running;
+        let local_stopped = self.local_state.is_stopped();
+        let local_not_installed = self.local_state == CoreState::NotInstalled;
+        let connected = self.api_connected();
         let svc_action = self.settings_layout.service_action;
         let svc_busy = svc_action.is_some() || self.settings_layout.pending.contains("service-op");
-        let (dot_color, halo_color, svc_text) = if local_not_installed && !connected {
-            (palette.muted(), rgba(0x00000000).into(), "未安装服务")
+        let transition = self.service_transition();
+        let (dot_color, halo_color) = if transition.is_some() {
+            (palette.warning_dot(), palette.warning_soft())
         } else if local_running {
-            (palette.success_dot(), palette.success_soft(), "运行中")
+            (palette.success_dot(), palette.success_soft())
         } else if local_stopped {
-            (palette.danger_fill(), palette.danger_soft(), "已停止")
-        } else if connected {
-            (palette.success_dot(), palette.success_soft(), "运行中")
+            (palette.danger_fill(), palette.danger_soft())
         } else {
-            (
-                palette.warning_dot(),
-                palette.warning_soft(),
-                self.traffic_status,
-            )
+            (palette.muted(), rgba(0x00000000).into())
         };
 
         let start_loading = svc_action == Some("start");
@@ -954,14 +949,14 @@ impl Workspace {
                     }),
             );
 
-        let mode_desc = if !connected && !local_running {
-            "核心未运行，启动后可切换。".to_owned()
+        let mode_desc = if !connected {
+            "连接 Clash API 后可切换代理模式。".to_owned()
         } else if self.modes.is_empty() {
             "正在获取核心代理模式…".to_owned()
         } else {
             "核心当前采用的流量处理策略。".to_owned()
         };
-        let mode_control: AnyElement = if self.modes.is_empty() || (!connected && !local_running) {
+        let mode_control: AnyElement = if !connected || self.modes.is_empty() {
             div()
                 .when(!narrow, |d| d.w(px(240.)))
                 .px_3()
@@ -970,8 +965,8 @@ impl Workspace {
                 .bg(palette.fill())
                 .text_xs()
                 .text_color(palette.muted())
-                .child(if !connected && !local_running {
-                    "未运行".into()
+                .child(if !connected {
+                    self.api_status_label().into()
                 } else if self.mode.is_empty() {
                     "加载中…".into()
                 } else {
@@ -1038,25 +1033,23 @@ impl Workspace {
                                         div()
                                             .text_size(crate::theme::text_px(14.)).line_height(crate::theme::text_px(20.))
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .child(svc_text),
+                                            .child(self.core_status_label()),
                                     )
-                                    .child(
-                                        div()
-                                            .text_xs().line_height(crate::theme::text_px(17.))
-                                            .text_color(palette.muted())
-                                            .truncate()
-                                            .child(
-                                                self.summary["version"]
-                                                    .as_str()
-                                                    .filter(|s| !s.is_empty())
-                                                    .unwrap_or("未检测")
-                                                    .to_owned(),
-                                            ),
-                                    ),
+                                    .when_some(self.uptime().filter(|_| local_running), |el, uptime| {
+                                        el.child(
+                                            div()
+                                                .text_xs().line_height(crate::theme::text_px(17.))
+                                                .text_color(palette.muted())
+                                                .child(format!("运行时间 {uptime}")),
+                                        )
+                                    }),
                             ),
                     )
                     .child(svc_controls),
             )
+            .when_some(self.core_error.as_ref().filter(|_| transition.is_none()), |el, error| {
+                el.child(div().px_4().pb_2().text_xs().text_color(palette.danger()).child(error.clone()))
+            })
             .child(divider(palette))
             .child(row("代理模式", mode_desc, mode_control))
             .child(divider(palette))

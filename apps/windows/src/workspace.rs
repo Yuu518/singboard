@@ -1,3 +1,4 @@
+use crate::service::CoreState;
 use gpui::{prelude::*, *};
 use serde_json::Value;
 use singboard_core::dashboard::{self, LEVELS, SORTS};
@@ -128,6 +129,27 @@ pub(super) fn now_iso() -> String {
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ApiState {
+    Connected,
+    Disconnected,
+    Waiting,
+    Unreachable,
+    AuthFailed,
+}
+
+impl ApiState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Connected => "API 已连接",
+            Self::Disconnected => "API 未连接",
+            Self::Waiting => "等待 Clash API",
+            Self::Unreachable => "API 端点不可达",
+            Self::AuthFailed => "API 认证失败",
+        }
+    }
+}
+
 pub struct Workspace {
     pub custom_wallpaper: bool,
     pub glass_tint: f32,
@@ -137,7 +159,8 @@ pub struct Workspace {
     conn_failures: u32,
     has_traffic: bool,
     pub traffic_samples: VecDeque<Traffic>,
-    pub local_state: String,
+    pub local_state: CoreState,
+    core_error: Option<String>,
     service_settled: bool,
     service_syncing: bool,
     traffic_reconnect: bool,
@@ -371,7 +394,65 @@ impl Workspace {
         std::mem::take(&mut self.traffic_reconnect)
     }
 
+    pub fn service_transition(&self) -> Option<&'static str> {
+        match self.settings_layout.service_action {
+            Some("restart") => Some("正在重启"),
+            Some("start") => Some("正在启动"),
+            Some("stop") => Some("正在停止"),
+            _ if self.local_state == CoreState::Starting => Some("正在启动"),
+            _ if self.local_state == CoreState::Stopping => Some("正在停止"),
+            _ => None,
+        }
+    }
+
+    pub fn core_status_label(&self) -> &'static str {
+        self.service_transition().unwrap_or_else(|| self.local_state.label())
+    }
+
+    fn api_connected(&self) -> bool {
+        self.api_enabled && [self.traffic_status, self.conn_status, self.log_status].contains(&"已连接")
+    }
+
+    fn api_state(&self) -> ApiState {
+        if !self.api_enabled {
+            return ApiState::Disconnected;
+        }
+        if self.api_connected() {
+            return ApiState::Connected;
+        }
+        let local = self.local_endpoint();
+        if local && self.service_transition().is_none()
+            && (self.local_state.is_stopped() || self.local_state == CoreState::NotInstalled)
+        {
+            return ApiState::Disconnected;
+        }
+        let feeds = [self.traffic_status, self.conn_status, self.log_status];
+        if feeds.iter().any(|status| status.contains("认证失败")) {
+            ApiState::AuthFailed
+        } else if !local && self.traffic_failures.max(self.conn_failures) >= 3 {
+            ApiState::Unreachable
+        } else {
+            ApiState::Waiting
+        }
+    }
+
+    pub fn api_status_label(&self) -> &'static str {
+        self.api_state().label()
+    }
+
+    fn local_endpoint(&self) -> bool {
+        reqwest::Url::parse(&self.endpoint).ok().is_some_and(|url| {
+            url.host_str().is_some_and(|host| {
+                host.eq_ignore_ascii_case("localhost") || host.trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+            })
+        })
+    }
+
     fn reconnect_feeds(&mut self, cx: &mut Context<Self>) {
+        if !self.local_endpoint() {
+            return;
+        }
         self.traffic_failures = 0;
         self.conn_failures = 0;
         self.log_failures = 0;
@@ -394,6 +475,9 @@ impl Workspace {
             || !self.settings_layout.pending.insert("service-op")
         {
             return;
+        }
+        if matches!(action, "start" | "restart") {
+            self.core_error = None;
         }
         self.settings_layout.service_action = Some(action);
         cx.notify();
@@ -620,7 +704,8 @@ impl Workspace {
             memory: None,
             history_counts: Default::default(),
             history_memory: Default::default(),
-            local_state: String::new(),
+            local_state: CoreState::Unknown,
+            core_error: None,
             service_settled: false,
             service_syncing: false,
             traffic_reconnect: false,
@@ -718,12 +803,9 @@ impl Workspace {
             };
             tokio::join!(status_fut, proxies_fut, providers_fut)
         });
-        if let Ok(Ok((description, uptime))) = status {
-            self.local_state = description;
-            self.service_uptime = uptime.map(|seconds| (seconds, std::time::Instant::now()));
-            self.uptime_tick = 0;
+        if let Ok(Ok((state, uptime, error))) = status {
+            self.apply_core_status(state, uptime, error);
             self.service_checked = Some(std::time::Instant::now());
-            self.service_settled = true;
         }
         if let Some(data) = proxies {
             self.apply_proxies(data);
@@ -737,6 +819,14 @@ impl Workspace {
         }
     }
 
+    fn apply_core_status(&mut self, state: CoreState, uptime: Option<u64>, error: Option<String>) {
+        self.local_state = state;
+        self.core_error = error;
+        self.service_uptime = uptime.map(|seconds| (seconds, std::time::Instant::now()));
+        self.uptime_tick = 0;
+        self.service_settled = true;
+    }
+
     pub fn refresh_local_state(&mut self, cx: &mut Context<Self>) {
         let started = std::time::Instant::now();
         self.service_checked = Some(started);
@@ -747,13 +837,10 @@ impl Workspace {
                 if this.service_checked != Some(started) {
                     return;
                 }
-                let was_running = this.local_state.contains("运行中");
-                let (description, uptime) = status.unwrap_or_default();
-                let now_running = description.contains("运行中");
-                this.local_state = description;
-                this.service_uptime = uptime.map(|seconds| (seconds, std::time::Instant::now()));
-                this.uptime_tick = 0;
-                this.service_settled = true;
+                let was_running = this.local_state == CoreState::Running;
+                let (state, uptime, error) = status.unwrap_or_default();
+                let now_running = state == CoreState::Running;
+                this.apply_core_status(state, uptime, error);
                 this.invalidate_if_core_restarted();
                 if !was_running && now_running {
                     this.reconnect_feeds(cx);
@@ -829,7 +916,7 @@ impl Workspace {
         let svc_busy = self.service_syncing
             || self.settings_layout.service_action.is_some()
             || self.settings_layout.pending.contains("service-op")
-            || !self.local_state.contains("运行中")
+            || self.local_state != CoreState::Running
             || (self.api_enabled
                 && (self.traffic_status != "已连接" || self.conn_status != "已连接"));
         let poll_secs = if svc_busy { 1 } else { 2 };
@@ -960,7 +1047,7 @@ impl Workspace {
             self.topology_pointer = None;
             self.topology_previous = None;
         }
-        if !self.local_state.contains("运行中") {
+        if self.local_state != CoreState::Running {
             let had_running = self.local_was_running;
             self.local_was_running = false;
             if had_running
@@ -1169,7 +1256,7 @@ impl Workspace {
     }
 
     fn schedule_proxy_recheck(&mut self, cx: &mut Context<Self>) {
-        if !self.local_state.contains("运行中") {
+        if self.local_state != CoreState::Running {
             return;
         }
         self.proxy_dirty = true;
@@ -1330,10 +1417,10 @@ impl Workspace {
             Page::Rules => ("启动服务后即可查看路由规则和规则提供商。", "核心启动后会自动加载规则。"),
             _ => ("启动服务后即可查看实时日志。", "核心启动后会自动接收日志。"),
         };
-        let local_stopped = self.local_state.contains("已停止");
-        let local_not_installed = self.local_state.contains("未安装");
-        let local_starting = self.local_state.contains("启动中");
-        let local_stopping = self.local_state.contains("停止中");
+        let local_stopped = self.local_state.is_stopped();
+        let local_not_installed = self.local_state == CoreState::NotInstalled;
+        let local_starting = self.local_state == CoreState::Starting;
+        let local_stopping = self.local_state == CoreState::Stopping;
         let restarting = self.settings_layout.service_action == Some("restart");
         let (title, detail, action) = if self.service_syncing {
             (
@@ -1362,7 +1449,7 @@ impl Workspace {
         } else if local_stopped {
             (
                 "sing-box 服务已停止",
-                stopped_detail,
+                self.core_error.as_deref().unwrap_or(stopped_detail),
                 Some("start"),
             )
         } else {
@@ -1403,7 +1490,7 @@ impl Workspace {
                                 .font_weight(FontWeight::MEDIUM),
                         )
                         .child(
-                            crate::glass::backdrop_text(detail, true, palette, cx)
+                            crate::glass::backdrop_text(detail.to_owned(), true, palette, cx)
                                 .text_sm(),
                         ),
                 )
@@ -1500,7 +1587,7 @@ impl Workspace {
         }
         self.page = page;
         if page == Page::Overview
-            && self.local_state.contains("运行中")
+            && self.local_state == CoreState::Running
             && self.proxy_dirty
             && self.proxy_due.is_some_and(|due| std::time::Instant::now() >= due)
         {
@@ -2902,7 +2989,8 @@ fn format_ip_row(data: Option<&Value>, busy: bool, revealed: bool) -> (String, S
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.advance_scroll(window);
-        let service_down = self.service_settled && !self.local_state.contains("运行中");
+        let service_down = self.service_settled && self.local_state != CoreState::Running
+            && self.local_endpoint() && !self.api_connected();
         let page = match self.page {
             Page::Proxies | Page::Connections | Page::Logs | Page::Rules if service_down => {
                 self.service_notice(cx).pt(px(48.)).px(px(20.)).pb(px(16.))

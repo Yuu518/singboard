@@ -1,3 +1,4 @@
+use crate::service::CoreState;
 use crate::{editor, service, theme::Palette, visibility, workspace::Workspace};
 use gpui::{prelude::*, *};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -170,7 +171,7 @@ impl TrayMenu {
             _ => {
                 let action = if index == 1 {
                     "restart"
-                } else if self.workspace.read(cx).local_state.contains("运行中") {
+                } else if self.workspace.read(cx).local_state == CoreState::Running {
                     "stop"
                 } else {
                     "start"
@@ -203,7 +204,7 @@ impl Render for TrayMenu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(px(16. * crate::theme::effective_text_scale(cx)));
         let p = Palette::get(cx);
-        let running = self.workspace.read(cx).local_state.contains("运行中");
+        let running = self.workspace.read(cx).local_state == CoreState::Running;
         let item = |i: usize, label: &'static str| {
             div()
                 .id(("tray-item", i))

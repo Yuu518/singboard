@@ -404,8 +404,8 @@ enum OverviewLink {
     Live,
 }
 
-fn overview_link(running: bool, traffic: (&str, u32), connections: (&str, u32)) -> OverviewLink {
-    if !running {
+fn overview_link(api_enabled: bool, traffic: (&str, u32), connections: (&str, u32)) -> OverviewLink {
+    if !api_enabled {
         OverviewLink::Offline
     } else if traffic.0 == "已连接" && connections.0 == "已连接" {
         OverviewLink::Live
@@ -420,7 +420,7 @@ fn overview_link(running: bool, traffic: (&str, u32), connections: (&str, u32)) 
 
 impl Workspace {
     fn overview_link(&self) -> OverviewLink {
-        overview_link(self.api_enabled && self.local_state.contains("运行中"),
+        overview_link(self.api_enabled,
             (self.traffic_status, self.traffic_failures), (self.conn_status, self.conn_failures))
     }
 
@@ -442,27 +442,30 @@ impl Workspace {
 
         let metrics = self.metrics();
         let active_metrics = self.frozen_topology.as_ref().or(self.hovered_topology.as_ref()).unwrap_or(&metrics);
-        let local_running = self.local_state.contains("运行中");
-        let traffic_live = local_running && self.traffic_status == "已连接";
-        let connections_open = local_running && self.conn_status == "已连接";
+        let local_running = self.local_state == CoreState::Running;
+        let traffic_live = self.traffic_status == "已连接";
+        let connections_open = self.conn_status == "已连接";
         let connections_live = connections_open && self.snapshot.is_some();
         let live = self.overview_live();
-        let local_stopped = self.local_state.contains("已停止");
-        let local_not_installed = self.local_state.contains("未安装");
-        let local_starting = self.local_state.contains("启动中");
-        let local_stopping = self.local_state.contains("停止中");
+        let local_stopped = self.local_state.is_stopped();
+        let local_not_installed = self.local_state == CoreState::NotInstalled;
+        let local_starting = self.local_state == CoreState::Starting;
+        let local_stopping = self.local_state == CoreState::Stopping;
         let restarting = self.settings_layout.service_action == Some("restart");
         let service_transition = !local_running
             && (self.service_syncing || restarting || local_starting || local_stopping);
+        let local_api = self.local_endpoint();
+        let api_state = self.api_state();
         let connecting = self.overview_connecting()
-            && !local_stopped
-            && !local_not_installed
-            && !service_transition;
+            && !matches!(api_state, ApiState::Disconnected | ApiState::AuthFailed)
+            && !(local_api && service_transition);
 
-        let notice: Option<(&'static str, &'static str, &'static str, bool)> = if live || connecting
-        {
+        let core_error = self.core_error.as_deref().filter(|_| local_api && local_stopped && !service_transition);
+        let notice: Option<(&'static str, &str, &'static str, bool)> = if let Some(error) = core_error {
+            Some(("核心异常退出", error, "start", true))
+        } else if live || connecting {
             None
-        } else if service_transition {
+        } else if service_transition && local_api {
             if self.service_syncing {
                 Some((
                     "正在更新服务组件…",
@@ -485,16 +488,16 @@ impl Workspace {
                     false,
                 ))
             }
-        } else if [self.traffic_status, self.conn_status].iter().any(|s| s.contains("认证失败")) {
+        } else if api_state == ApiState::AuthFailed {
             Some(("Clash API 密钥不匹配", "请在设置里修改 Clash API 密钥。", "api", true))
-        } else if local_not_installed {
+        } else if local_not_installed && local_api {
             Some((
                 "尚未安装 singboard 服务",
                 "在设置中安装服务后，即可启动 sing-box。",
                 "settings",
                 false,
             ))
-        } else if local_stopped {
+        } else if local_stopped && local_api {
             Some((
                 "sing-box 未运行",
                 "启动服务后显示实时流量、出口和内存。",
@@ -503,32 +506,30 @@ impl Workspace {
             ))
         } else {
             Some((
-                "连不上 sing-box",
-                "没有收到 Clash API 的响应，正在自动重试。连上之前这里不显示数字。",
+                if local_api && local_running && api_state == ApiState::Waiting { "核心已启动，等待 Clash API" } else { api_state.label() },
+                if api_state == ApiState::Connected { "正在恢复 Clash API 数据流。" } else { "连接后会自动显示实时数据。" },
                 "api",
-                true,
+                api_state == ApiState::Unreachable,
             ))
         };
 
-        let state_text = if connecting {
-            "正在连接 sing-box…".to_owned()
-        } else if local_running {
-            self.uptime().map_or_else(|| "运行中".to_owned(), |time| format!("运行中 {time}"))
-        } else if live {
-            "已连接".to_owned()
-        } else if local_stopped {
-            "已停止".to_owned()
-        } else {
-            "连不上 sing-box".to_owned()
+        let core_label = self.core_status_label();
+        let state_text = match self.uptime().filter(|_| local_running) {
+            Some(uptime) => format!("{core_label} {uptime} · {}", self.api_status_label()),
+            None => format!("{core_label} · {}", self.api_status_label()),
         };
         let (dot_color, halo_color, hollow_dot) = if let Some((_, _, _, alert)) = notice {
-            if alert || local_stopped {
+            if alert {
                 (palette.danger_fill(), palette.danger_soft(), false)
+            } else if api_state == ApiState::Waiting {
+                (palette.warning_dot(), palette.warning_soft(), false)
             } else {
                 (palette.muted(), rgba(0x00000000).into(), true)
             }
         } else if live {
             (palette.success_dot(), palette.success_soft(), false)
+        } else if api_state == ApiState::Waiting {
+            (palette.warning_dot(), palette.warning_soft(), false)
         } else {
             (palette.muted(), rgba(0x00000000).into(), true)
         };
@@ -2119,7 +2120,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{OVERVIEW_SAMPLES, OverviewLink, format_uptime, history_x, overview_link};
+    use super::{CoreState, OVERVIEW_SAMPLES, OverviewLink, Workspace, format_uptime, history_x, overview_link};
 
     #[test]
     fn partial_history_occupies_the_newest_slots() {
@@ -2141,7 +2142,51 @@ mod tests {
         }
     }
     #[test]
-    fn overview_requires_a_running_service_and_both_open_sockets() {
+    fn local_core_and_api_connection_change_independently() {
+        let mut workspace = Workspace::new("http://127.0.0.1:1", "", &Default::default(), false, false)
+            .unwrap();
+        workspace.api_enabled = true;
+        workspace.local_state = CoreState::Running;
+        workspace.traffic_status = "端点不可达，正在重连";
+        assert_eq!(workspace.core_status_label(), "核心已启动");
+        assert_eq!(workspace.api_status_label(), "等待 Clash API");
+        workspace.traffic_failures = 120;
+        assert_eq!(workspace.api_status_label(), "等待 Clash API");
+        for state in [CoreState::Stopped, CoreState::Failed(1), CoreState::NotInstalled] {
+            workspace.local_state = state;
+            assert_eq!(workspace.api_status_label(), "API 未连接");
+        }
+        workspace.endpoint = "http://192.0.2.1:9090".into();
+        assert_eq!(workspace.api_status_label(), "API 端点不可达");
+        workspace.endpoint = "http://127.0.0.1:1".into();
+        workspace.local_state = CoreState::Running;
+        workspace.traffic_status = "认证失败，请检查密钥";
+        assert_eq!(workspace.api_status_label(), "API 认证失败");
+        assert_eq!(workspace.core_status_label(), "核心已启动");
+
+        workspace.conn_status = "已连接";
+        assert_eq!(workspace.api_status_label(), "API 已连接");
+        workspace.traffic_status = "已连接";
+        workspace.local_state = CoreState::Stopped;
+        assert_eq!(workspace.core_status_label(), "核心已停止");
+        assert_eq!(workspace.api_status_label(), "API 已连接");
+        assert!(workspace.overview_live());
+    }
+
+    #[test]
+    fn consecutive_failures_with_the_same_exit_code_replace_the_diagnostic() {
+        let mut workspace = Workspace::new("http://127.0.0.1:1", "", &Default::default(), false, false)
+            .unwrap();
+        for error in ["default outbound not found", "listen tcp: address already in use"] {
+            workspace.apply_core_status(CoreState::Failed(1), None, Some(error.into()));
+            assert_eq!(workspace.core_error.as_deref(), Some(error));
+        }
+        workspace.apply_core_status(CoreState::Running, Some(0), None);
+        assert!(workspace.core_error.is_none());
+    }
+
+    #[test]
+    fn overview_uses_the_enabled_api_and_both_open_sockets() {
         let open = ("已连接", 0);
         let retry = ("连接已断开，正在重连", 2);
         assert_eq!(overview_link(true, open, open), OverviewLink::Live);

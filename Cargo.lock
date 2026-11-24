@@ -6188,7 +6188,7 @@ dependencies = [
 
 [[package]]
 name = "singboard-service"
-version = "1.2.5"
+version = "1.2.6"
 dependencies = [
  "embed-resource",
  "serde",

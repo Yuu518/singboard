@@ -77,7 +77,7 @@
   - Applying a profile validates it, switches the active config path, and offers to restart the core to activate a new protected snapshot
 - **Settings**
   - Core and service:
-    - Start, restart and stop the core, with a reachability check after start
+    - Start, restart and stop the core. Restart waits for the old process to exit. The panel shows core and Clash API status separately
     - Proxy mode, from the modes the core reports
     - Install or uninstall the Windows service
     - Core path, working directory, and the startup delay after login
