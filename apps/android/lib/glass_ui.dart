@@ -6,7 +6,8 @@ import 'dart:ui' as ui;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
-import 'package:flutter/rendering.dart' show PipelineOwner, RenderProxyBox;
+import 'package:flutter/rendering.dart'
+    show AnnotationResult, Layer, RenderProxyBox;
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/services.dart' show HapticFeedback;
 
@@ -377,22 +378,6 @@ class GlassScope extends InheritedWidget {
       !identical(sourceWallpaper, old.sourceWallpaper) ||
       !identical(blurredWallpaper, old.blurredWallpaper) ||
       inPopover != old.inPopover;
-}
-
-class GlassScrollScope extends InheritedWidget {
-  final Listenable? listenable;
-
-  const GlassScrollScope({
-    super.key,
-    required this.listenable,
-    required super.child,
-  });
-
-  static Listenable? maybeOf(BuildContext context) =>
-      context.dependOnInheritedWidgetOfExactType<GlassScrollScope>()?.listenable;
-
-  @override
-  bool updateShouldNotify(GlassScrollScope old) => listenable != old.listenable;
 }
 
 class _DefaultAuroraPainter extends CustomPainter {

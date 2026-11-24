@@ -433,16 +433,12 @@ class _WallpaperGlass extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final screenSize = MediaQuery.sizeOf(context);
-    final vertical = Scrollable.maybeOf(context, axis: Axis.vertical)?.position;
-    final horizontal = GlassScrollScope.maybeOf(context);
     return _BlurredWallpaperBox(
       image: image,
       radius: radius,
       tint: tint,
       refract: refract,
       screenSize: screenSize,
-      verticalScroll: vertical,
-      horizontalScroll: horizontal,
       child: RepaintBoundary(child: child),
     );
   }
@@ -454,8 +450,6 @@ class _BlurredWallpaperBox extends SingleChildRenderObjectWidget {
   final double tint;
   final bool refract;
   final Size screenSize;
-  final Listenable? verticalScroll;
-  final Listenable? horizontalScroll;
 
   const _BlurredWallpaperBox({
     required this.image,
@@ -463,8 +457,6 @@ class _BlurredWallpaperBox extends SingleChildRenderObjectWidget {
     required this.tint,
     required this.refract,
     required this.screenSize,
-    required this.verticalScroll,
-    required this.horizontalScroll,
     required super.child,
   });
 
@@ -476,8 +468,6 @@ class _BlurredWallpaperBox extends SingleChildRenderObjectWidget {
         tint: tint,
         refract: refract,
         screenSize: screenSize,
-        verticalScroll: verticalScroll,
-        horizontalScroll: horizontalScroll,
       );
 
   @override
@@ -490,9 +480,7 @@ class _BlurredWallpaperBox extends SingleChildRenderObjectWidget {
       ..radius = radius
       ..tint = tint
       ..refract = refract
-      ..screenSize = screenSize
-      ..verticalScroll = verticalScroll
-      ..horizontalScroll = horizontalScroll;
+      ..screenSize = screenSize;
   }
 }
 
@@ -507,15 +495,11 @@ class _RenderBlurredWallpaper extends RenderProxyBox {
     required double tint,
     required bool refract,
     required Size screenSize,
-    required Listenable? verticalScroll,
-    required Listenable? horizontalScroll,
   }) : _image = image,
        _radius = radius,
        _tint = tint,
        _refract = refract,
-       _screenSize = screenSize,
-       _verticalScroll = verticalScroll,
-       _horizontalScroll = horizontalScroll;
+       _screenSize = screenSize;
 
   ui.FragmentShader? _shader;
   bool _disposed = false;
@@ -556,22 +540,6 @@ class _RenderBlurredWallpaper extends RenderProxyBox {
     markNeedsPaint();
   }
 
-  Listenable? _verticalScroll;
-  set verticalScroll(Listenable? value) {
-    if (_verticalScroll == value) return;
-    if (attached) _verticalScroll?.removeListener(markNeedsPaint);
-    _verticalScroll = value;
-    if (attached) _verticalScroll?.addListener(markNeedsPaint);
-  }
-
-  Listenable? _horizontalScroll;
-  set horizontalScroll(Listenable? value) {
-    if (_horizontalScroll == value) return;
-    if (attached) _horizontalScroll?.removeListener(markNeedsPaint);
-    _horizontalScroll = value;
-    if (attached) _horizontalScroll?.addListener(markNeedsPaint);
-  }
-
   ui.FragmentShader? _obtainShader() {
     if (_disposed || _loadFailed) return null;
     if (_shader != null) return _shader;
@@ -603,18 +571,7 @@ class _RenderBlurredWallpaper extends RenderProxyBox {
   }
 
   @override
-  void attach(PipelineOwner owner) {
-    super.attach(owner);
-    _verticalScroll?.addListener(markNeedsPaint);
-    _horizontalScroll?.addListener(markNeedsPaint);
-  }
-
-  @override
-  void detach() {
-    _verticalScroll?.removeListener(markNeedsPaint);
-    _horizontalScroll?.removeListener(markNeedsPaint);
-    super.detach();
-  }
+  bool get alwaysNeedsCompositing => true;
 
   @override
   void dispose() {
@@ -626,44 +583,97 @@ class _RenderBlurredWallpaper extends RenderProxyBox {
 
   @override
   void paint(PaintingContext context, Offset offset) {
-    if (size.isEmpty) {
-      super.paint(context, offset);
+    if (!size.isEmpty) {
+      context.addLayer(_WallpaperGlassLayer(this, offset, size));
+    }
+    super.paint(context, offset);
+  }
+}
+
+class _WallpaperGlassLayer extends Layer {
+  _WallpaperGlassLayer(this._renderObject, this._offset, this._size);
+
+  final _RenderBlurredWallpaper _renderObject;
+  final Offset _offset;
+  final Size _size;
+
+  ui.Picture? _picture;
+  Offset? _cachedGlobal;
+  ui.Image? _cachedImage;
+  ui.FragmentShader? _cachedShader;
+  double? _cachedRadius;
+  double? _cachedTint;
+  bool? _cachedRefract;
+  Size? _cachedScreenSize;
+
+  @override
+  bool get alwaysNeedsAddToScene => true;
+
+  @override
+  void addToScene(ui.SceneBuilder builder) {
+    if (_renderObject._disposed ||
+        !_renderObject.attached ||
+        !_renderObject.hasSize ||
+        _size.isEmpty) {
       return;
     }
-    final imgW = _image.width.toDouble();
-    final imgH = _image.height.toDouble();
-    if (imgW > 0 && imgH > 0 && !_screenSize.isEmpty) {
-      final global = localToGlobal(Offset.zero);
+    final image = _renderObject._image;
+    final imgW = image.width.toDouble();
+    final imgH = image.height.toDouble();
+    final screenSize = _renderObject._screenSize;
+    if (imgW <= 0 || imgH <= 0 || screenSize.isEmpty) {
+      return;
+    }
+    final global = _renderObject.localToGlobal(Offset.zero);
+    if (!global.dx.isFinite || !global.dy.isFinite) {
+      return;
+    }
+    final radius = _renderObject._radius;
+    final tint = _renderObject._tint;
+    final refract = _renderObject._refract;
+    final clampedRadius = math.min(
+      radius,
+      math.min(_size.width, _size.height) * 0.5,
+    );
+    final lens = refract ? _glassLensStrength(tint) : 0.0;
+    final useShader =
+        lens > 0.02 &&
+        _size.width > 48 &&
+        _size.height > 48 &&
+        clampedRadius >= 6;
+    final shader = useShader ? _renderObject._obtainShader() : null;
+    final unchanged =
+        _picture != null &&
+        _cachedGlobal != null &&
+        (global.dx - _cachedGlobal!.dx).abs() < 0.01 &&
+        (global.dy - _cachedGlobal!.dy).abs() < 0.01 &&
+        identical(image, _cachedImage) &&
+        identical(shader, _cachedShader) &&
+        _cachedRadius == radius &&
+        _cachedTint == tint &&
+        _cachedRefract == refract &&
+        _cachedScreenSize == screenSize;
+    if (!unchanged) {
       final scale = math.max(
-        _screenSize.width / imgW,
-        _screenSize.height / imgH,
+        screenSize.width / imgW,
+        screenSize.height / imgH,
       );
       final drawW = imgW * scale;
       final drawH = imgH * scale;
-      final coverLeft = (_screenSize.width - drawW) / 2;
-      final coverTop = (_screenSize.height - drawH) / 2;
-      final clampedRadius = math.min(
-        _radius,
-        math.min(size.width, size.height) * 0.5,
-      );
-      final lens = _refract ? _glassLensStrength(_tint) : 0.0;
-      final useShader =
-          lens > 0.02 &&
-          size.width > 48 &&
-          size.height > 48 &&
-          clampedRadius >= 6;
-      final shader = useShader ? _obtainShader() : null;
-      final canvas = context.canvas;
+      final coverLeft = (screenSize.width - drawW) / 2;
+      final coverTop = (screenSize.height - drawH) / 2;
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(recorder, _offset & _size);
       if (shader != null) {
         final rim = math.min(
           clampedRadius,
-          math.min(18.0, math.min(size.width, size.height) * 0.24),
+          math.min(18.0, math.min(_size.width, _size.height) * 0.24),
         );
         final amount = math.min(rim * 0.36 * lens, 7.0 * lens);
         final spread = 0.03 * lens;
         shader
-          ..setFloat(0, size.width)
-          ..setFloat(1, size.height)
+          ..setFloat(0, _size.width)
+          ..setFloat(1, _size.height)
           ..setFloat(2, coverLeft - global.dx)
           ..setFloat(3, coverTop - global.dy)
           ..setFloat(4, drawW)
@@ -672,38 +682,61 @@ class _RenderBlurredWallpaper extends RenderProxyBox {
           ..setFloat(7, rim)
           ..setFloat(8, amount)
           ..setFloat(9, spread)
-          ..setImageSampler(0, _image, filterQuality: FilterQuality.low);
+          ..setImageSampler(0, image, filterQuality: FilterQuality.low);
         final localRRect = RRect.fromRectAndRadius(
-          Offset.zero & size,
+          Offset.zero & _size,
           Radius.circular(clampedRadius),
         );
         canvas.save();
-        canvas.translate(offset.dx, offset.dy);
+        canvas.translate(_offset.dx, _offset.dy);
         canvas.drawRRect(localRRect, Paint()..shader = shader);
         canvas.restore();
       } else {
         final dst = Rect.fromLTWH(
-          offset.dx + coverLeft - global.dx,
-          offset.dy + coverTop - global.dy,
+          _offset.dx + coverLeft - global.dx,
+          _offset.dy + coverTop - global.dy,
           drawW,
           drawH,
         );
         final rrect = RRect.fromRectAndRadius(
-          offset & size,
+          _offset & _size,
           Radius.circular(clampedRadius),
         );
         canvas.save();
         canvas.clipRRect(rrect);
         canvas.drawImageRect(
-          _image,
+          image,
           Rect.fromLTWH(0, 0, imgW, imgH),
           dst,
           Paint()..filterQuality = FilterQuality.low,
         );
         canvas.restore();
       }
+      _picture?.dispose();
+      _picture = recorder.endRecording();
+      _cachedGlobal = global;
+      _cachedImage = image;
+      _cachedShader = shader;
+      _cachedRadius = radius;
+      _cachedTint = tint;
+      _cachedRefract = refract;
+      _cachedScreenSize = screenSize;
     }
-    super.paint(context, offset);
+    builder.addPicture(Offset.zero, _picture!);
+  }
+
+  @override
+  bool findAnnotations<S extends Object>(
+    AnnotationResult<S> result,
+    Offset localPosition, {
+    required bool onlyFirst,
+  }) => false;
+
+  @override
+  void dispose() {
+    _picture?.dispose();
+    _picture = null;
+    super.dispose();
   }
 }
 

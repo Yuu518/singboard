@@ -358,7 +358,6 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   bool _userSwiping = false;
   int? _pendingTab;
   late final _pageFade = AnimationController(vsync: this, duration: const Duration(milliseconds: 260), value: 1);
-  late final _glassMotion = Listenable.merge([_pager, _pageFade]);
   double _tabDir = 1.0;
   int? _targetPage;
 
@@ -3811,59 +3810,56 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                                   ),
                                 );
                               },
-                              child: GlassScrollScope(
-                                listenable: _glassMotion,
-                                child: NotificationListener<ScrollNotification>(
-                                  onNotification: (event) {
-                                    if (event.depth != 0) return false;
-                                    if (event is ScrollStartNotification &&
-                                        event.dragDetails != null) {
-                                      _userSwiping = true;
-                                      _pendingTab = null;
-                                    } else if (event is ScrollUpdateNotification &&
-                                        _userSwiping &&
-                                        _pager.positions.length == 1) {
-                                      _swipeProgress.value = _pager.page;
-                                    } else if (event is ScrollEndNotification &&
-                                        _userSwiping) {
-                                      _userSwiping = false;
-                                      _swipeProgress.value = null;
-                                      final settled =
-                                          _pendingTab ??
-                                          (_pager.positions.length == 1 &&
-                                                  _pager.position.haveDimensions
-                                              ? (_pager.page?.round() ?? tab)
-                                              : tab);
-                                      _pendingTab = null;
-                                      if (settled != tab) {
-                                        if (settled != 0) hoveredTopology = null;
-                                        setState(() => tab = settled);
-                                        if (settled == 0) _syncNetwork();
-                                      }
+                              child: NotificationListener<ScrollNotification>(
+                                onNotification: (event) {
+                                  if (event.depth != 0) return false;
+                                  if (event is ScrollStartNotification &&
+                                      event.dragDetails != null) {
+                                    _userSwiping = true;
+                                    _pendingTab = null;
+                                  } else if (event is ScrollUpdateNotification &&
+                                      _userSwiping &&
+                                      _pager.positions.length == 1) {
+                                    _swipeProgress.value = _pager.page;
+                                  } else if (event is ScrollEndNotification &&
+                                      _userSwiping) {
+                                    _userSwiping = false;
+                                    _swipeProgress.value = null;
+                                    final settled =
+                                        _pendingTab ??
+                                        (_pager.positions.length == 1 &&
+                                                _pager.position.haveDimensions
+                                            ? (_pager.page?.round() ?? tab)
+                                            : tab);
+                                    _pendingTab = null;
+                                    if (settled != tab) {
+                                      if (settled != 0) hoveredTopology = null;
+                                      setState(() => tab = settled);
+                                      if (settled == 0) _syncNetwork();
                                     }
-                                    return false;
+                                  }
+                                  return false;
+                                },
+                                child: PageView.builder(
+                                  controller: _pager,
+                                  allowImplicitScrolling: true,
+                                  itemCount: _titles.length,
+                                  physics: preferences['pageSwipe'] == true
+                                      ? const _GentlePageScrollPhysics(
+                                          parent: BouncingScrollPhysics(),
+                                        )
+                                      : const NeverScrollableScrollPhysics(),
+                                  onPageChanged: (i) {
+                                    if (_targetPage != null) return;
+                                    if (_userSwiping) {
+                                      _pendingTab = i;
+                                    } else if (tab != i) {
+                                      if (i != 0) hoveredTopology = null;
+                                      setState(() => tab = i);
+                                      if (i == 0) _syncNetwork();
+                                    }
                                   },
-                                  child: PageView.builder(
-                                    controller: _pager,
-                                    allowImplicitScrolling: true,
-                                    itemCount: _titles.length,
-                                    physics: preferences['pageSwipe'] == true
-                                        ? const _GentlePageScrollPhysics(
-                                            parent: BouncingScrollPhysics(),
-                                          )
-                                        : const NeverScrollableScrollPhysics(),
-                                    onPageChanged: (i) {
-                                      if (_targetPage != null) return;
-                                      if (_userSwiping) {
-                                        _pendingTab = i;
-                                      } else if (tab != i) {
-                                        if (i != 0) hoveredTopology = null;
-                                        setState(() => tab = i);
-                                        if (i == 0) _syncNetwork();
-                                      }
-                                    },
-                                    itemBuilder: (_, i) => _page(i),
-                                  ),
+                                  itemBuilder: (_, i) => _page(i),
                                 ),
                               ),
                             ),
