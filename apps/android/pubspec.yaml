@@ -1,7 +1,7 @@
 name: singboard_native
 description: Singboard native Android client
 publish_to: none
-version: 5.1.0+50100
+version: 5.1.1+50101
 environment:
   sdk: ">=3.13.0 <4.0.0"
   flutter: ">=3.47.0"
