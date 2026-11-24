@@ -2,25 +2,70 @@ name: Build
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - master
-    paths-ignore:
-      - '**.md'
-      - 'LICENSE'
+    inputs:
+      tag:
+        description: Release tag (e.g. v5.1.2; defaults to tag on HEAD)
+        required: false
+        type: string
+      allow_overwrite:
+        description: Allow overwriting an existing GitHub release
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
-  android-signing:
-    name: Check Android signing
+  prepare:
+    name: Prepare release
     runs-on: ubuntu-latest
     outputs:
-      available: ${{ steps.check.outputs.available }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      app_version: ${{ steps.release.outputs.app_version }}
+      build_number: ${{ steps.release.outputs.build_number }}
+      android_signing_available: ${{ steps.signing.outputs.available }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve and validate release tag
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+          ALLOW_OVERWRITE: ${{ inputs.allow_overwrite }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+            git rev-parse -q --verify "refs/tags/$tag" >/dev/null || { echo "Tag not found: $tag"; exit 1; }
+          else
+            tag=$(git tag --points-at HEAD --list 'v*' | sort -V | tail -n 1)
+            if [ -z "$tag" ]; then
+              echo "HEAD has no v* tag; pass inputs.tag or push a tag before building"
+              exit 1
+            fi
+          fi
+          version="${tag#v}"
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]]; then
+            echo "Release version must use major.minor.patch with minor and patch below 100: $version"
+            exit 1
+          fi
+          if [ "$ALLOW_OVERWRITE" != "true" ] && gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; refusing to overwrite"
+            exit 1
+          fi
+          IFS='.' read -r major minor patch <<< "$version"
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "app_version=$version" >> "$GITHUB_OUTPUT"
+          echo "build_number=$((10000 * 10#$major + 100 * 10#$minor + 10#$patch))" >> "$GITHUB_OUTPUT"
+
       - name: Check signing secrets
-        id: check
+        id: signing
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -38,17 +83,34 @@ jobs:
 
   build-windows:
     name: Build Windows app
+    needs: prepare
     runs-on: windows-latest
     env:
       WINDOWS_CERT_PFX_B64: ${{ secrets.WINDOWS_CERT_PFX_B64 }}
       WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+      APP_VERSION: ${{ needs.prepare.outputs.app_version }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
           fetch-tags: true
+
+      - name: Restore source file timestamps
+        shell: pwsh
+        run: |
+          $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+          $ts = 0L
+          foreach ($line in (git -c core.quotepath=false log --format="@%ct" --name-only -- Cargo.toml crates apps/windows)) {
+            if ($line.StartsWith("@")) {
+              $ts = [long]$line.Substring(1)
+            } elseif ($line -and $seen.Add($line) -and (Test-Path -LiteralPath $line -PathType Leaf)) {
+              [IO.File]::SetLastWriteTimeUtc((Resolve-Path -LiteralPath $line).Path, [DateTimeOffset]::FromUnixTimeSeconds($ts).UtcDateTime)
+            }
+          }
 
       - name: Exclude build paths from Windows Defender
         shell: pwsh
@@ -79,23 +141,10 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2.9.2
         with:
+          key: x86_64-pc-windows-msvc-v2
           env-vars: CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS
+          cache-workspace-crates: true
           cache-on-failure: true
-
-      - name: Read release tag
-        shell: pwsh
-        run: |
-          $tag = git describe --tags --abbrev=0
-          if ($LASTEXITCODE -ne 0 -or -not $tag) {
-            throw "No tag found in the repository; push a tag before building"
-          }
-          $version = $tag -replace '^v', ''
-          if ($version -notmatch '^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$') {
-            throw "Release version must use major.minor.patch with minor and patch below 100: $version"
-          }
-
-          "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
-          "APP_VERSION=$version" >> $env:GITHUB_ENV
 
       - name: Import code signing certificate
         if: env.WINDOWS_CERT_PFX_B64 != ''
@@ -184,8 +233,8 @@ jobs:
 
   build-android:
     name: Build Android ${{ matrix.abi }}
-    needs: android-signing
-    if: needs.android-signing.outputs.available == 'true'
+    needs: prepare
+    if: needs.prepare.outputs.android_signing_available == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true
@@ -204,25 +253,16 @@ jobs:
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+      BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
           fetch-tags: true
-
-      - name: Read release tag
-        run: |
-          tag=$(git describe --tags --abbrev=0) || { echo "No tag found in the repository; push a tag before building"; exit 1; }
-          version="${tag#v}"
-          if [[ ! "$version" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]]; then
-            echo "Release version must use major.minor.patch with minor and patch below 100: $version"
-            exit 1
-          fi
-          IFS='.' read -r major minor patch <<< "$version"
-          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
-          echo "BUILD_NUMBER=$((10000 * 10#$major + 100 * 10#$minor + 10#$patch))" >> "$GITHUB_ENV"
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -347,22 +387,30 @@ jobs:
 
   release:
     name: Publish release
-    needs: [build-windows, build-android]
-    if: always() && needs.build-windows.result == 'success' && (needs.build-android.result == 'success' || needs.build-android.result == 'skipped')
+    needs: [prepare, build-windows, build-android]
+    if: always() && needs.prepare.result == 'success' && needs.build-windows.result == 'success' && (needs.build-android.result == 'success' || needs.build-android.result == 'skipped')
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+      APP_VERSION: ${{ needs.prepare.outputs.app_version }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Read release tag
+      - name: Verify release does not exist
+        if: ${{ !inputs.allow_overwrite }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag=$(git describe --tags --abbrev=0)
-          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
-          echo "APP_VERSION=${tag#v}" >> "$GITHUB_ENV"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to overwrite"
+            exit 1
+          fi
 
       - name: Download build outputs
         uses: actions/download-artifact@v8.0.1

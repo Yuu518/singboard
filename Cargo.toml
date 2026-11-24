@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "apps/windows", "crates/service-host"]
+members = ["crates/core", "apps/windows", "crates/service-host", "crates/gpui-pre"]
 resolver = "2"
 
 [workspace.dependencies]
