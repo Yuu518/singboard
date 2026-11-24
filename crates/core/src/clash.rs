@@ -49,6 +49,9 @@ pub enum Command {
         ipv6: bool,
     },
     Rules,
+    ToggleRule {
+        uuid: String,
+    },
     Disconnect {
         id: String,
     },
@@ -207,6 +210,24 @@ mod tests {
         assert_eq!(
             resolve_test_url(" https://cp.cloudflare.com/generate_204 "),
             "https://cp.cloudflare.com/generate_204"
+        );
+    }
+
+    #[test]
+    fn toggle_rule_command_deserializes_and_builds_url() {
+        let cmd: Command = serde_json::from_value(json!({
+            "op": "toggle_rule",
+            "uuid": "550e8400-e29b-41d4-a716-446655440000"
+        }))
+        .unwrap();
+        let Command::ToggleRule { uuid } = cmd else {
+            panic!("expected ToggleRule");
+        };
+        assert_eq!(uuid, "550e8400-e29b-41d4-a716-446655440000");
+        let api = Clash::new("http://127.0.0.1:9090", "").unwrap();
+        assert_eq!(
+            api.url(&["rules", &uuid]).unwrap().as_str(),
+            "http://127.0.0.1:9090/rules/550e8400-e29b-41d4-a716-446655440000"
         );
     }
 }
@@ -386,6 +407,7 @@ impl Clash {
                 return Ok(data);
             }
             RawRules => (Method::GET, vec!["rules"]),
+            ToggleRule { uuid } => (Method::PUT, vec!["rules", uuid]),
             Disconnect { id } => (Method::DELETE, vec!["connections", id]),
             DisconnectAll => (Method::DELETE, vec!["connections"]),
             ProxyProviders => (Method::GET, vec!["providers", "proxies"]),

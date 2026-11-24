@@ -1817,6 +1817,16 @@ impl Workspace {
             self.clear_node_delay(name);
             self.proxy_ui.mark_node_testing(name);
         }
+        let mut rule_toggle_prev = None;
+        if let Command::ToggleRule { uuid } = &command {
+            if uuid.trim().is_empty() || self.rule_browser.toggling.contains(uuid) {
+                return;
+            }
+            let prev = self.rule_disabled_by_uuid(uuid).unwrap_or(false);
+            rule_toggle_prev = Some(prev);
+            self.rule_browser.toggling.insert(uuid.clone());
+            self.set_rule_disabled(uuid, !prev);
+        }
         match &command {
             Command::Disconnect { id } => self.conn_ui.mark_closing(std::iter::once(id.clone())),
             Command::DisconnectMany { ids } => self.conn_ui.mark_closing(ids.iter().cloned()),
@@ -1870,6 +1880,12 @@ impl Workspace {
                             Command::Disconnect { id } => this.conn_ui.unmark_closing(std::iter::once(id.as_str())),
                             Command::DisconnectMany { ids } => this.conn_ui.unmark_closing(ids.iter().map(String::as_str)),
                             Command::DisconnectAll => this.conn_ui.clear_closing(),
+                            Command::ToggleRule { uuid } => {
+                                this.rule_browser.toggling.remove(uuid);
+                                if let Some(prev) = rule_toggle_prev {
+                                    this.set_rule_disabled(uuid, prev);
+                                }
+                            }
                             _ => {}
                         }
                         if matches!(command, Command::Proxies | Command::Rules | Command::ProxyProviders | Command::RuleProviders | Command::Config | Command::Summary | Command::Version) {
@@ -1884,7 +1900,13 @@ impl Workspace {
                             this.check_cached_proxy_fingerprint(cx);
                         }
                         Command::Rules => {
-                            this.rules = data["rules"].as_array().cloned().unwrap_or_default()
+                            this.apply_rules(data["rules"].as_array().cloned().unwrap_or_default());
+                        }
+                        Command::ToggleRule { uuid } => {
+                            this.rule_browser.toggling.remove(&uuid);
+                            if this.rule_browser.toggling.is_empty() {
+                                this.refresh(cx);
+                            }
                         }
                         Command::ProxyProviders | Command::RuleProviders => {
                             this.providers = data["providers"]
@@ -2752,6 +2774,7 @@ fn pill_switch(
 ) -> Stateful<Div> {
     div()
         .id(id)
+        .flex_none()
         .w(px(40.))
         .h(px(22.))
         .p(px(2.))

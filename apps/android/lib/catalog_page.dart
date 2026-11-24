@@ -298,6 +298,7 @@ class _CatalogPageState extends State<CatalogPage> {
   Timer? ageTimer;
   int matchRevision = 0;
   Set<String> matched = {};
+  final togglingRules = <String>{};
   String matchError = '';
   bool matching = false;
   bool get readable => widget.preferences['nativeRootEnabled'] == true;
@@ -349,6 +350,7 @@ class _CatalogPageState extends State<CatalogPage> {
         widget.endpoint != old.endpoint || widget.secret != old.secret;
     if (endpointChanged || widget.reconnectGeneration != old.reconnectGeneration) {
       _resetTesting();
+      togglingRules.clear();
       if (endpointChanged) {
         delays.clear();
         v6Nodes.clear();
@@ -420,6 +422,17 @@ class _CatalogPageState extends State<CatalogPage> {
       }
       if (!mounted || revision != generation) return;
       setState(() {
+        if (!widget.proxies && togglingRules.isNotEmpty) {
+          final pending = <String, bool>{
+            for (final item in items)
+              if (togglingRules.contains(_ruleUuid(item)))
+                _ruleUuid(item): _isRuleDisabled(item),
+          };
+          for (final item in next) {
+            final u = _ruleUuid(item);
+            if (pending.containsKey(u)) item['disabled'] = pending[u];
+          }
+        }
         items = next;
         if (widget.proxies) {
           delays.removeWhere((k, _) => !_isNodeTesting(k));
@@ -488,7 +501,54 @@ class _CatalogPageState extends State<CatalogPage> {
     ));
   }
 
+  String _ruleUuid(Item rule) => (rule['uuid']?.toString() ?? '').trim();
+
+  bool _isRuleDisabled(Item rule) => rule['disabled'] == true;
+
+  void _setRuleDisabled(String uuid, bool disabled, [Item? extra]) {
+    for (final item in items) {
+      if (_ruleUuid(item) == uuid) {
+        item['disabled'] = disabled;
+      }
+    }
+    if (extra != null && _ruleUuid(extra) == uuid) {
+      extra['disabled'] = disabled;
+    }
+  }
+
+  Future<void> toggleRule(Item rule) async {
+    final uuid = _ruleUuid(rule);
+    if (uuid.isEmpty || togglingRules.contains(uuid)) return;
+    final prevDisabled = _isRuleDisabled(rule);
+    final endpoint = widget.endpoint;
+    final secret = widget.secret;
+    setState(() {
+      togglingRules.add(uuid);
+      _setRuleDisabled(uuid, !prevDisabled, rule);
+    });
+    try {
+      await clashRequest(endpoint, secret, 'toggle_rule', {'uuid': uuid});
+      if (!mounted || endpoint != widget.endpoint || secret != widget.secret) {
+        return;
+      }
+      setState(() => togglingRules.remove(uuid));
+      if (togglingRules.isEmpty) {
+        unawaited(load(silent: true));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      if (endpoint == widget.endpoint && secret == widget.secret) {
+        setState(() {
+          togglingRules.remove(uuid);
+          _setRuleDisabled(uuid, prevDisabled, rule);
+        });
+      }
+      showGlassToast(context, '切换规则状态失败：$e');
+    }
+  }
+
   void inspectRule(int index, Item rule) {
+    final uuid = _ruleUuid(rule);
     final providerCounts = <String, int>{
       for (final p in providerItems)
         if (p['name'] is String)
@@ -504,6 +564,8 @@ class _CatalogPageState extends State<CatalogPage> {
         providerCounts: providerCounts,
         readable: readable,
         onOpenProvider: rulesTool,
+        initialToggling: uuid.isNotEmpty && togglingRules.contains(uuid),
+        onToggleRule: uuid.isEmpty ? null : () => toggleRule(rule),
       ),
     );
   }
@@ -1191,6 +1253,7 @@ class _CatalogPageState extends State<CatalogPage> {
     final shadowed = <int>{};
     for (var i = 0; i < items.length; i++) {
       final r = items[i];
+      if (_isRuleDisabled(r)) continue;
       if (!_evalRuleForLookup(r, query)) continue;
       final act = _parseAction(r);
       if (act.kind == 'pass') {
@@ -2063,7 +2126,23 @@ class _CatalogPageState extends State<CatalogPage> {
     );
   }
 
-  Widget _buildRailDot(_RuleAction action, bool isFinal, SingboardColors c) {
+  Widget _buildRailDot(
+    _RuleAction action,
+    bool isFinal,
+    SingboardColors c, {
+    bool disabled = false,
+  }) {
+    if (disabled) {
+      return Container(
+        width: 9,
+        height: 9,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.transparent,
+          border: Border.all(color: c.muted.withValues(alpha: 0.45), width: 1.8),
+        ),
+      );
+    }
     if (isFinal) {
       return Container(
         width: 10,
@@ -2220,6 +2299,9 @@ class _CatalogPageState extends State<CatalogPage> {
     final clauses = _parseClauses(rule);
     final action = _parseAction(rule);
     final isFinal = rule['condition']?.toString() == '最终回退';
+    final uuid = _ruleUuid(rule);
+    final isDisabled = _isRuleDisabled(rule);
+    final isToggling = uuid.isNotEmpty && togglingRules.contains(uuid);
     final isFirst = pos == 0;
     final isLast = pos + 1 == total;
     final isWinner = trace?.winner == origIndex;
@@ -2452,7 +2534,7 @@ class _CatalogPageState extends State<CatalogPage> {
     }
 
     return Opacity(
-      opacity: isShadowed ? 0.58 : 1.0,
+      opacity: !isDisabled && isShadowed ? 0.58 : 1.0,
       child: Material(
         color: isWinner
             ? c.primarySoft
@@ -2486,7 +2568,7 @@ class _CatalogPageState extends State<CatalogPage> {
                               ? Colors.transparent
                               : c.ink.withValues(alpha: 0.18),
                         ),
-                        _buildRailDot(action, isFinal, c),
+                        _buildRailDot(action, isFinal, c, disabled: isDisabled),
                         Expanded(
                           child: Container(
                             width: 1.5,
@@ -2505,37 +2587,63 @@ class _CatalogPageState extends State<CatalogPage> {
                       children: [
                         Row(
                           children: [
-                            Text(
-                              isFinal
-                                  ? '回退'
-                                  : '#${(origIndex + 1).toString().padLeft(2, '0')}',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                                color: c.muted,
-                                fontFeatures: const [FontFeature.tabularFigures()],
+                            Opacity(
+                              opacity: isDisabled ? 0.45 : 1.0,
+                              child: Text(
+                                isFinal
+                                    ? '回退'
+                                    : '#${(origIndex + 1).toString().padLeft(2, '0')}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                  color: c.muted,
+                                  fontFeatures: const [FontFeature.tabularFigures()],
+                                ),
                               ),
                             ),
                             const Spacer(),
                             if (traceTag != null) ...[
-                              traceTag,
+                              Opacity(
+                                opacity: isDisabled ? 0.45 : 1.0,
+                                child: traceTag,
+                              ),
                               const SizedBox(width: 6),
                             ],
                             Flexible(
                               flex: 3,
                               child: Align(
                                 alignment: Alignment.centerRight,
-                                child: _buildActionCapsule(action, c, compact: true),
+                                child: Opacity(
+                                  opacity: isDisabled ? 0.45 : 1.0,
+                                  child: _buildActionCapsule(action, c, compact: true),
+                                ),
                               ),
                             ),
+                            if (uuid.isNotEmpty) ...[
+                              const SizedBox(width: 8),
+                              Tooltip(
+                                message: isDisabled ? '重新启用此规则' : '临时禁用此规则',
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () {},
+                                  child: GlassToggle(
+                                    value: !isDisabled,
+                                    onChanged: isToggling ? null : (_) => toggleRule(rule),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                         const SizedBox(height: 6),
-                        Wrap(
-                          spacing: 5,
-                          runSpacing: 5,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: chips,
+                        Opacity(
+                          opacity: isDisabled ? 0.45 : 1.0,
+                          child: Wrap(
+                            spacing: 5,
+                            runSpacing: 5,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: chips,
+                          ),
                         ),
                       ],
                     ),
@@ -3330,7 +3438,7 @@ class _RuleDetailState extends State<_RuleDetail> {
   }
 }
 
-class _RuleInspectDialog extends StatelessWidget {
+class _RuleInspectDialog extends StatefulWidget {
   final int index;
   final Item rule;
   final List<_ClausePart> clauses;
@@ -3338,6 +3446,8 @@ class _RuleInspectDialog extends StatelessWidget {
   final Map<String, int> providerCounts;
   final bool readable;
   final ValueChanged<String> onOpenProvider;
+  final bool initialToggling;
+  final Future<void> Function()? onToggleRule;
 
   const _RuleInspectDialog({
     required this.index,
@@ -3347,7 +3457,43 @@ class _RuleInspectDialog extends StatelessWidget {
     required this.providerCounts,
     required this.readable,
     required this.onOpenProvider,
+    this.initialToggling = false,
+    this.onToggleRule,
   });
+
+  @override
+  State<_RuleInspectDialog> createState() => _RuleInspectDialogState();
+}
+
+class _RuleInspectDialogState extends State<_RuleInspectDialog> {
+  late bool _disabled;
+  late bool _toggling;
+
+  @override
+  void initState() {
+    super.initState();
+    _disabled = widget.rule['disabled'] == true;
+    _toggling = widget.initialToggling;
+  }
+
+  Future<void> _handleToggle() async {
+    final toggle = widget.onToggleRule;
+    if (toggle == null || _toggling) return;
+    setState(() {
+      _toggling = true;
+      _disabled = !_disabled;
+    });
+    try {
+      await toggle();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _disabled = widget.rule['disabled'] == true;
+          _toggling = false;
+        });
+      }
+    }
+  }
 
   String _formatCount(int n) {
     final s = n.toString();
@@ -3362,6 +3508,13 @@ class _RuleInspectDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = SingboardColors.of(context);
+    final index = widget.index;
+    final rule = widget.rule;
+    final clauses = widget.clauses;
+    final action = widget.action;
+    final providerCounts = widget.providerCounts;
+    final readable = widget.readable;
+    final onOpenProvider = widget.onOpenProvider;
     final isFinal = rule['condition']?.toString() == '最终回退';
     final rawPayload = (rule['payload']?.toString() ?? '').trim();
     final copyPayload = rawPayload.isEmpty
@@ -3454,13 +3607,38 @@ class _RuleInspectDialog extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      '规则详情',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: c.ink,
-                      ),
+                    child: Row(
+                      children: [
+                        Text(
+                          '规则详情',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: c.ink,
+                          ),
+                        ),
+                        if (_disabled) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: c.fill,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              '已禁用',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: c.muted,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                   IconButton(
@@ -3476,6 +3654,54 @@ class _RuleInspectDialog extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (widget.onToggleRule != null) ...[
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: c.fill,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '启用此规则',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: c.ink,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      _disabled
+                                          ? '已临时禁用，重启核心或重载配置后恢复'
+                                          : '关闭后将临时跳过此规则，不修改配置文件',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: c.muted,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              GlassToggle(
+                                value: !_disabled,
+                                onChanged: _toggling ? null : (_) => _handleToggle(),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       Text(
                         '匹配条件',
                         style: TextStyle(

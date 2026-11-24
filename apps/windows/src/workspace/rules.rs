@@ -7,6 +7,7 @@ use std::net::IpAddr;
 #[derive(Default)]
 pub(super) struct RuleBrowser {
     pub(super) matched: HashSet<String>,
+    pub(super) toggling: HashSet<String>,
     pub(super) searching: bool,
     pub(super) pre_expanded: bool,
     criteria: Option<(String, Vec<String>, bool)>,
@@ -827,7 +828,80 @@ fn render_action_capsule(action: &RuleAction, p: crate::theme::Palette) -> AnyEl
     }
 }
 
-fn render_rail_dot(action: &RuleAction, is_final: bool, p: crate::theme::Palette) -> AnyElement {
+fn rule_uuid(rule: &Value) -> Option<&str> {
+    rule["uuid"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn is_rule_disabled(rule: &Value) -> bool {
+    rule["disabled"].as_bool().unwrap_or(false)
+}
+
+fn render_rule_switch(
+    id: impl Into<ElementId>,
+    enabled: bool,
+    toggling: bool,
+    uuid: String,
+    p: crate::theme::Palette,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let label = if enabled {
+        "临时禁用此规则"
+    } else {
+        "重新启用此规则"
+    };
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(label)
+        .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(label).build(window, cx))
+        .flex_none()
+        .w(px(34.))
+        .h(px(20.))
+        .p(px(2.))
+        .rounded_full()
+        .bg(if enabled {
+            p.primary_fill()
+        } else {
+            p.toggle_off()
+        })
+        .flex()
+        .items_center()
+        .when(enabled, |el| el.justify_end())
+        .when(toggling, |el| {
+            el.opacity(0.55).on_click(|_, _, cx| cx.stop_propagation())
+        })
+        .when(!toggling, |el| {
+            el.cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.apply(
+                        Action::Run(Command::ToggleRule { uuid: uuid.clone() }),
+                        cx,
+                    );
+                }))
+        })
+        .child(div().size(px(16.)).rounded_full().bg(rgb(0xffffff)).shadow_sm())
+        .into_any_element()
+}
+
+fn render_rail_dot(
+    action: &RuleAction,
+    is_final: bool,
+    is_disabled: bool,
+    p: crate::theme::Palette,
+) -> AnyElement {
+    if is_disabled {
+        return div()
+            .size(px(9.))
+            .rounded_full()
+            .bg(p.card(false))
+            .border_2()
+            .border_color(p.muted().opacity(0.45))
+            .into_any_element();
+    }
     if is_final {
         return div()
             .size(px(10.))
@@ -882,6 +956,60 @@ fn render_rail_dot(action: &RuleAction, is_final: bool, p: crate::theme::Palette
 }
 
 impl Workspace {
+    pub(super) fn rule_disabled_by_uuid(&self, uuid: &str) -> Option<bool> {
+        self.rules
+            .iter()
+            .find(|r| rule_uuid(r) == Some(uuid))
+            .map(is_rule_disabled)
+    }
+
+    pub(super) fn set_rule_disabled(&mut self, uuid: &str, disabled: bool) {
+        for r in &mut self.rules {
+            if rule_uuid(r) == Some(uuid) {
+                r["disabled"] = Value::Bool(disabled);
+            }
+        }
+        if let Some(inspect) = &mut self.rule_browser.inspect
+            && rule_uuid(&inspect.rule) == Some(uuid)
+        {
+            inspect.rule["disabled"] = Value::Bool(disabled);
+        }
+    }
+
+    pub(super) fn apply_rules(&mut self, mut next: Vec<Value>) {
+        if !self.rule_browser.toggling.is_empty() {
+            let pending: HashMap<String, bool> = self
+                .rules
+                .iter()
+                .filter_map(|r| {
+                    let u = rule_uuid(r)?;
+                    self.rule_browser
+                        .toggling
+                        .contains(u)
+                        .then(|| (u.to_owned(), is_rule_disabled(r)))
+                })
+                .collect();
+            for r in &mut next {
+                if let Some(u) = rule_uuid(r)
+                    && let Some(&disabled) = pending.get(u)
+                {
+                    r["disabled"] = Value::Bool(disabled);
+                }
+            }
+        }
+        self.rules = next;
+        if let Some(inspect) = &mut self.rule_browser.inspect {
+            let updated = if let Some(u) = rule_uuid(&inspect.rule).map(str::to_owned) {
+                self.rules.iter().find(|r| rule_uuid(r) == Some(u.as_str()))
+            } else {
+                self.rules.get(inspect.index)
+            };
+            if let Some(rule) = updated {
+                inspect.rule = rule.clone();
+            }
+        }
+    }
+
     pub(super) fn rule_matches_query(&self, idx: usize, query: &str) -> bool {
         if query.is_empty() {
             return true;
@@ -915,6 +1043,9 @@ impl Workspace {
         let mut passed = HashSet::new();
         let mut shadowed = HashSet::new();
         for (i, r) in self.rules.iter().enumerate() {
+            if is_rule_disabled(r) {
+                continue;
+            }
             if !eval_rule_for_lookup(r, query, &self.rule_browser.matched) {
                 continue;
             }
@@ -1753,6 +1884,7 @@ impl Workspace {
                     .into_any_element()
             } else {
                 let total_rows = count;
+                let any_toggleable = self.rules.iter().any(|r| rule_uuid(r).is_some());
                 let counts_map = std::sync::Arc::new(provider_counts);
                 let trace_arc = std::sync::Arc::new(trace);
                 div()
@@ -1785,6 +1917,11 @@ impl Workspace {
                                                 let is_last = pos + 1 == total_rows;
                                                 let is_final =
                                                     r["condition"].as_str() == Some("最终回退");
+                                                let uuid = rule_uuid(r).map(str::to_owned);
+                                                let is_disabled = is_rule_disabled(r);
+                                                let is_toggling = uuid.as_deref().is_some_and(|u| {
+                                                    this.rule_browser.toggling.contains(u)
+                                                });
 
                                                 let is_winner = trace_arc
                                                     .as_ref()
@@ -1825,7 +1962,12 @@ impl Workspace {
                                                                 el.bg(p.ink().opacity(0.18))
                                                             }),
                                                     )
-                                                    .child(render_rail_dot(&action, is_final, p))
+                                                    .child(render_rail_dot(
+                                                        &action,
+                                                        is_final,
+                                                        is_disabled,
+                                                        p,
+                                                    ))
                                                     .child(
                                                         div()
                                                             .flex_1()
@@ -2205,7 +2347,9 @@ impl Workspace {
                                                     .when(!is_winner && is_final, |el| {
                                                         el.bg(p.fill())
                                                     })
-                                                    .when(is_shadowed, |el| el.opacity(0.58))
+                                                    .when(!is_disabled && is_shadowed, |el| {
+                                                        el.opacity(0.58)
+                                                    })
                                                     .hover(|s| {
                                                         s.bg(if is_winner {
                                                             p.primary_soft()
@@ -2225,24 +2369,45 @@ impl Workspace {
                                                             .justify_end()
                                                             .text_size(crate::theme::text_px(11.))
                                                             .text_color(p.muted())
+                                                            .when(is_disabled, |el| el.opacity(0.45))
                                                             .child(if is_final {
                                                                 "回退".to_owned()
                                                             } else {
                                                                 format!("{:02}", i + 1)
                                                             }),
                                                     )
-                                                    .child(cond_row)
+                                                    .child(
+                                                        cond_row
+                                                            .when(is_disabled, |el| el.opacity(0.45)),
+                                                    )
                                                     .child(
                                                         div()
                                                             .flex_none()
                                                             .flex()
                                                             .items_center()
                                                             .gap(px(6.))
+                                                            .when(is_disabled, |el| el.opacity(0.45))
                                                             .children(trace_badge)
                                                             .child(render_action_capsule(
                                                                 &action, p,
                                                             )),
                                                     )
+                                                    .when(any_toggleable, |el| {
+                                                        el.child(match uuid {
+                                                            Some(toggle_uuid) => render_rule_switch(
+                                                                ("rule-toggle", i),
+                                                                !is_disabled,
+                                                                is_toggling,
+                                                                toggle_uuid,
+                                                                p,
+                                                                cx,
+                                                            ),
+                                                            None => div()
+                                                                .w(px(34.))
+                                                                .flex_none()
+                                                                .into_any_element(),
+                                                        })
+                                                    })
                                             })
                                             .collect()
                                     }),
@@ -2302,6 +2467,11 @@ impl Workspace {
         let palette = crate::theme::Palette::get(cx);
         let r = &inspect.rule;
         let is_final = r["condition"].as_str() == Some("最终回退");
+        let inspect_uuid = rule_uuid(r).map(str::to_owned);
+        let inspect_disabled = is_rule_disabled(r);
+        let inspect_toggling = inspect_uuid
+            .as_deref()
+            .is_some_and(|u| self.rule_browser.toggling.contains(u));
         let clauses = parse_condition_clauses(r);
         let action = parse_rule_action(r);
         let payload = r["payload"].as_str().unwrap_or("").trim().to_owned();
@@ -2452,8 +2622,67 @@ impl Workspace {
             .track_scroll(&inspect.scroll)
             .flex()
             .flex_col()
-            .gap_3()
-            .child(
+            .gap_3();
+
+        if let Some(toggle_uuid) = inspect_uuid {
+            let toggle = pill_switch("rule-inspect-toggle", !inspect_disabled, palette)
+                .role(Role::Button)
+                .aria_label(if inspect_disabled {
+                    "重新启用此规则"
+                } else {
+                    "临时禁用此规则"
+                })
+                .when(inspect_toggling, |el| el.opacity(0.55))
+                .when(!inspect_toggling, |el| {
+                    el.on_click(cx.listener(move |this, _, _, cx| {
+                        this.apply(
+                            Action::Run(Command::ToggleRule {
+                                uuid: toggle_uuid.clone(),
+                            }),
+                            cx,
+                        );
+                    }))
+                });
+            body = body.child(
+                div()
+                    .rounded(px(12.))
+                    .bg(palette.fill())
+                    .px_3()
+                    .py(px(10.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(palette.ink())
+                                    .child("启用此规则"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(crate::theme::text_px(11.))
+                                    .text_color(palette.muted())
+                                    .child(if inspect_disabled {
+                                        "已临时禁用，重启核心或重载配置后恢复"
+                                    } else {
+                                        "关闭后将临时跳过此规则，不修改配置文件"
+                                    }),
+                            ),
+                    )
+                    .child(toggle),
+            );
+        }
+
+        body = body.child(
                 div()
                     .flex()
                     .flex_col()
@@ -2696,7 +2925,22 @@ impl Workspace {
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(palette.ink())
                                     .child("规则详情"),
-                            ),
+                            )
+                            .when(inspect_disabled, |el| {
+                                el.child(
+                                    div()
+                                        .h(crate::theme::text_px(20.))
+                                        .px(px(7.))
+                                        .rounded_full()
+                                        .bg(palette.fill())
+                                        .flex()
+                                        .items_center()
+                                        .text_size(crate::theme::text_px(11.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(palette.muted())
+                                        .child("已禁用"),
+                                )
+                            }),
                     )
                     .child(dialog::keyboard_action(
                         div()
@@ -3145,7 +3389,8 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClausePart, eval_rule_for_lookup, format_compact_count, parse_condition_clauses,
+        ClausePart, eval_rule_for_lookup, format_compact_count, is_rule_disabled,
+        parse_condition_clauses, rule_uuid,
     };
     use serde_json::json;
     use std::collections::HashSet;
@@ -3205,5 +3450,24 @@ mod tests {
         assert_eq!(format_compact_count(1420), "1.4k");
         assert_eq!(format_compact_count(38420), "38.4k");
         assert_eq!(format_compact_count(12000), "12k");
+    }
+
+    #[test]
+    fn detects_rule_uuid_and_disabled_state() {
+        let standard = json!({ "type": "default", "payload": "domain=example.com", "proxy": "direct" });
+        assert_eq!(rule_uuid(&standard), None);
+        assert!(!is_rule_disabled(&standard));
+
+        let blank_uuid = json!({ "uuid": "   ", "disabled": false });
+        assert_eq!(rule_uuid(&blank_uuid), None);
+        assert!(!is_rule_disabled(&blank_uuid));
+
+        let ref1nd_enabled = json!({ "uuid": "550e8400-e29b-41d4-a716-446655440000" });
+        assert_eq!(rule_uuid(&ref1nd_enabled), Some("550e8400-e29b-41d4-a716-446655440000"));
+        assert!(!is_rule_disabled(&ref1nd_enabled));
+
+        let ref1nd_disabled = json!({ "uuid": "550e8400-e29b-41d4-a716-446655440000", "disabled": true });
+        assert_eq!(rule_uuid(&ref1nd_disabled), Some("550e8400-e29b-41d4-a716-446655440000"));
+        assert!(is_rule_disabled(&ref1nd_disabled));
     }
 }
