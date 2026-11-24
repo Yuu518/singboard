@@ -8,6 +8,10 @@ use std::{
 use url::Url;
 
 pub fn validate_jsonc(text: &str) -> Result<(), String> {
+    parse_config(text).map(|_| ())
+}
+
+pub(crate) fn parse_config(text: &str) -> Result<serde_json::Value, String> {
     let options = jsonc_parser::ParseOptions {
         allow_comments: true,
         allow_trailing_commas: true,
@@ -26,7 +30,7 @@ pub fn validate_jsonc(text: &str) -> Result<(), String> {
     if !value.is_object() {
         return Err("配置的最外层必须是 JSON 对象".into());
     }
-    Ok(())
+    Ok(value)
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Profile {

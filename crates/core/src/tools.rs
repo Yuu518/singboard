@@ -512,20 +512,21 @@ pub async fn run(
                 } else {
                     get("id").to_owned()
                 };
-                let endpoint = Endpoint {
-                    id: id.clone(),
-                    name: get("name").trim().into(),
-                    url: url.clone(),
-                    secret: get("secret").into(),
-                };
-                if action != "add_api" && !get("id").is_empty() {
-                    *p.clash_apis
+                let endpoint = if action != "add_api" && !get("id").is_empty() {
+                    p.clash_apis
                         .iter_mut()
                         .find(|a| a.id == id)
-                        .ok_or("后端已被删除")? = endpoint;
+                        .ok_or("后端已被删除")?
                 } else {
-                    p.clash_apis.push(endpoint);
-                }
+                    p.clash_apis.push(Endpoint {
+                        id: id.clone(),
+                        ..Default::default()
+                    });
+                    p.clash_apis.last_mut().unwrap()
+                };
+                endpoint.name = get("name").trim().into();
+                endpoint.url = url.clone();
+                endpoint.secret = get("secret").into();
                 p.active_clash_api_id = id;
                 p.setup_completed = true;
                 Ok(())

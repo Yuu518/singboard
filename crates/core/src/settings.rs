@@ -9,6 +9,8 @@ pub struct Endpoint {
     pub name: String,
     pub url: String,
     pub secret: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_api: Option<crate::service_api::Connection>,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -108,6 +110,7 @@ impl Settings {
             &serde_json::to_vec(self).map_err(|e| e.to_string())?,
         )?;
         REVISION.fetch_add(1, std::sync::atomic::Ordering::Release);
+        crate::service_api::settings_changed(dir, self);
         Ok(())
     }
     pub fn edit(
@@ -299,12 +302,14 @@ mod tests {
                     name: "A".into(),
                     url: "http://localhost:1".into(),
                     secret: String::new(),
+                    ..Default::default()
                 },
                 Endpoint {
                     id: "b".into(),
                     name: "B".into(),
                     url: "https://example.test".into(),
                     secret: String::new(),
+                    ..Default::default()
                 },
             ];
             s.active_clash_api_id = "b".into();

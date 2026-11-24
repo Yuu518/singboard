@@ -19,6 +19,7 @@ pub mod dashboard;
 pub mod editor;
 mod ffi;
 pub mod profiles;
+pub mod service_api;
 pub mod settings;
 pub mod tools;
 pub mod update;

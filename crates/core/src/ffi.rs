@@ -3,6 +3,8 @@ use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 
+mod service_api;
+
 unsafe fn input<'a>(value: *const c_char) -> Option<&'a str> {
     if value.is_null() {
         return None;
