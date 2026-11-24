@@ -1,4 +1,8 @@
 use std::env;
+use std::ffi::OsString;
+use std::os::windows::ffi::OsStringExt;
+use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, GetLastError};
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, QueryFullProcessImageNameW};
 use windows_sys::core::GUID;
 use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 
@@ -20,7 +24,29 @@ const LOCAL_SERVER_KEY: &str =
 const PREFS_KEY: &str = r"Software\Singboard\Taildrop";
 const LAST_PEER_VALUE: &str = "LastPeerId";
 
+fn live_exe_path() -> Option<String> {
+    let process = unsafe { GetCurrentProcess() };
+    let mut cap = 1024usize;
+    while cap <= 32_768 {
+        let mut buf = vec![0u16; cap];
+        let mut len = cap as u32;
+        if unsafe { QueryFullProcessImageNameW(process, 0, buf.as_mut_ptr(), &mut len) } != 0
+            && len > 0
+        {
+            return Some(OsString::from_wide(&buf[..len as usize]).to_string_lossy().into_owned());
+        }
+        if unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER {
+            break;
+        }
+        cap *= 2;
+    }
+    None
+}
+
 fn exe_path() -> Result<String, String> {
+    if let Some(path) = live_exe_path() {
+        return Ok(path);
+    }
     let exe = env::current_exe().map_err(|e| format!("获取程序路径失败: {e}"))?;
     Ok(exe.display().to_string())
 }
@@ -107,12 +133,19 @@ pub fn repair() {
     let Ok(exe) = exe_path() else {
         return;
     };
-    let expected = local_server_command(&exe);
-    let current = hkcu
+    let expected_server = local_server_command(&exe);
+    let expected_icon = icon_value(&exe);
+    let current_server = hkcu
         .open_subkey(LOCAL_SERVER_KEY)
         .and_then(|k| k.get_value::<String, _>(""))
         .ok();
-    if current.is_none_or(|v| !v.eq_ignore_ascii_case(&expected)) {
+    let current_icon = hkcu
+        .open_subkey(SHELL_KEY)
+        .and_then(|k| k.get_value::<String, _>("Icon"))
+        .ok();
+    let server_ok = current_server.is_some_and(|v| v.eq_ignore_ascii_case(&expected_server));
+    let icon_ok = current_icon.is_some_and(|v| v.eq_ignore_ascii_case(&expected_icon));
+    if !server_ok || !icon_ok {
         let _ = set_registered(true);
     }
 }
@@ -148,5 +181,11 @@ mod tests {
             icon_value(r"C:\Tools\singboard.exe"),
             r#""C:\Tools\singboard.exe",0"#
         );
+    }
+
+    #[test]
+    fn live_exe_path_resolves_current_binary() {
+        let path = live_exe_path().expect("live exe path");
+        assert!(std::path::Path::new(&path).is_file());
     }
 }

@@ -2,6 +2,7 @@ mod com;
 mod popup;
 mod registry;
 
+pub use com::ResidentHost;
 pub use registry::{DELEGATE_FLAG, SEND_FLAG, is_registered, repair, set_registered};
 
 use serde_json::Value;
@@ -320,7 +321,17 @@ fn run_with_paths(paths: Vec<PathBuf>, anchor: Option<POINT>) -> Result<(), Stri
     Ok(())
 }
 
+pub fn start_host() -> Option<ResidentHost> {
+    com::ResidentHost::start(|payload| {
+        std::thread::spawn(move || {
+            registry::repair();
+            let _ = run_with_paths(payload.paths, payload.position);
+        });
+    })
+}
+
 pub fn run_delegate() -> Result<(), String> {
+    registry::repair();
     let Some(payload) = com::receive_delegate_payload()? else {
         return Ok(());
     };

@@ -374,7 +374,7 @@ class MainActivity : FlutterActivity() {
                 "setTaildropShareEnabled" -> {
                     val enabled = call.argument<Boolean>("enabled") == true
                     try {
-                        val component = ComponentName(packageName, "$packageName.TaildropShareActivity")
+                        val component = ComponentName(this, TaildropShareActivity::class.java)
                         val state = if (enabled) {
                             PackageManager.COMPONENT_ENABLED_STATE_ENABLED
                         } else {

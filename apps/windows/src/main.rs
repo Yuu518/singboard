@@ -326,6 +326,7 @@ fn run() -> Result<(), String> {
     let Some(instance) = window_state::instance(hidden)? else {
         return Ok(());
     };
+    let _taildrop_host = taildrop_share::start_host();
     let mut wallpaper = Wallpaper::load(wallpaper_file.as_deref())?;
     let prefs = maintenance::preferences()?;
     let (base, secret) = endpoint(&prefs);
@@ -536,6 +537,8 @@ fn run() -> Result<(), String> {
                                 }
                                 if !panel.visible {
                                     panel.resume(&current, connected, cx);
+                                    singboard_core::runtime()
+                                        .spawn_blocking(taildrop_share::repair);
                                 }
                                 let now = window.window_bounds();
                                 if now != observed {

@@ -122,7 +122,7 @@ if (Test-Path "$stage/android/app/src/main/kotlin") {
 }
 $kotlinDir = "$stage/android/app/src/main/kotlin/io/github/Yuu518/singboard"
 $null = New-Item -ItemType Directory -Force $kotlinDir
-Copy-Item -LiteralPath "$androidApp/host/MainActivity.kt" -Destination "$kotlinDir/MainActivity.kt" -Force
+Copy-Item -Path "$androidApp/host/*.kt" -Destination $kotlinDir -Force
 if (Test-Path "$stage/android/app/src/main/res/mipmap-anydpi-v26") {
     Remove-Item -LiteralPath "$stage/android/app/src/main/res/mipmap-anydpi-v26" -Recurse -Force
 }
