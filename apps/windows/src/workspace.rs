@@ -247,6 +247,7 @@ pub struct Workspace {
     active_profile_failed: bool,
     ipv6: bool,
     ipv6_nodes: std::collections::HashSet<String>,
+    node_delays: std::collections::HashMap<String, proxies::CachedDelay>,
     chart: bool,
     memory: Option<u64>,
     history_counts: VecDeque<u64>,
@@ -320,6 +321,8 @@ impl Workspace {
         self.updating_providers.clear();
         self.updating_all_providers = None;
         self.proxy_ui.clear_testing();
+        self.node_delays.clear();
+        self.ipv6_nodes.clear();
         self.groups.clear();
         self.rules.clear();
         self.providers.clear();
@@ -712,6 +715,7 @@ impl Workspace {
                 .is_some_and(|p| !p.last_fetch_error.trim().is_empty()),
             ipv6: prefs.ipv6_test_enabled,
             ipv6_nodes: Default::default(),
+            node_delays: Default::default(),
             chart: true,
             memory: None,
             history_counts: Default::default(),
@@ -793,10 +797,30 @@ impl Workspace {
                         group.test_url = url.clone();
                     }
                 }
+                let testing = &self.proxy_ui;
+                proxies::reconcile_group_delays(&mut groups, &mut self.node_delays, |name| {
+                    testing.is_node_testing(name)
+                });
                 self.groups = groups;
             }
             Err(_) => self.load_error = "代理列表格式无效".into(),
         }
+    }
+
+    fn set_providers(&mut self, data: Value, is_proxies: bool) {
+        let mut providers: Vec<(String, Value)> = data["providers"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        if is_proxies {
+            let testing = &self.proxy_ui;
+            proxies::reconcile_provider_delays(&mut providers, &mut self.node_delays, |name| {
+                testing.is_node_testing(name)
+            });
+        }
+        self.providers = providers;
     }
 
     pub fn prewarm(&mut self, start: Page) {
@@ -835,10 +859,7 @@ impl Workspace {
             self.last_read = std::time::Instant::now();
         }
         if let Some(data) = providers {
-            self.providers = data["providers"]
-                .as_object()
-                .map(|p| p.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                .unwrap_or_default();
+            self.set_providers(data, true);
         }
     }
 
@@ -1236,6 +1257,8 @@ impl Workspace {
         .flatten()
         .any(|ts| ts.saturating_add(5) < started);
         if stale {
+            self.node_delays.clear();
+            self.ipv6_nodes.clear();
             self.reset_network_state(true);
             return true;
         }
@@ -1746,12 +1769,7 @@ impl Workspace {
                         if generation != this.generation {
                             return;
                         }
-                        this.providers = data["providers"]
-                            .as_object()
-                            .into_iter()
-                            .flatten()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
+                        this.set_providers(data, this.page == Page::Proxies);
                         if this.page == Page::Rules { this.schedule_rule_search(cx); }
                         cx.notify();
                     });
@@ -1934,12 +1952,8 @@ impl Workspace {
                                 this.refresh(cx);
                             }
                         }
-                        Command::ProxyProviders | Command::RuleProviders => {
-                            this.providers = data["providers"]
-                                .as_object()
-                                .map(|p| p.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                                .unwrap_or_default()
-                        }
+                        Command::ProxyProviders => this.set_providers(data, true),
+                        Command::RuleProviders => this.set_providers(data, false),
                         Command::Delay { name, .. } => {
                             this.sync_linked_delay(
                                 &name,
@@ -2022,10 +2036,7 @@ impl Workspace {
     }
 
     fn apply_providers(&mut self, data: Value, proxies: bool, cx: &mut Context<Self>) {
-        self.providers = data["providers"]
-            .as_object()
-            .map(|p| p.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default();
+        self.set_providers(data, proxies);
         if !proxies && self.page == Page::Rules {
             self.schedule_rule_search(cx);
         }
@@ -2186,7 +2197,68 @@ impl Workspace {
         }
     }
 
+    fn current_positive_delay(&self, name: &str) -> Option<u64> {
+        if let Some(d) = self
+            .groups
+            .iter()
+            .flat_map(|g| &g.nodes)
+            .filter(|n| n.name == name)
+            .filter_map(|n| n.delay)
+            .find(|&d| d > 0)
+        {
+            return Some(d);
+        }
+        for (_, provider) in &self.providers {
+            if let Some(list) = provider["proxies"].as_array() {
+                for node in list {
+                    if node["name"].as_str() == Some(name)
+                        && let Some(d) = node["history"]
+                            .as_array()
+                            .and_then(|h| h.last())
+                            .and_then(|v| v["delay"].as_u64())
+                            .filter(|&d| d > 0)
+                    {
+                        return Some(d);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn record_cached_delay(&mut self, name: &str, delay: Option<u64>) {
+        match delay {
+            Some(0) => {
+                let server_delay = match self.node_delays.get(name).copied() {
+                    Some(proxies::CachedDelay::Testing { server_delay })
+                    | Some(proxies::CachedDelay::Failed { server_delay }) => server_delay,
+                    Some(proxies::CachedDelay::Success(d)) => Some(d),
+                    None => self.current_positive_delay(name),
+                };
+                self.node_delays
+                    .insert(name.to_owned(), proxies::CachedDelay::Failed { server_delay });
+            }
+            Some(d) => {
+                self.node_delays
+                    .insert(name.to_owned(), proxies::CachedDelay::Success(d));
+            }
+            None => {
+                self.node_delays.remove(name);
+            }
+        }
+    }
+
     fn clear_node_delay(&mut self, name: &str) {
+        let server_delay = match self.node_delays.get(name).copied() {
+            Some(proxies::CachedDelay::Testing { server_delay })
+            | Some(proxies::CachedDelay::Failed { server_delay }) => server_delay,
+            Some(proxies::CachedDelay::Success(d)) => Some(d),
+            None => self.current_positive_delay(name),
+        };
+        self.node_delays.insert(
+            name.to_owned(),
+            proxies::CachedDelay::Testing { server_delay },
+        );
         self.set_node_delay(name, None);
         self.ipv6_nodes.remove(name);
     }
@@ -2201,6 +2273,7 @@ impl Workspace {
                     self.ipv6_nodes.remove(&target);
                 }
             }
+            self.record_cached_delay(&target, delay);
             self.set_node_delay(&target, delay);
         }
     }
@@ -2222,6 +2295,7 @@ impl Workspace {
                     self.ipv6_nodes.remove(&target);
                 }
             }
+            self.record_cached_delay(&target, delay);
             self.set_node_delay(&target, delay);
         }
     }

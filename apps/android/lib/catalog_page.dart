@@ -29,6 +29,101 @@ String formatUpdatedRelative(dynamic raw, {DateTime? now}) {
   return '${secs ~/ 86400} 天前';
 }
 
+int? serverDelayOfNode(Item node) {
+  final d = node['delay'];
+  if (d is num) return d.toInt();
+  final hist = node['history'] as List?;
+  if (hist != null && hist.isNotEmpty) {
+    final last = hist.last;
+    if (last is Map && last['delay'] is num) {
+      return (last['delay'] as num).toInt();
+    }
+  }
+  return null;
+}
+
+void reconcileLoadedDelays({
+  required Map<String, int?> delays,
+  required Map<String, int?> failedBaselines,
+  required List<Item> groups,
+  required List<Item> providers,
+  required bool Function(String name) isTesting,
+}) {
+  final serverDelays = <String, int?>{};
+  void collect(Item node) {
+    final name = node['name']?.toString() ?? '';
+    if (name.isEmpty) return;
+    final d = serverDelayOfNode(node);
+    if (d != null && d > 0) {
+      serverDelays[name] = d;
+    } else {
+      serverDelays.putIfAbsent(name, () => d);
+    }
+  }
+
+  for (final group in groups) {
+    for (final node in (group['nodes'] as List? ?? []).cast<Item>()) {
+      collect(node);
+    }
+  }
+  for (final provider in providers) {
+    for (final node in (provider['proxies'] as List? ?? []).cast<Item>()) {
+      collect(node);
+    }
+  }
+
+  for (final name in delays.keys.toList()) {
+    if (isTesting(name)) {
+      delays[name] = null;
+      continue;
+    }
+    final cached = delays[name];
+    final server = serverDelays[name];
+    if (cached == 0) {
+      final baseline = failedBaselines[name];
+      if (server != null && server > 0 && server != baseline) {
+        delays.remove(name);
+        failedBaselines.remove(name);
+      }
+    } else if (cached != null && cached > 0) {
+      if (server != null && server > 0) {
+        delays.remove(name);
+      }
+      failedBaselines.remove(name);
+    } else {
+      delays.remove(name);
+      failedBaselines.remove(name);
+    }
+  }
+  failedBaselines.removeWhere(
+    (name, _) => !isTesting(name) && delays[name] != 0,
+  );
+
+  final resolved = <String, int?>{...serverDelays};
+  for (final entry in delays.entries) {
+    resolved[entry.key] = entry.value;
+  }
+
+  var changed = true;
+  for (var pass = 0; pass < groups.length && changed; pass++) {
+    changed = false;
+    for (final group in groups) {
+      final gName = group['name']?.toString() ?? '';
+      final now = group['now']?.toString() ?? '';
+      if (gName.isEmpty || now.isEmpty || isTesting(gName)) continue;
+      if (delays[gName] == 0) {
+        final nowDelay = resolved[now];
+        if (nowDelay != null && nowDelay > 0) {
+          delays.remove(gName);
+          failedBaselines.remove(gName);
+          resolved[gName] = nowDelay;
+          changed = true;
+        }
+      }
+    }
+  }
+}
+
 class _ClausePart {
   final String kind;
   final bool negated;
@@ -268,6 +363,7 @@ class _CatalogPageState extends State<CatalogPage> {
   final testingProviders = <String, (int, int)>{};
   final testingNodes = <String, int>{};
   final delays = <String, int?>{};
+  final _failedDelayBaselines = <String, int?>{};
   final v6Nodes = <String>{};
   int testGeneration = 0;
 
@@ -359,6 +455,7 @@ class _CatalogPageState extends State<CatalogPage> {
       updatingAllProviders = null;
       if (endpointChanged) {
         delays.clear();
+        _failedDelayBaselines.clear();
         v6Nodes.clear();
       }
     }
@@ -441,7 +538,13 @@ class _CatalogPageState extends State<CatalogPage> {
         }
         items = next;
         if (widget.proxies) {
-          delays.removeWhere((k, _) => !_isNodeTesting(k));
+          reconcileLoadedDelays(
+            delays: delays,
+            failedBaselines: _failedDelayBaselines,
+            groups: next,
+            providers: nextProviders,
+            isTesting: _isNodeTesting,
+          );
         }
         providerItems = nextProviders;
         providersAvailable = providerApiReady;
@@ -750,7 +853,7 @@ class _CatalogPageState extends State<CatalogPage> {
         testingGroups[target] = (0, nodes.length);
       }
       for (final node in nodes) {
-        delays[node] = null;
+        _prepareNodeTestDelay(node);
         v6Nodes.remove(node);
         _markNodeTesting(node);
       }
@@ -803,7 +906,7 @@ class _CatalogPageState extends State<CatalogPage> {
     final ipv6 = widget.preferences['ipv6TestEnabled'] == true;
     if (group != null && sortByLatency) _holdOrder(group);
     setState(() {
-      delays[nodeName] = null;
+      _prepareNodeTestDelay(nodeName);
       v6Nodes.remove(nodeName);
       _markNodeTesting(nodeName);
     });
@@ -897,8 +1000,48 @@ class _CatalogPageState extends State<CatalogPage> {
     return result;
   }
 
+  int? _serverDelayByName(String name) {
+    for (final group in items) {
+      for (final node in (group['nodes'] as List? ?? []).cast<Item>()) {
+        if (node['name']?.toString() == name) {
+          final d = serverDelayOfNode(node);
+          if (d != null && d > 0) return d;
+        }
+      }
+    }
+    for (final provider in providerItems) {
+      for (final node in (provider['proxies'] as List? ?? []).cast<Item>()) {
+        if (node['name']?.toString() == name) {
+          final d = serverDelayOfNode(node);
+          if (d != null && d > 0) return d;
+        }
+      }
+    }
+    return null;
+  }
+
+  void _prepareNodeTestDelay(String name) {
+    if (!_failedDelayBaselines.containsKey(name)) {
+      final cached = delays[name];
+      _failedDelayBaselines[name] = (cached != null && cached > 0)
+          ? cached
+          : _serverDelayByName(name);
+    }
+    delays[name] = null;
+  }
+
   void _recordDelay(String name, int delay, {bool? ipv6}) {
     for (final target in _linkedProxyNames(name)) {
+      if (delay == 0) {
+        if (!_failedDelayBaselines.containsKey(target)) {
+          final cached = delays[target];
+          _failedDelayBaselines[target] = (cached != null && cached > 0)
+              ? cached
+              : _serverDelayByName(target);
+        }
+      } else {
+        _failedDelayBaselines.remove(target);
+      }
       delays[target] = delay;
       if (ipv6 == true) {
         v6Nodes.add(target);
@@ -923,6 +1066,16 @@ class _CatalogPageState extends State<CatalogPage> {
     final ipv6Enabled = widget.preferences['ipv6TestEnabled'] == true;
     final isV6 = v6Nodes.contains(nodeName);
     for (final target in _ancestorGroupNames(gName)) {
+      if (delay == 0) {
+        if (!_failedDelayBaselines.containsKey(target)) {
+          final cached = delays[target];
+          _failedDelayBaselines[target] = (cached != null && cached > 0)
+              ? cached
+              : _serverDelayByName(target);
+        }
+      } else {
+        _failedDelayBaselines.remove(target);
+      }
       delays[target] = delay;
       if (ipv6Enabled) {
         if (isV6) {
@@ -937,14 +1090,7 @@ class _CatalogPageState extends State<CatalogPage> {
   int? _delayOf(Item node) {
     final name = node['name']?.toString() ?? '';
     if (delays.containsKey(name)) return delays[name];
-    final d = node['delay'];
-    if (d is num) return d.toInt();
-    final hist = node['history'] as List?;
-    if (hist != null && hist.isNotEmpty) {
-      final last = hist.last;
-      if (last is Map && last['delay'] is num) return (last['delay'] as num).toInt();
-    }
-    return null;
+    return serverDelayOfNode(node);
   }
 
   String _formatLatency(int? delay) {

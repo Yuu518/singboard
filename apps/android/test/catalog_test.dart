@@ -99,4 +99,59 @@ void main() {
     final after = tester.widget<AnimatedPositioned>(find.byType(AnimatedPositioned));
     expect(after.left, greaterThan(0.0));
   });
+
+  test('reconcileLoadedDelays preserves failed delays across reloads until new success', () {
+    final delays = <String, int?>{
+      'Dead': 0,
+      'Stale': 0,
+      'Recovered': 0,
+      'Testing': null,
+      'Auto': 0,
+      'Global': 0,
+    };
+    final baselines = <String, int?>{
+      'Dead': null,
+      'Stale': 85,
+      'Recovered': 85,
+      'Testing': 40,
+      'Auto': null,
+      'Global': null,
+    };
+    final groups = <Item>[
+      {
+        'name': 'Global',
+        'now': 'Auto',
+        'nodes': <Item>[
+          {'name': 'Auto'},
+          {'name': 'Dead'},
+          {'name': 'Stale', 'delay': 85},
+          {'name': 'Recovered', 'delay': 64},
+          {'name': 'Testing', 'delay': 40},
+        ],
+      },
+      {
+        'name': 'Auto',
+        'now': 'SG-1',
+        'nodes': <Item>[
+          {'name': 'SG-1', 'delay': 45},
+        ],
+      },
+    ];
+
+    reconcileLoadedDelays(
+      delays: delays,
+      failedBaselines: baselines,
+      groups: groups,
+      providers: const [],
+      isTesting: (name) => name == 'Testing',
+    );
+
+    expect(delays['Dead'], 0);
+    expect(delays['Stale'], 0);
+    expect(delays.containsKey('Recovered'), isFalse);
+    expect(delays.containsKey('Testing'), isTrue);
+    expect(delays['Testing'], isNull);
+    expect(delays.containsKey('Auto'), isFalse);
+    expect(delays.containsKey('Global'), isFalse);
+  });
 }

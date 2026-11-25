@@ -6,6 +6,137 @@ use std::{
     time::Instant,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CachedDelay {
+    Testing { server_delay: Option<u64> },
+    Failed { server_delay: Option<u64> },
+    Success(u64),
+}
+
+fn resolve_cached_delay(
+    name: &str,
+    server_delay: Option<u64>,
+    testing: bool,
+    cache: &mut HashMap<String, CachedDelay>,
+) -> Option<u64> {
+    if testing {
+        return None;
+    }
+    match cache.get(name).copied() {
+        None => server_delay,
+        Some(CachedDelay::Testing { .. }) => {
+            cache.remove(name);
+            server_delay
+        }
+        Some(CachedDelay::Failed {
+            server_delay: baseline,
+        }) => {
+            if server_delay.is_some_and(|d| d > 0 && Some(d) != baseline) {
+                cache.remove(name);
+                server_delay
+            } else {
+                Some(0)
+            }
+        }
+        Some(CachedDelay::Success(d)) => {
+            if server_delay.is_some_and(|sd| sd > 0) {
+                cache.remove(name);
+                server_delay
+            } else {
+                Some(d)
+            }
+        }
+    }
+}
+
+pub(super) fn reconcile_group_delays(
+    groups: &mut [Group],
+    cache: &mut HashMap<String, CachedDelay>,
+    is_testing: impl Fn(&str) -> bool,
+) {
+    let mut resolved = HashMap::new();
+    for group in groups.iter_mut() {
+        for node in &mut group.nodes {
+            let testing = is_testing(&node.name);
+            let delay = resolve_cached_delay(&node.name, node.delay, testing, cache);
+            node.delay = delay;
+            if delay.is_some_and(|d| d > 0) {
+                resolved.insert(node.name.clone(), delay);
+            } else {
+                resolved.entry(node.name.clone()).or_insert(delay);
+            }
+        }
+    }
+    let mut cleared = HashMap::new();
+    let mut changed = true;
+    for _ in 0..groups.len() {
+        if !changed {
+            break;
+        }
+        changed = false;
+        for group in groups.iter() {
+            if group.now.is_empty() || is_testing(&group.name) {
+                continue;
+            }
+            if matches!(cache.get(&group.name), Some(CachedDelay::Failed { .. })) {
+                let now_delay = resolved.get(&group.now).copied().flatten();
+                if let Some(d) = now_delay.filter(|&d| d > 0) {
+                    cache.remove(&group.name);
+                    resolved.insert(group.name.clone(), Some(d));
+                    cleared.insert(group.name.clone(), d);
+                    changed = true;
+                }
+            }
+        }
+    }
+    if !cleared.is_empty() {
+        for group in groups.iter_mut() {
+            for node in &mut group.nodes {
+                if let Some(&d) = cleared.get(&node.name) {
+                    node.delay = Some(d);
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn reconcile_provider_delays(
+    providers: &mut [(String, Value)],
+    cache: &mut HashMap<String, CachedDelay>,
+    is_testing: impl Fn(&str) -> bool,
+) {
+    for (_, provider) in providers.iter_mut() {
+        let Some(list) = provider["proxies"].as_array_mut() else {
+            continue;
+        };
+        for node in list {
+            let Some(name) = node["name"].as_str().map(str::to_owned) else {
+                continue;
+            };
+            let server_delay = node["history"]
+                .as_array()
+                .and_then(|h| h.last())
+                .and_then(|v| v["delay"].as_u64());
+            let testing = is_testing(&name);
+            let delay = resolve_cached_delay(&name, server_delay, testing, cache);
+            if delay != server_delay {
+                match delay {
+                    Some(d) => {
+                        if let Some(history) = node["history"].as_array_mut() {
+                            history.push(serde_json::json!({ "delay": d }));
+                        } else {
+                            node["history"] = serde_json::json!([{ "delay": d }]);
+                        }
+                    }
+                    None => {
+                        node["history"] = serde_json::json!([]);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct ProxyUi {
     query: String,
@@ -1697,8 +1828,12 @@ pub(super) fn ancestor_group_names(
 
 #[cfg(test)]
 mod tests {
-    use super::{ancestor_group_names, linked_proxy_names};
+    use super::{
+        CachedDelay, ancestor_group_names, linked_proxy_names, reconcile_group_delays,
+        reconcile_provider_delays,
+    };
     use singboard_core::clash::Group;
+    use std::collections::HashMap;
 
     fn group(name: &str, now: &str) -> Group {
         Group {
@@ -1746,5 +1881,119 @@ mod tests {
         assert_eq!(linked.len(), 2);
         let ancestors = ancestor_group_names(&groups, "A");
         assert_eq!(ancestors.len(), 2);
+    }
+
+    #[test]
+    fn reconcile_preserves_failed_delays_across_reloads_until_new_success() {
+        let mut cache = HashMap::from([
+            ("Dead".into(), CachedDelay::Failed { server_delay: None }),
+            ("Stale".into(), CachedDelay::Failed { server_delay: Some(85) }),
+            ("Recovered".into(), CachedDelay::Failed { server_delay: Some(85) }),
+            ("Testing".into(), CachedDelay::Testing { server_delay: Some(40) }),
+        ]);
+        let mut groups = vec![Group {
+            name: "Proxy".into(),
+            kind: "Selector".into(),
+            now: "Dead".into(),
+            test_url: String::new(),
+            nodes: vec![
+                singboard_core::clash::Node {
+                    name: "Dead".into(),
+                    kind: "Trojan".into(),
+                    delay: None,
+                    udp: false,
+                    xudp: false,
+                },
+                singboard_core::clash::Node {
+                    name: "Stale".into(),
+                    kind: "Trojan".into(),
+                    delay: Some(85),
+                    udp: false,
+                    xudp: false,
+                },
+                singboard_core::clash::Node {
+                    name: "Recovered".into(),
+                    kind: "Trojan".into(),
+                    delay: Some(64),
+                    udp: false,
+                    xudp: false,
+                },
+                singboard_core::clash::Node {
+                    name: "Testing".into(),
+                    kind: "Trojan".into(),
+                    delay: Some(40),
+                    udp: false,
+                    xudp: false,
+                },
+            ],
+        }];
+        reconcile_group_delays(&mut groups, &mut cache, |n| n == "Testing");
+        assert_eq!(groups[0].nodes[0].delay, Some(0));
+        assert_eq!(groups[0].nodes[1].delay, Some(0));
+        assert_eq!(groups[0].nodes[2].delay, Some(64));
+        assert_eq!(groups[0].nodes[3].delay, None);
+        assert!(cache.contains_key("Dead"));
+        assert!(cache.contains_key("Stale"));
+        assert!(!cache.contains_key("Recovered"));
+
+        let mut providers = vec![(
+            "Sub".into(),
+            serde_json::json!({
+                "proxies": [
+                    { "name": "Dead", "history": [] },
+                    { "name": "Stale", "history": [{ "delay": 85 }] }
+                ]
+            }),
+        )];
+        reconcile_provider_delays(&mut providers, &mut cache, |_| false);
+        assert_eq!(providers[0].1["proxies"][0]["history"][0]["delay"], 0);
+        assert_eq!(
+            providers[0].1["proxies"][1]["history"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["delay"],
+            0
+        );
+    }
+
+    #[test]
+    fn reconcile_clears_group_failure_when_selected_node_recovers() {
+        let mut cache = HashMap::from([
+            ("Auto".into(), CachedDelay::Failed { server_delay: None }),
+            ("Global".into(), CachedDelay::Failed { server_delay: None }),
+        ]);
+        let mut groups = vec![
+            Group {
+                name: "Global".into(),
+                kind: "Selector".into(),
+                now: "Auto".into(),
+                test_url: String::new(),
+                nodes: vec![singboard_core::clash::Node {
+                    name: "Auto".into(),
+                    kind: "URLTest".into(),
+                    delay: None,
+                    udp: false,
+                    xudp: false,
+                }],
+            },
+            Group {
+                name: "Auto".into(),
+                kind: "URLTest".into(),
+                now: "SG-1".into(),
+                test_url: String::new(),
+                nodes: vec![singboard_core::clash::Node {
+                    name: "SG-1".into(),
+                    kind: "Trojan".into(),
+                    delay: Some(45),
+                    udp: false,
+                    xudp: false,
+                }],
+            },
+        ];
+        reconcile_group_delays(&mut groups, &mut cache, |_| false);
+        assert_eq!(groups[0].nodes[0].delay, Some(45));
+        assert!(!cache.contains_key("Auto"));
+        assert!(!cache.contains_key("Global"));
     }
 }
