@@ -113,7 +113,7 @@ class _ToolsPageState extends State<ToolsPage> {
       var reply = await configRequest(dir, 'tool', args) as Map;
       if (!mounted) return;
       if (reply['ticket'] case final String ticket) {
-        if (!await confirm('更新核心', reply['text'])) return;
+        if (!await confirm('发现新核心版本', reply['text'])) return;
         progress = Timer.periodic(const Duration(milliseconds: 700), (_) async {
           try {
             final text = await configRequest(dir, 'core_progress');

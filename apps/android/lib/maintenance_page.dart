@@ -10,6 +10,7 @@ import 'native_stream.dart';
 const _channel = MethodChannel('singboard/config');
 
 bool _panelUpdateVisible = false;
+bool _coreUpdateVisible = false;
 
 Future<Map<String, dynamic>> checkPanelUpdate(String dir) async {
   final path = await _channel.invokeMethod<String>('installedApk');
@@ -287,6 +288,205 @@ class _PanelUpdateDialogState extends State<_PanelUpdateDialog> {
                                     : '立即更新'
                               : '安装已校验的更新',
                         ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<String?> showCoreUpdate(
+  BuildContext context, {
+  required String dir,
+  required String summary,
+  required String target,
+  required String ticket,
+  required Map<String, String> values,
+}) async {
+  if (_coreUpdateVisible) return null;
+  _coreUpdateVisible = true;
+  try {
+    return await showGlassDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      requestFocus: true,
+      builder: (_) => _CoreUpdateDialog(
+        dir: dir,
+        summary: summary,
+        target: target,
+        ticket: ticket,
+        values: values,
+      ),
+    );
+  } finally {
+    _coreUpdateVisible = false;
+  }
+}
+
+class _CoreUpdateDialog extends StatefulWidget {
+  const _CoreUpdateDialog({
+    required this.dir,
+    required this.summary,
+    required this.target,
+    required this.ticket,
+    required this.values,
+  });
+  final String dir;
+  final String summary;
+  final String target;
+  final String ticket;
+  final Map<String, String> values;
+
+  @override
+  State<_CoreUpdateDialog> createState() => _CoreUpdateDialogState();
+}
+
+class _CoreUpdateDialogState extends State<_CoreUpdateDialog> {
+  bool busy = false;
+  bool polling = false;
+  String progress = '正在准备核心更新…';
+  String error = '';
+  Timer? timer;
+
+  @override
+  void dispose() {
+    timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _confirm() async {
+    if (busy) return;
+    setState(() {
+      busy = true;
+      error = '';
+      progress = '正在准备核心更新…';
+    });
+    timer = Timer.periodic(const Duration(milliseconds: 350), (_) async {
+      if (polling) return;
+      polling = true;
+      try {
+        final text = await configRequest(widget.dir, 'core_progress');
+        if (mounted && busy && text is String && text.isNotEmpty) {
+          setState(() => progress = text);
+        }
+      } catch (_) {
+        timer?.cancel();
+      } finally {
+        polling = false;
+      }
+    });
+    try {
+      final reply = await configRequest(widget.dir, 'tool', {
+        'action': 'core_check',
+        'values': widget.values,
+        'ticket': widget.ticket,
+      }) as Map;
+      timer?.cancel();
+      if (!mounted) return;
+      Navigator.pop(context, reply['text'] as String? ?? '核心已更新');
+    } catch (e) {
+      timer?.cancel();
+      if (mounted) {
+        setState(() {
+          busy = false;
+          error = e is StateError ? e.message : e.toString();
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SingboardColors.of(context);
+    return PopScope(
+      canPop: !busy,
+      child: Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        constraints: const BoxConstraints(maxWidth: 384),
+        backgroundColor: Colors.transparent,
+        child: SingleChildScrollView(
+          child: GlassCard(
+            popover: true,
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '发现新核心版本',
+                  style: TextStyle(
+                    color: c.ink,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: c.fill,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.summary,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: c.ink,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                      if (widget.target.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          '目标：${widget.target}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: c.muted,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  busy
+                      ? progress
+                      : '更新会先停止核心，替换后自动重启，期间代理短暂中断。',
+                  style: TextStyle(fontSize: 14, color: c.muted),
+                ),
+                if (error.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(error, style: TextStyle(fontSize: 12, color: c.error)),
+                ],
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (!busy)
+                        TextButton(
+                          autofocus: true,
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('稍后'),
+                        ),
+                      FilledButton(
+                        onPressed: busy ? null : _confirm,
+                        child: Text(busy ? '更新中…' : '立即更新'),
                       ),
                     ],
                   ),

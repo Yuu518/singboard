@@ -187,8 +187,7 @@ pub fn forms(p: &Settings) -> Vec<Form> {
             ],
             actions: vec![
                 ("save_token", "保存 GitHub Token"),
-                ("core_check", "检查核心版本"),
-                ("core_prepare", "准备更新"),
+                ("core_check", "检查核心更新"),
             ],
         },
         Form {

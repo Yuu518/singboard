@@ -67,7 +67,7 @@ async fn detect_installed_version(dir: &Path, target: &Path, fallback: &str) -> 
 
 pub async fn run(
     dir: &Path,
-    action: &str,
+    _action: &str,
     v: &Values,
     ticket: Option<&str>,
 ) -> Result<Reply, String> {
@@ -86,6 +86,17 @@ pub async fn run(
         p.core_update_mirror = get("mirror").into();
         Ok(())
     })?;
+    handle_release(dir, repo, v, info, ticket).await
+}
+
+async fn handle_release(
+    dir: &Path,
+    repo: &str,
+    v: &Values,
+    info: update::CoreUpdateInfo,
+    ticket: Option<&str>,
+) -> Result<Reply, String> {
+    let get = |key: &str| value(v, key);
     let summary = format!(
         "{} · {:.1} MiB",
         info.version,
@@ -96,13 +107,6 @@ pub async fn run(
     let up_to_date = installed
         .as_deref()
         .is_some_and(|cur| update::is_core_up_to_date(&info.version, cur));
-    if action == "core_check" {
-        return Ok(Reply::text(if up_to_date {
-            format!("已是最新版本（{}）", info.version)
-        } else {
-            format!("可更新至 {summary}")
-        }));
-    }
     if ticket.is_none() && up_to_date {
         return Ok(Reply::text(format!("已是最新版本（{}）", info.version)));
     }
@@ -169,4 +173,36 @@ pub async fn run(
             ""
         }
     )))
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    #[tokio::test]
+    async fn same_version_core_check_offers_rebuilt_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = dir.path().join("sing-box.exe");
+        let values = Values::from([
+            ("core".into(), core.to_str().unwrap().into()),
+            ("installed".into(), "sing-box version 1.14.4".into()),
+        ]);
+        let info = update::CoreUpdateInfo {
+            version: "v1.14.4".into(),
+            prerelease: false,
+            published_at: String::new(),
+            asset_name: "sing-box-win-x64.exe".into(),
+            asset_url: "https://example.invalid/sing-box-win-x64.exe".into(),
+            asset_size: 6,
+            asset_digest: format!("sha256:{:x}", Sha256::digest(b"MZnew!")),
+        };
+        for (bytes, reinstall) in [(b"MZold!", true), (b"MZnew!", false)] {
+            std::fs::write(&core, bytes).unwrap();
+            let reply = handle_release(dir.path(), "example/core", &values, info.clone(), None)
+                .await
+                .unwrap();
+            assert_eq!(reply.ticket.is_some(), reinstall, "{}", reply.text);
+        }
+    }
 }

@@ -1672,7 +1672,12 @@ impl Workspace {
                         return;
                     }
                     if this.page == Page::Settings && this.settings_layout.dialog.is_some() {
-                        this.close_settings_dialog(cx);
+                        if !matches!(
+                            this.settings_layout.dialog,
+                            Some(settings::SettingsDialog::ConfirmCoreUpdate { busy: true, .. })
+                        ) {
+                            this.close_settings_dialog(cx);
+                        }
                         return;
                     }
                     if this.page == Page::Tailscale && this.tailscale.dialog.is_some() {

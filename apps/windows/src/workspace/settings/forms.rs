@@ -243,7 +243,7 @@ impl Workspace {
         let job = singboard_core::runtime().spawn(async move {
             let dir = crate::service::data_dir()?;
             match action {
-                "core_check" => crate::core_actions::run(&dir, "core_prepare", &values, None).await,
+                "core_check" => crate::core_actions::run(&dir, "core_check", &values, None).await,
                 "uninstall_service" => {
                     let service = crate::service::service_name()?;
                     crate::service::request(crate::service::admin::Operation::Uninstall {
@@ -2705,13 +2705,21 @@ impl Workspace {
                                             let dir = crate::service::data_dir()?;
                                             crate::core_actions::run(
                                                 &dir,
-                                                "core_prepare",
+                                                "core_check",
                                                 &vals,
                                                 Some(&t),
                                             )
                                             .await
                                         });
                                         cx.spawn(async move |weak, cx| {
+                                            while !job.is_finished() {
+                                                cx.background_executor()
+                                                    .timer(std::time::Duration::from_millis(120))
+                                                    .await;
+                                                if weak.update(cx, |_, cx| cx.notify()).is_err() {
+                                                    return;
+                                                }
+                                            }
                                             let r = job
                                                 .await
                                                 .map_err(|e| e.to_string())

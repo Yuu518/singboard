@@ -101,6 +101,7 @@ class _SettingsPageState extends State<SettingsPage>
       }
     });
   bool _saving = false;
+  bool _checkingCore = false;
   final _inputs = <String, TextEditingController>{};
   final _focusNodes = <String, FocusNode>{};
   final _commitHandlers = <String, VoidCallback>{};
@@ -745,54 +746,17 @@ class _SettingsPageState extends State<SettingsPage>
     Map<String, String> values,
   ) async {
     if (_busy.contains(group)) return false;
-    Timer? progress;
     setState(() {
       _busy.add(group);
       _messages[group] = '正在处理…';
     });
     try {
       final dir = await configDirectory();
-      final args = <String, dynamic>{
+      final reply = await configRequest(dir, 'tool', {
         'action': action,
         'values': values,
-      };
-      var reply = await configRequest(dir, 'tool', args) as Map;
+      }) as Map;
       if (!mounted) return false;
-      if (reply['ticket'] case final String ticket) {
-        final confirmed = await showGlassDialog<bool>(
-          context: context,
-          builder: (ctx) => GlassConfirmDialog(
-            title: const Text('更新 sing-box 核心'),
-            content: Text(reply['text'] as String? ?? '确认下载并更新核心？'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('确认更新'),
-              ),
-            ],
-          ),
-        );
-        if (confirmed != true || !mounted) {
-          if (mounted) setState(() => _messages[group] = '已取消核心更新');
-          return false;
-        }
-        progress = Timer.periodic(const Duration(milliseconds: 500), (_) async {
-          try {
-            final text = await configRequest(dir, 'core_progress');
-            if (mounted && _busy.contains(group) && text is String && text.isNotEmpty) {
-              setState(() => _messages[group] = text);
-            }
-          } catch (_) {}
-        });
-        reply = await configRequest(dir, 'tool', {
-          ...args,
-          'ticket': ticket,
-        }) as Map;
-      }
       if (reply['refresh'] == true) await widget.onReload();
       final text = reply['text'] as String;
       if (mounted) {
@@ -807,7 +771,6 @@ class _SettingsPageState extends State<SettingsPage>
       }
       return false;
     } finally {
-      progress?.cancel();
       if (mounted) setState(() => _busy.remove(group));
     }
   }
@@ -2104,6 +2067,63 @@ class _SettingsPageState extends State<SettingsPage>
     };
   }
 
+  Future<void> _checkCore(Map<String, String> values) async {
+    if (_busy.contains('coreUpdate')) return;
+    setState(() {
+      _busy.add('coreUpdate');
+      _checkingCore = true;
+      _messages['coreUpdate'] = '正在检查上游版本…';
+    });
+    final Map<dynamic, dynamic> reply;
+    final String dir;
+    try {
+      dir = await configDirectory();
+      reply = await configRequest(dir, 'tool', {
+        'action': 'core_check',
+        'values': values,
+      }) as Map;
+    } catch (e) {
+      if (mounted) {
+        setState(
+          () => _messages['coreUpdate'] =
+              e is StateError ? e.message : e.toString(),
+        );
+      }
+      return;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy.remove('coreUpdate');
+          _checkingCore = false;
+        });
+      }
+    }
+    if (!mounted) return;
+    final text = reply['text'] as String? ?? '';
+    if (reply['ticket'] case final String ticket) {
+      final lines = text.split('\n');
+      final summary = lines.isNotEmpty ? lines[0] : '';
+      final target = lines.length > 1 && lines[1].startsWith('更新目标：')
+          ? lines[1].substring('更新目标：'.length)
+          : '';
+      setState(() => _messages['coreUpdate'] = '可用版本 $summary');
+      final updated = await showCoreUpdate(
+        context,
+        dir: dir,
+        summary: summary,
+        target: target,
+        ticket: ticket,
+        values: values,
+      );
+      if (updated != null && mounted) {
+        await widget.onReload();
+        if (mounted) setState(() => _messages['coreUpdate'] = updated);
+      }
+    } else {
+      setState(() => _messages['coreUpdate'] = text);
+    }
+  }
+
   Widget _coreUpdate(String version) {
     final c = SingboardColors.of(context);
     final values = _updateValues(version);
@@ -2149,31 +2169,15 @@ class _SettingsPageState extends State<SettingsPage>
       ),
     );
 
-    final canInstallCore =
-        widget.preferences['nativeRootEnabled'] == true &&
-        (values['core'] ?? '').trim().isNotEmpty;
-
     return _card([
       SettingsRow(
         title: 'sing-box 核心',
         subtitle:
             _messages['coreUpdate'] ?? (version.isEmpty ? '尚未检查上游版本' : version),
         inline: true,
-        trailing: Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          alignment: WrapAlignment.end,
-          children: [
-            _settingsBtn(
-              busy ? '处理中' : '检查更新',
-              busy ? null : () => _run('coreUpdate', 'core_check', values),
-            ),
-            if (canInstallCore)
-              _routeBtn(
-                '更新核心',
-                busy ? null : () => _run('coreUpdate', 'core_prepare', values),
-              ),
-          ],
+        trailing: _settingsBtn(
+          _checkingCore ? '检查中' : '检查核心更新',
+          busy ? null : () => _checkCore(values),
         ),
       ),
       SettingsRow(
