@@ -3,6 +3,7 @@ use crate::{
     settings::Settings,
     tools::{Reply, Values, value},
 };
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
 static PROGRESS: std::sync::Mutex<Option<(String, u64, u64)>> = std::sync::Mutex::new(None);
@@ -97,18 +98,16 @@ async fn handle_release(
     ticket: Option<&str>,
 ) -> Result<Reply, String> {
     let get = |key: &str| value(v, key);
-    let summary = format!(
-        "{} · {:.1} MiB",
-        info.version,
-        info.asset_size as f64 / 1048576.
-    );
     let target = PathBuf::from(get("core").trim());
     let installed = detect_installed_version(dir, &target, get("installed")).await;
-    let up_to_date = installed
+    let order = installed
         .as_deref()
-        .is_some_and(|cur| update::is_core_up_to_date(&info.version, cur));
-    if ticket.is_none() && up_to_date {
-        return Ok(Reply::text(format!("已是最新版本（{}）", info.version)));
+        .and_then(|cur| update::compare_installed_core(cur, &info.version));
+    if order == Some(Ordering::Greater) {
+        return Ok(Reply::text(format!(
+            "本地核心版本高于上游版本（{}）",
+            info.version
+        )));
     }
     update::core_asset_hash(&info.asset_digest)?;
     if !target.is_absolute()
@@ -125,26 +124,16 @@ async fn handle_release(
         get("mirror"),
     ))
     .map_err(|e| e.to_string())?;
-    if ticket.is_none() {
-        return Ok(Reply {
-            text: format!(
-                "{summary}\n更新目标：{}\n核心正在运行时会重启服务。",
-                target.display()
-            ),
-            ticket: Some(selection),
-            refresh: false,
-        });
-    }
-    if ticket != Some(&selection) {
+    if ticket.is_some_and(|t| t != selection) {
         return Err("版本或目标已变化，请重新检查并确认".into());
     }
     #[cfg(target_os = "android")]
-    if !Settings::load(dir)?.native_root_enabled {
-        return Err("请先在本地核心设置中启用 Root 模式".into());
-    } else {
+    if ticket.is_some() || order == Some(Ordering::Equal) {
+        if !Settings::load(dir)?.native_root_enabled {
+            return Err("请先在本地核心设置中启用 Root 模式".into());
+        }
         crate::root::set_enabled(true);
     }
-    *PROGRESS.lock().unwrap() = None;
     let context = update::UpdateContext {
         directory: dir.into(),
         progress: Box::new(|phase, n, total| {
@@ -154,16 +143,30 @@ async fn handle_release(
         }),
     };
     let mirror = (!get("mirror").is_empty()).then(|| get("mirror").trim().into());
-    let result = update::platform::perform_core_update(
-        context,
-        info.asset_name,
-        info.asset_url,
-        info.asset_size,
-        info.asset_digest,
-        mirror,
-        get("core").trim().into(),
-    )
-    .await?;
+    if ticket.is_none() {
+        let detail = if order == Some(Ordering::Equal) {
+            if update::core_matches_release(&context, &target, &info, &mirror).await? {
+                return Ok(Reply::text(format!("已是最新版本（{}）", info.version)));
+            }
+            " · 同版本核心文件与上游不同，可重新安装"
+        } else {
+            ""
+        };
+        return Ok(Reply {
+            text: format!(
+                "{} · {:.1} MiB{detail}\n更新目标：{}\n核心正在运行时会重启服务。",
+                info.version,
+                info.asset_size as f64 / 1048576.,
+                target.display()
+            ),
+            ticket: Some(selection),
+            refresh: false,
+        });
+    }
+    *PROGRESS.lock().unwrap() = None;
+    let result =
+        update::platform::perform_core_update(context, &info, &mirror, get("core").trim().into())
+            .await?;
     Ok(Reply::text(format!(
         "已更新：{}{}",
         result.version,
@@ -184,7 +187,7 @@ mod tests {
     async fn same_version_core_check_offers_rebuilt_binary() {
         let dir = tempfile::tempdir().unwrap();
         let core = dir.path().join("sing-box.exe");
-        let values = Values::from([
+        let mut values = Values::from([
             ("core".into(), core.to_str().unwrap().into()),
             ("installed".into(), "sing-box version 1.14.4".into()),
         ]);
@@ -203,6 +206,28 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(reply.ticket.is_some(), reinstall, "{}", reply.text);
+            if let Some(ticket) = reply.ticket {
+                assert!(reply.text.contains("可重新安装"));
+                let mut replaced = info.clone();
+                replaced.asset_digest = format!("sha256:{:x}", Sha256::digest(b"MZnext"));
+                let error =
+                    handle_release(dir.path(), "example/core", &values, replaced, Some(&ticket))
+                        .await
+                        .err()
+                        .unwrap();
+                assert!(error.contains("重新检查"));
+            }
         }
+        std::fs::write(&core, b"MZold!").unwrap();
+        values.insert("installed".into(), "1.14.5".into());
+        let reply = handle_release(dir.path(), "example/core", &values, info.clone(), None)
+            .await
+            .unwrap();
+        assert!(reply.ticket.is_none());
+        values.insert("installed".into(), "1.14.3".into());
+        let reply = handle_release(dir.path(), "example/core", &values, info, None)
+            .await
+            .unwrap();
+        assert!(reply.ticket.is_some() && !reply.text.contains("重新安装"));
     }
 }

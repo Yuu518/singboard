@@ -2615,7 +2615,7 @@ impl Workspace {
                         div()
                             .text_size(crate::theme::text_px(16.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("发现新核心版本"),
+                            .child("发现核心更新"),
                     )
                     .child(
                         div()

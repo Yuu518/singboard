@@ -3,12 +3,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::{
-    AssetTarget, CORE_PROGRESS_EVENT, CoreUpdateResult, TargetArch, TargetOs, UPDATE_LOCK,
-    apply_mirror, core_asset_hash, download_asset, emit_progress, staged_matches, verify_archive,
+    AssetTarget, CORE_PROGRESS_EVENT, CoreUpdateInfo, CoreUpdateResult, TargetArch, TargetOs,
+    UPDATE_LOCK, core_asset_hash, emit_progress, prepare_core, verify_archive,
 };
 
-const CORE_EXE_NAME: &str = "sing-box.exe";
-const STAGED_ASSET_FILE: &str = "core.asset";
+pub(super) use singboard_core::update::hash as core_file_hash;
+pub(super) type CoreFiles = Vec<String>;
+pub(super) const CORE_NAME: &str = "sing-box.exe";
 const MAX_CORE_EXTRACT_BYTES: u64 = 256 * 1024 * 1024;
 
 pub(super) fn asset_target() -> Result<AssetTarget, String> {
@@ -25,7 +26,7 @@ pub(super) fn asset_target() -> Result<AssetTarget, String> {
     }
 }
 
-fn is_raw_exe_asset(asset_name: &str) -> bool {
+pub(super) fn is_raw_asset(asset_name: &str) -> bool {
     asset_name.trim().to_ascii_lowercase().ends_with(".exe")
 }
 
@@ -42,33 +43,14 @@ fn is_candidate_core_exe(name: &str) -> bool {
         .any(|token| matches!(token, "updater" | "installer" | "setup" | "service"))
 }
 
-fn take_staged(
-    staging: &Path,
-    asset_name: &str,
-    asset_url: &str,
-    asset_size: u64,
-    asset_digest: &str,
-) -> Option<Vec<String>> {
-    if !staged_matches(staging, asset_url, asset_size, asset_digest) {
-        return None;
-    }
-    extract_core_files(
-        &staging.join(STAGED_ASSET_FILE),
-        asset_name,
-        &staging.join("files"),
-        asset_digest,
-    )
-    .ok()
-}
-
-fn extract_core_files(
+pub(super) fn extract_core_files(
     asset_path: &Path,
     asset_name: &str,
     staging: &Path,
     asset_digest: &str,
 ) -> Result<Vec<String>, String> {
     let bytes = verify_archive(asset_path, asset_digest)?;
-    if is_raw_exe_asset(asset_name) {
+    if is_raw_asset(asset_name) {
         if bytes.len() as u64 > MAX_CORE_EXTRACT_BYTES {
             return Err("核心文件超过大小上限".into());
         }
@@ -79,7 +61,7 @@ fn extract_core_files(
             std::fs::remove_dir_all(staging).map_err(|e| format!("清理临时目录失败: {}", e))?;
         }
         std::fs::create_dir_all(staging).map_err(|e| format!("创建临时目录失败: {}", e))?;
-        std::fs::write(staging.join(CORE_EXE_NAME), &bytes)
+        std::fs::write(staging.join(CORE_NAME), &bytes)
             .map_err(|e| format!("写入临时文件失败: {}", e))?;
         return Ok(Vec::new());
     }
@@ -99,7 +81,7 @@ fn extract_core_files(
         let Some(name) = entry.name().rsplit(['/', '\\']).next() else {
             continue;
         };
-        if name.eq_ignore_ascii_case(CORE_EXE_NAME) {
+        if name.eq_ignore_ascii_case(CORE_NAME) {
             exact_exe_index.get_or_insert(i);
         } else if is_candidate_core_exe(name) {
             candidate_exe_indices.push(i);
@@ -107,7 +89,7 @@ fn extract_core_files(
     }
     let exe_index = exact_exe_index
         .or_else(|| (candidate_exe_indices.len() == 1).then(|| candidate_exe_indices[0]))
-        .ok_or_else(|| format!("压缩包内未找到 {}", CORE_EXE_NAME))?;
+        .ok_or_else(|| format!("压缩包内未找到 {}", CORE_NAME))?;
 
     if staging.exists() {
         std::fs::remove_dir_all(staging).map_err(|e| format!("清理临时目录失败: {}", e))?;
@@ -128,7 +110,7 @@ fn extract_core_files(
             continue;
         };
         let dest = if i == exe_index {
-            staging.join(CORE_EXE_NAME)
+            staging.join(CORE_NAME)
         } else if name.to_ascii_lowercase().ends_with(".dll") {
             if !dlls.iter().any(|existing| existing.eq_ignore_ascii_case(&name)) {
                 dlls.push(name.clone());
@@ -192,14 +174,11 @@ pub(crate) fn retry_io<F: FnMut() -> std::io::Result<()>>(
 
 pub async fn perform_core_update(
     app: super::UpdateContext,
-    asset_name: String,
-    asset_url: String,
-    asset_size: u64,
-    asset_digest: String,
-    mirror: Option<String>,
+    info: &CoreUpdateInfo,
+    mirror: &Option<String>,
     singbox_path: String,
 ) -> Result<CoreUpdateResult, String> {
-    core_asset_hash(&asset_digest)?;
+    core_asset_hash(&info.asset_digest)?;
     let service_name = crate::service::service_name()?;
     let _guard = UPDATE_LOCK
         .try_lock()
@@ -222,54 +201,15 @@ pub async fn perform_core_update(
     };
 
     let files_dir = staging.join("files");
-    let staged_exe = files_dir.join(CORE_EXE_NAME);
-    let reusable = {
-        let staging = staging.clone();
-        let asset_name = asset_name.clone();
-        let asset_url = asset_url.clone();
-        let asset_digest = asset_digest.clone();
-        tokio::task::spawn_blocking(move || {
-            take_staged(&staging, &asset_name, &asset_url, asset_size, &asset_digest)
-        })
-        .await
-        .map_err(|e| format!("任务执行失败: {}", e))?
-    };
-    let dlls = match reusable {
-        Some(dlls) => dlls,
-        None => {
-            let _ = std::fs::remove_dir_all(&staging);
-            std::fs::create_dir_all(&staging).map_err(|e| format!("创建临时目录失败: {}", e))?;
-
-            let download_url = apply_mirror(&mirror, &asset_url);
-            let asset_path = staging.join(STAGED_ASSET_FILE);
-            download_asset(
-                &app,
-                CORE_PROGRESS_EVENT,
-                &download_url,
-                asset_size,
-                &asset_path,
-            )
-            .await
-            .map_err(cleanup)?;
-
-            emit_progress(&app, CORE_PROGRESS_EVENT, "extract", 0, 0);
-            let files_dir = files_dir.clone();
-            tokio::task::spawn_blocking(move || {
-                extract_core_files(&asset_path, &asset_name, &files_dir, &asset_digest)
-            })
-            .await
-            .map_err(|e| format!("任务执行失败: {}", e))
-            .and_then(|r| r)
-            .map_err(cleanup)?
-        }
-    };
+    let staged_exe = files_dir.join(CORE_NAME);
+    let (dlls, core_hash) = prepare_core(&app, info, mirror).await.map_err(cleanup)?;
 
     // 步骤 3：健全性检查（staging 里 dll 就在 exe 旁边，加载依赖不受影响）
     let version = probe_core_version(&staged_exe).await.map_err(cleanup)?;
 
     // One consent covers replacement, restart and any rollback.
-    let mut files = Vec::new();
-    for name in std::iter::once("sing-box.exe".to_string()).chain(dlls) {
+    let mut files = vec![(CORE_NAME.to_string(), core_hash)];
+    for name in dlls {
         let hash = crate::service::helper::sha256_file(&files_dir.join(&name)).map_err(cleanup)?;
         files.push((name, hash));
     }
@@ -291,7 +231,10 @@ pub async fn perform_core_update(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{STAGED_MANIFEST, StagedCore};
+    use super::super::{
+        STAGED_ASSET_FILE, STAGED_MANIFEST, StagedCore, UpdateContext, core_matches_release,
+        take_staged,
+    };
     use super::*;
     use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -376,6 +319,66 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn republished_zip_compares_the_verified_executable_and_reuses_the_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = UpdateContext {
+            directory: dir.path().into(),
+            progress: Box::new(|_, _, _| {}),
+        };
+        let installed = dir.path().join(CORE_NAME);
+        std::fs::write(&installed, b"old core").unwrap();
+        let source = TestStaging::new();
+        let staging = dir.path().join("core-update");
+        let release = |exe: &[u8]| {
+            let (size, digest) =
+                source.write_archive_named("release/singbox-win-x64.exe", exe, b"dll");
+            source.write_manifest(size, &digest);
+            std::fs::create_dir_all(&staging).unwrap();
+            for name in [STAGED_ASSET_FILE, STAGED_MANIFEST] {
+                std::fs::copy(source.0.join(name), staging.join(name)).unwrap();
+            }
+            CoreUpdateInfo {
+                version: "v1.14.4".into(),
+                prerelease: false,
+                published_at: String::new(),
+                asset_name: ASSET_NAME.into(),
+                asset_url: ASSET_URL.into(),
+                asset_size: size,
+                asset_digest: digest,
+            }
+        };
+        let first = release(b"old core");
+        assert!(
+            core_matches_release(&app, &installed, &first, &None)
+                .await
+                .unwrap()
+        );
+        assert!(!staging.exists());
+        assert!(
+            core_matches_release(&app, &installed, &first, &None)
+                .await
+                .unwrap()
+        );
+        let rebuilt = release(b"new core");
+        assert_eq!(first.asset_size, rebuilt.asset_size);
+        assert!(
+            !core_matches_release(&app, &installed, &rebuilt, &None)
+                .await
+                .unwrap()
+        );
+        let staged_core = staging.join("files").join(CORE_NAME);
+        std::fs::write(&staged_core, b"modified").unwrap();
+        prepare_core(&app, &rebuilt, &None).await.unwrap();
+        assert_eq!(std::fs::read(staged_core).unwrap(), b"new core");
+        std::fs::write(&installed, b"new core").unwrap();
+        assert!(
+            core_matches_release(&app, &installed, &rebuilt, &None)
+                .await
+                .unwrap()
+        );
+    }
+
     #[test]
     fn mismatched_archive_is_rejected_before_extracting_any_files() {
         let staging = TestStaging::new();
@@ -403,7 +406,7 @@ mod tests {
         staging.write_manifest(size, &digest);
         let files = staging.0.join("files");
         std::fs::create_dir(&files).unwrap();
-        std::fs::write(files.join(CORE_EXE_NAME), b"changed exe").unwrap();
+        std::fs::write(files.join(CORE_NAME), b"changed exe").unwrap();
         std::fs::write(files.join("libcronet.dll"), b"changed dll").unwrap();
         std::fs::write(files.join("untrusted.dll"), b"extra dll").unwrap();
 
@@ -411,7 +414,7 @@ mod tests {
 
         assert_eq!(dlls, vec!["libcronet.dll"]);
         assert_eq!(
-            std::fs::read(files.join(CORE_EXE_NAME)).unwrap(),
+            std::fs::read(files.join(CORE_NAME)).unwrap(),
             b"trusted exe"
         );
         assert_eq!(
@@ -435,7 +438,7 @@ mod tests {
         .unwrap();
         assert!(dlls.is_empty());
         assert_eq!(
-            std::fs::read(files.join(CORE_EXE_NAME)).unwrap(),
+            std::fs::read(files.join(CORE_NAME)).unwrap(),
             b"MZraw-binary"
         );
 
@@ -464,7 +467,7 @@ mod tests {
         .unwrap();
         assert_eq!(dlls, vec!["libcronet.dll"]);
         assert_eq!(
-            std::fs::read(files.join(CORE_EXE_NAME)).unwrap(),
+            std::fs::read(files.join(CORE_NAME)).unwrap(),
             b"renamed exe"
         );
     }

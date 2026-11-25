@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,8 @@ pub(crate) const CORE_PROGRESS_EVENT: &str = "core-update-progress";
 
 /// 一致性校验阶段解压结果的清单，供随后的安装复用（同一资产不下载两次）
 pub(crate) const STAGED_MANIFEST: &str = "staged.json";
+const STAGED_ASSET_FILE: &str = "core.asset";
+const CORE_HASH_RECORD: &str = "core-update-hash.json";
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +51,13 @@ pub(crate) struct StagedCore {
     pub(crate) asset_url: String,
     pub(crate) asset_size: u64,
     pub(crate) asset_digest: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreHashRecord {
+    asset_digest: String,
+    core_hash: String,
 }
 
 #[derive(Deserialize)]
@@ -85,12 +95,16 @@ fn validate_repo(repo: &str) -> Result<(), String> {
     }
 }
 
+fn is_sha256(hash: &str) -> bool {
+    hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 pub(crate) fn core_asset_hash(asset_digest: &str) -> Result<&str, String> {
     asset_digest
         .trim()
         .strip_prefix("sha256:")
         .map(str::trim)
-        .filter(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+        .filter(|hash| is_sha256(hash))
         .ok_or_else(|| "上游未提供有效的 SHA-256 校验信息，已中止核心更新".to_string())
 }
 
@@ -123,6 +137,135 @@ pub(crate) fn staged_matches(
         _ => false,
     };
     staged.asset_url == asset_url && staged.asset_size == asset_size && same_digest
+}
+
+fn take_staged(
+    staging: &Path,
+    asset_name: &str,
+    asset_url: &str,
+    asset_size: u64,
+    asset_digest: &str,
+) -> Option<platform::CoreFiles> {
+    if !staged_matches(staging, asset_url, asset_size, asset_digest) {
+        return None;
+    }
+    platform::extract_core_files(
+        &staging.join(STAGED_ASSET_FILE),
+        asset_name,
+        &staging.join("files"),
+        asset_digest,
+    )
+    .ok()
+}
+
+async fn prepare_core(
+    app: &UpdateContext,
+    info: &CoreUpdateInfo,
+    mirror: &Option<String>,
+) -> Result<(platform::CoreFiles, String), String> {
+    let staging = app.directory.join("core-update");
+    let reusable = {
+        let staging = staging.clone();
+        let info = info.clone();
+        tokio::task::spawn_blocking(move || {
+            take_staged(
+                &staging,
+                &info.asset_name,
+                &info.asset_url,
+                info.asset_size,
+                &info.asset_digest,
+            )
+        })
+        .await
+        .map_err(|e| format!("任务执行失败: {e}"))?
+    };
+    if reusable.is_none() {
+        if staging.exists() {
+            std::fs::remove_dir_all(&staging).map_err(|e| format!("清理临时目录失败: {e}"))?;
+        }
+        std::fs::create_dir_all(&staging).map_err(|e| format!("创建临时目录失败: {e}"))?;
+        download_asset(
+            app,
+            CORE_PROGRESS_EVENT,
+            &apply_mirror(mirror, &info.asset_url),
+            info.asset_size,
+            &staging.join(STAGED_ASSET_FILE),
+        )
+        .await?;
+        emit_progress(app, CORE_PROGRESS_EVENT, "extract", 0, 0);
+    }
+    let record_path = app.directory.join(CORE_HASH_RECORD);
+    let info = info.clone();
+    tokio::task::spawn_blocking(move || {
+        let files = staging.join("files");
+        let extracted = match reusable {
+            Some(extracted) => extracted,
+            None => {
+                let extracted = platform::extract_core_files(
+                    &staging.join(STAGED_ASSET_FILE),
+                    &info.asset_name,
+                    &files,
+                    &info.asset_digest,
+                )?;
+                let manifest = serde_json::to_vec(&StagedCore {
+                    asset_url: info.asset_url,
+                    asset_size: info.asset_size,
+                    asset_digest: info.asset_digest.clone(),
+                })
+                .map_err(|e| e.to_string())?;
+                std::fs::write(staging.join(STAGED_MANIFEST), manifest)
+                    .map_err(|e| format!("写入清单失败: {e}"))?;
+                extracted
+            }
+        };
+        let core_hash = if platform::is_raw_asset(&info.asset_name) {
+            core_asset_hash(&info.asset_digest)?.to_ascii_lowercase()
+        } else {
+            let core_hash = platform::core_file_hash(&files.join(platform::CORE_NAME))?;
+            let record = CoreHashRecord {
+                asset_digest: info.asset_digest,
+                core_hash: core_hash.clone(),
+            };
+            if let Ok(bytes) = serde_json::to_vec(&record) {
+                let _ = std::fs::write(record_path, bytes);
+            }
+            core_hash
+        };
+        Ok((extracted, core_hash))
+    })
+    .await
+    .map_err(|e| format!("任务执行失败: {e}"))?
+}
+
+pub(crate) async fn core_matches_release(
+    app: &UpdateContext,
+    target: &Path,
+    info: &CoreUpdateInfo,
+    mirror: &Option<String>,
+) -> Result<bool, String> {
+    let _guard = UPDATE_LOCK.lock().await;
+    let target = target.to_owned();
+    let installed = tokio::task::spawn_blocking(move || platform::core_file_hash(&target))
+        .await
+        .map_err(|e| format!("任务执行失败: {e}"))??;
+    let digest = core_asset_hash(&info.asset_digest)?;
+    if platform::is_raw_asset(&info.asset_name) {
+        return Ok(installed.eq_ignore_ascii_case(digest));
+    }
+    if let Ok(bytes) = std::fs::read(app.directory.join(CORE_HASH_RECORD))
+        && let Ok(record) = serde_json::from_slice::<CoreHashRecord>(&bytes)
+        && record.asset_digest.eq_ignore_ascii_case(&info.asset_digest)
+        && is_sha256(&record.core_hash)
+    {
+        return Ok(installed.eq_ignore_ascii_case(&record.core_hash));
+    }
+    let result = prepare_core(app, info, mirror)
+        .await
+        .map(|(_, hash)| installed.eq_ignore_ascii_case(&hash));
+    if !matches!(result, Ok(false)) {
+        let _ = std::fs::remove_dir_all(app.directory.join("core-update"));
+    }
+    result
 }
 
 pub(crate) fn emit_progress(
@@ -842,18 +985,18 @@ fn parse_core_version(text: &str) -> Option<CoreVersion> {
     })
 }
 
-pub(crate) fn is_core_up_to_date(latest: &str, installed: &str) -> bool {
+pub(crate) fn compare_installed_core(installed: &str, latest: &str) -> Option<Ordering> {
     let latest_norm = normalize_core_version(latest);
     let installed_norm = normalize_core_version(installed);
     if latest_norm.is_empty() || installed_norm.is_empty() {
-        return false;
+        return None;
     }
     if latest_norm.eq_ignore_ascii_case(installed_norm) {
-        return true;
+        return Some(Ordering::Equal);
     }
     match (parse_core_version(latest_norm), parse_core_version(installed_norm)) {
-        (Some(l), Some(i)) if l.fork == i.fork => (i.base, i.stage) >= (l.base, l.stage),
-        _ => false,
+        (Some(l), Some(i)) if l.fork == i.fork => Some((i.base, i.stage).cmp(&(l.base, l.stage))),
+        _ => None,
     }
 }
 
@@ -1252,39 +1395,25 @@ mod tests {
 
     #[test]
     fn core_version_comparison_handles_prereleases_and_forks() {
-        assert!(is_core_up_to_date(
-            "v1.15.0-alpha.13-Yuu",
-            "sing-box version 1.15.0-alpha.13-Yuu"
-        ));
-        assert!(is_core_up_to_date(
-            "v1.15.0-alpha.13-Yuu",
-            "1.15.0-alpha.13-Yuu"
-        ));
-        assert!(is_core_up_to_date(
-            "v1.15.0-alpha.9-Yuu",
-            "1.15.0-alpha.13-Yuu"
-        ));
-        assert!(!is_core_up_to_date(
-            "v1.15.0-alpha.13-Yuu",
-            "1.15.0-alpha.9-Yuu"
-        ));
-        assert!(!is_core_up_to_date(
-            "v1.15.0-beta.1-Yuu",
-            "1.15.0-alpha.13-Yuu"
-        ));
-        assert!(!is_core_up_to_date(
-            "v1.15.0-Yuu",
-            "1.15.0-rc.2-Yuu"
-        ));
-        assert!(!is_core_up_to_date(
-            "v1.15.0-alpha.13-Yuu",
-            "1.15.0-alpha.13"
-        ));
-        assert!(!is_core_up_to_date(
-            "v1.15.0-alpha.13",
-            "1.15.0-alpha.13-Yuu"
-        ));
-        assert!(!is_core_up_to_date("v1.15.0-alpha.13-Yuu", ""));
+        let latest = "v1.15.0-alpha.13-Yuu";
+        for (installed, expected) in [
+            (
+                "sing-box version 1.15.0-alpha.13-Yuu",
+                Some(Ordering::Equal),
+            ),
+            ("1.15.0-alpha.13-Yuu", Some(Ordering::Equal)),
+            ("1.15.0-alpha.9-Yuu", Some(Ordering::Less)),
+            ("1.15.0-beta.1-Yuu", Some(Ordering::Greater)),
+            ("1.15.0-alpha.13", None),
+            ("", None),
+        ] {
+            assert_eq!(compare_installed_core(installed, latest), expected);
+        }
+        assert_eq!(
+            compare_installed_core("1.15.0-rc.2-Yuu", "v1.15.0-Yuu"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(compare_installed_core(latest, "1.15.0-alpha.13"), None);
     }
 
     #[test]

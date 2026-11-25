@@ -419,7 +419,7 @@ class _CoreUpdateDialogState extends State<_CoreUpdateDialog> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '发现新核心版本',
+                  '发现核心更新',
                   style: TextStyle(
                     color: c.ink,
                     fontSize: 18,
