@@ -303,7 +303,10 @@ class _CatalogPageState extends State<CatalogPage> {
   bool matching = false;
   bool get readable => widget.preferences['nativeRootEnabled'] == true;
 
-  bool providers = false, busy = false, updating = false, sortByLatency = false;
+  bool providers = false, busy = false, sortByLatency = false;
+  final updatingProviders = <String>{};
+  bool updatingAllProviders = false;
+  int providerUpdateGeneration = 0;
   bool preExpanded = false;
   int generation = 0;
   String query = '', error = '';
@@ -351,6 +354,9 @@ class _CatalogPageState extends State<CatalogPage> {
     if (endpointChanged || widget.reconnectGeneration != old.reconnectGeneration) {
       _resetTesting();
       togglingRules.clear();
+      providerUpdateGeneration++;
+      updatingProviders.clear();
+      updatingAllProviders = false;
       if (endpointChanged) {
         delays.clear();
         v6Nodes.clear();
@@ -570,24 +576,79 @@ class _CatalogPageState extends State<CatalogPage> {
     );
   }
 
-  Future<void> providerAction(Item item, String op) async {
-    if (updating) return;
-    setState(() => updating = true);
+  List<String> _updatableProviderNames() => [
+    for (final item in providerItems)
+      if ((item['vehicleType']?.toString() ?? '').toLowerCase() != 'inline')
+        if ((item['name']?.toString() ?? '').isNotEmpty)
+          item['name'].toString(),
+  ];
+
+  Future<void> updateProvider(Item item) async {
+    final name = item['name']?.toString() ?? '';
+    if (name.isEmpty ||
+        updatingAllProviders ||
+        updatingProviders.contains(name)) {
+      return;
+    }
+    final runGen = providerUpdateGeneration;
+    final endpoint = widget.endpoint;
+    final secret = widget.secret;
+    final op = widget.proxies ? 'update_proxy_provider' : 'update_rule_provider';
+    setState(() => updatingProviders.add(name));
     try {
-      await clashRequest(widget.endpoint, widget.secret, op, {
-        if (op == 'update_providers') ...{
-          'proxies': widget.proxies,
-          'names': providerItems.map((v) => v['name']).toList(),
-        } else
-          'name': item['name'],
-      });
-      if (mounted) await load();
+      await clashRequest(endpoint, secret, op, {'name': name});
+      if (!mounted || runGen != providerUpdateGeneration) return;
+      await load(silent: true);
     } catch (e) {
-      if (mounted) {
+      if (mounted && runGen == providerUpdateGeneration) {
         showGlassToast(context, e.toString());
       }
     } finally {
-      if (mounted) setState(() => updating = false);
+      if (mounted && runGen == providerUpdateGeneration) {
+        setState(() => updatingProviders.remove(name));
+      }
+    }
+  }
+
+  Future<void> updateAllProviders() async {
+    if (updatingAllProviders || updatingProviders.isNotEmpty) return;
+    final names = _updatableProviderNames();
+    if (names.isEmpty) return;
+    final runGen = providerUpdateGeneration;
+    final endpoint = widget.endpoint;
+    final secret = widget.secret;
+    final op = widget.proxies ? 'update_proxy_provider' : 'update_rule_provider';
+    setState(() {
+      updatingAllProviders = true;
+      updatingProviders.addAll(names);
+    });
+    final failures = <String>[];
+    try {
+      for (final name in names) {
+        if (!mounted || runGen != providerUpdateGeneration) return;
+        try {
+          await clashRequest(endpoint, secret, op, {'name': name});
+        } catch (e) {
+          failures.add('$name · $e');
+        }
+        if (!mounted || runGen != providerUpdateGeneration) return;
+        setState(() => updatingProviders.remove(name));
+      }
+      if (mounted && runGen == providerUpdateGeneration) {
+        await load(silent: true);
+        if (failures.isNotEmpty &&
+            mounted &&
+            runGen == providerUpdateGeneration) {
+          showGlassToast(context, failures.join('\n'));
+        }
+      }
+    } finally {
+      if (mounted && runGen == providerUpdateGeneration) {
+        setState(() {
+          updatingAllProviders = false;
+          updatingProviders.removeAll(names);
+        });
+      }
     }
   }
 
@@ -1907,12 +1968,30 @@ class _CatalogPageState extends State<CatalogPage> {
                           onPressed: () => testProvider(item),
                         ),
                       if (vehicle.toLowerCase() != 'inline')
-                        IconButton(
-                          tooltip: '更新',
-                          icon: PanelIcon('refresh', size: 18, color: c.primary),
-                          onPressed: updating
-                              ? null
-                              : () => providerAction(item, 'update_proxy_provider'),
+                        Builder(
+                          builder: (_) {
+                            final itemUpdating = updatingProviders.contains(name);
+                            final disabled = itemUpdating || updatingAllProviders;
+                            return IconButton(
+                              tooltip: itemUpdating ? '正在更新' : '更新',
+                              style: itemUpdating
+                                  ? IconButton.styleFrom(
+                                      backgroundColor: c.primarySoft,
+                                      disabledBackgroundColor: c.primarySoft,
+                                    )
+                                  : null,
+                              icon: SpinningPanelIcon(
+                                'refresh',
+                                size: 18,
+                                color: !itemUpdating && disabled
+                                    ? c.primary.withValues(alpha: 0.45)
+                                    : c.primary,
+                                spinning: itemUpdating,
+                              ),
+                              onPressed:
+                                  disabled ? null : () => updateProvider(item),
+                            );
+                          },
                         ),
                     ],
                   ),
@@ -2886,16 +2965,32 @@ class _CatalogPageState extends State<CatalogPage> {
             ),
             if (!isInline) ...[
               const SizedBox(width: 4),
-              GestureDetector(
-                onTap: updating
-                    ? null
-                    : () => providerAction(item, 'update_rule_provider'),
-                child: Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(shape: BoxShape.circle, color: c.fill),
-                  child: PanelIcon('refresh', size: 16, color: c.ink),
-                ),
+              Builder(
+                builder: (_) {
+                  final itemUpdating = updatingProviders.contains(name);
+                  final disabled = itemUpdating || updatingAllProviders;
+                  return GestureDetector(
+                    onTap: disabled ? null : () => updateProvider(item),
+                    child: Container(
+                      width: 30,
+                      height: 30,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: itemUpdating ? c.primarySoft : c.fill,
+                      ),
+                      child: SpinningPanelIcon(
+                        'refresh',
+                        size: 16,
+                        color: itemUpdating
+                            ? c.selectionInk
+                            : (disabled
+                                ? c.muted.withValues(alpha: 0.45)
+                                : c.ink),
+                        spinning: itemUpdating,
+                      ),
+                    ),
+                  );
+                },
               ),
             ],
           ],
@@ -2980,16 +3075,33 @@ class _CatalogPageState extends State<CatalogPage> {
               ),
             )),
             if (providers)
-              GestureDetector(
-                onTap: updating || providerItems.isEmpty ? null : () => providerAction({}, 'update_providers'),
-                child: GlassControl(
-                  radius: 999,
-                  child: SizedBox(
-                    width: 32,
-                    height: 32,
-                    child: PanelIcon('refresh', size: 16, color: providerItems.isEmpty ? c.muted : c.ink),
-                  ),
-                ),
+              Builder(
+                builder: (_) {
+                  final hasUpdatable = _updatableProviderNames().isNotEmpty;
+                  final spinning = updatingAllProviders;
+                  final disabled = spinning ||
+                      updatingProviders.isNotEmpty ||
+                      !hasUpdatable;
+                  return GestureDetector(
+                    onTap: disabled ? null : updateAllProviders,
+                    child: GlassControl(
+                      radius: 999,
+                      tint: spinning ? c.primarySoft : null,
+                      child: SizedBox(
+                        width: 32,
+                        height: 32,
+                        child: SpinningPanelIcon(
+                          'refresh',
+                          size: 16,
+                          color: spinning
+                              ? c.selectionInk
+                              : (disabled ? c.muted : c.ink),
+                          spinning: spinning,
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
           ],
         ),
@@ -3042,7 +3154,7 @@ class _CatalogPageState extends State<CatalogPage> {
               style: TextStyle(fontSize: 12, color: c.dangerInk),
             ),
           ),
-        if (busy || updating || matching)
+        if (busy || matching)
           const Padding(
             padding: EdgeInsets.only(top: 8),
             child: LinearProgressIndicator(minHeight: 2),

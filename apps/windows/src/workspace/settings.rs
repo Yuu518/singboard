@@ -124,6 +124,25 @@ pub(super) fn loading_spinner(id: impl Into<ElementId>, size: Pixels, color: Rgb
         .into_any_element()
 }
 
+pub(super) fn refresh_icon(
+    id: impl Into<ElementId>,
+    size: Pixels,
+    color: Rgba,
+    spinning: bool,
+) -> AnyElement {
+    let icon = svg().path("refresh").size(size).text_color(color);
+    if spinning {
+        icon.with_animation(
+            id,
+            Animation::new(std::time::Duration::from_millis(850)).repeat(),
+            |el, delta| el.with_transformation(Transformation::rotate(percentage(delta))),
+        )
+        .into_any_element()
+    } else {
+        icon.into_any_element()
+    }
+}
+
 fn btn_body(
     spinner_id: &'static str,
     label: impl Into<SharedString>,

@@ -1402,17 +1402,37 @@ impl Workspace {
                     )
                     .child(tabs)
                     .when(self.show_providers, |el| {
-                        let disabled = self.busy || self.providers.is_empty();
-                        let names: Vec<String> =
-                            self.providers.iter().map(|p| p.0.clone()).collect();
+                        let names: Vec<String> = self
+                            .providers
+                            .iter()
+                            .filter(|(_, item)| {
+                                !item["vehicleType"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .eq_ignore_ascii_case("inline")
+                            })
+                            .map(|(name, _)| name.clone())
+                            .collect();
+                        let spinning = self.updating_all_providers;
+                        let disabled = spinning
+                            || !self.updating_providers.is_empty()
+                            || names.is_empty();
                         el.child(
                             div()
                                 .id("rules-update-all")
                                 .role(Role::Button)
-                                .aria_label("更新全部规则提供商")
-                                .tooltip(|window, cx| {
-                                    gpui_component::tooltip::Tooltip::new("更新全部规则提供商")
-                                        .build(window, cx)
+                                .aria_label(if spinning {
+                                    "正在更新全部规则提供商"
+                                } else {
+                                    "更新全部规则提供商"
+                                })
+                                .tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(if spinning {
+                                        "正在更新全部规则提供商"
+                                    } else {
+                                        "更新全部规则提供商"
+                                    })
+                                    .build(window, cx)
                                 })
                                 .size(px(32.))
                                 .flex_none()
@@ -1424,22 +1444,16 @@ impl Workspace {
                                     d.cursor_pointer()
                                         .hover(|s| s.bg(palette.fill_strong()))
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.apply(
-                                                Action::Run(Command::UpdateProviders {
-                                                    proxies: false,
-                                                    names: names.clone(),
-                                                }),
-                                                cx,
-                                            );
+                                            this.update_all_providers(false, names.clone(), cx);
                                         }))
                                 })
-                                .when(disabled, |d| d.opacity(0.45))
-                                .child(
-                                    svg()
-                                        .path("refresh")
-                                        .size(px(16.))
-                                        .text_color(crate::glass::backdrop_ink(palette, cx)),
-                                ),
+                                .when(!spinning && disabled, |d| d.opacity(0.45))
+                                .child(super::settings::refresh_icon(
+                                    "rules-update-all-spin",
+                                    px(16.),
+                                    crate::glass::backdrop_ink(palette, cx),
+                                    spinning,
+                                )),
                         )
                     }),
             );
@@ -1830,43 +1844,66 @@ impl Workspace {
                                                             ),
                                                     );
                                                 if !is_inline {
+                                                    let updating =
+                                                        this.updating_providers.contains(name);
+                                                    let disabled =
+                                                        updating || this.updating_all_providers;
                                                     line = line.child(
                                                         div()
                                                             .id(("rp-update", i))
                                                             .role(Role::Button)
-                                                            .aria_label("更新")
-                                                            .tooltip(|window, cx| {
-                                                                gpui_component::tooltip::Tooltip::new("更新")
-                                                                    .build(window, cx)
+                                                            .aria_label(if updating {
+                                                                "正在更新"
+                                                            } else {
+                                                                "更新"
                                                             })
-                                                            .cursor_pointer()
+                                                            .tooltip(move |window, cx| {
+                                                                gpui_component::tooltip::Tooltip::new(
+                                                                    if updating {
+                                                                        "正在更新"
+                                                                    } else {
+                                                                        "更新"
+                                                                    },
+                                                                )
+                                                                .build(window, cx)
+                                                            })
                                                             .size(px(28.))
                                                             .flex_none()
                                                             .rounded_full()
                                                             .flex()
                                                             .items_center()
                                                             .justify_center()
-                                                            .hover(|s| s.bg(p.fill()))
-                                                            .text_xs()
-                                                            .text_color(p.muted())
-                                                            .child(
-                                                                svg()
-                                                                    .path("refresh")
-                                                                    .size(px(14.))
-                                                                    .text_color(p.muted()),
-                                                            )
-                                                            .on_click(cx.listener(
-                                                                move |this, _, _, cx| {
-                                                                    cx.stop_propagation();
-                                                                    this.apply(
-                                                                        Action::Run(
-                                                                            Command::UpdateRuleProvider {
-                                                                                name: update_name.clone(),
-                                                                            },
-                                                                        ),
-                                                                        cx,
-                                                                    );
+                                                            .when(updating, |d| {
+                                                                d.bg(p.primary_soft())
+                                                            })
+                                                            .when(!disabled, |d| {
+                                                                d.cursor_pointer()
+                                                                    .hover(|s| s.bg(p.fill()))
+                                                                    .on_click(cx.listener(
+                                                                        move |this, _, _, cx| {
+                                                                            cx.stop_propagation();
+                                                                            this.update_provider(
+                                                                                false,
+                                                                                update_name.clone(),
+                                                                                cx,
+                                                                            );
+                                                                        },
+                                                                    ))
+                                                            })
+                                                            .when(!updating && disabled, |d| {
+                                                                d.opacity(0.45)
+                                                            })
+                                                            .child(super::settings::refresh_icon(
+                                                                SharedString::from(format!(
+                                                                    "rp-up-spin-{name}"
+                                                                )),
+                                                                px(14.),
+                                                                if updating {
+                                                                    p.accent()
+                                                                } else {
+                                                                    p.muted()
                                                                 },
+                                                                updating,
                                                             )),
                                                     );
                                                 }

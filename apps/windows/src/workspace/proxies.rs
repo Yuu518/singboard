@@ -565,17 +565,37 @@ impl Workspace {
                     )
                     .child(tabs)
                     .when(self.show_providers, |el| {
-                        let disabled = self.busy || self.providers.is_empty();
-                        let names: Vec<String> =
-                            self.providers.iter().map(|p| p.0.clone()).collect();
+                        let names: Vec<String> = self
+                            .providers
+                            .iter()
+                            .filter(|(_, item)| {
+                                !item["vehicleType"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .eq_ignore_ascii_case("inline")
+                            })
+                            .map(|(name, _)| name.clone())
+                            .collect();
+                        let spinning = self.updating_all_providers;
+                        let disabled = spinning
+                            || !self.updating_providers.is_empty()
+                            || names.is_empty();
                         el.child(
                             div()
                                 .id("proxy-prov-update-all")
                                 .role(Role::Button)
-                                .aria_label("更新全部代理提供商")
-                                .tooltip(|window, cx| {
-                                    gpui_component::tooltip::Tooltip::new("更新全部代理提供商")
-                                        .build(window, cx)
+                                .aria_label(if spinning {
+                                    "正在更新全部代理提供商"
+                                } else {
+                                    "更新全部代理提供商"
+                                })
+                                .tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(if spinning {
+                                        "正在更新全部代理提供商"
+                                    } else {
+                                        "更新全部代理提供商"
+                                    })
+                                    .build(window, cx)
                                 })
                                 .size(px(32.))
                                 .flex_none()
@@ -587,22 +607,16 @@ impl Workspace {
                                     d.cursor_pointer()
                                         .hover(|s| s.bg(palette.fill_strong()))
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.apply(
-                                                Action::Run(Command::UpdateProviders {
-                                                    proxies: true,
-                                                    names: names.clone(),
-                                                }),
-                                                cx,
-                                            );
+                                            this.update_all_providers(true, names.clone(), cx);
                                         }))
                                 })
-                                .when(disabled, |d| d.opacity(0.45))
-                                .child(
-                                    svg()
-                                        .path("refresh")
-                                        .size(px(16.))
-                                        .text_color(crate::glass::backdrop_ink(palette, cx)),
-                                ),
+                                .when(!spinning && disabled, |d| d.opacity(0.45))
+                                .child(super::settings::refresh_icon(
+                                    "proxy-prov-update-all-spin",
+                                    px(16.),
+                                    crate::glass::backdrop_ink(palette, cx),
+                                    spinning,
+                                )),
                         )
                     }),
             )
@@ -908,39 +922,44 @@ impl Workspace {
                     };
                     let mut actions = div().flex().items_center().gap_1().child(hc_btn);
                     if !vehicle.eq_ignore_ascii_case("inline") {
+                        let updating = self.updating_providers.contains(name);
+                        let disabled = updating || self.updating_all_providers;
+                        let update_name = name.clone();
                         actions = actions.child(
                             div()
                                 .id(("pp-up", pi))
                                 .role(Role::Button)
-                                .aria_label("更新")
-                                .tooltip(|window, cx| {
-                                    gpui_component::tooltip::Tooltip::new("更新").build(window, cx)
+                                .aria_label(if updating { "正在更新" } else { "更新" })
+                                .tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(if updating {
+                                        "正在更新"
+                                    } else {
+                                        "更新"
+                                    })
+                                    .build(window, cx)
                                 })
-                                .cursor_pointer()
                                 .size(px(32.))
                                 .flex_none()
                                 .rounded_full()
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .hover(|s| s.bg(palette.fill()))
-                                .child(
-                                    svg()
-                                        .path("refresh")
-                                        .size(px(18.))
-                                        .text_color(palette.accent()),
-                                )
-                                .on_click(cx.listener({
-                                    let name = name.clone();
-                                    move |this, _, _, cx| {
-                                        this.apply(
-                                            Action::Run(Command::UpdateProxyProvider {
-                                                name: name.clone(),
-                                            }),
-                                            cx,
-                                        );
-                                    }
-                                })),
+                                .when(updating, |d| d.bg(palette.primary_soft()))
+                                .when(!disabled, |d| {
+                                    d.cursor_pointer()
+                                        .hover(|s| s.bg(palette.fill()))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.update_provider(true, update_name.clone(), cx);
+                                        }))
+                                })
+                                .when(!updating && disabled, |d| d.opacity(0.45))
+                                .child(super::settings::refresh_icon(
+                                    SharedString::from(format!("pp-up-spin-{name}")),
+                                    px(18.),
+                                    palette.accent(),
+                                    updating,
+                                )),
                         );
                     }
                     card = card.child(

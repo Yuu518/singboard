@@ -197,6 +197,8 @@ pub struct Workspace {
     rules: Vec<Value>,
     rule_browser: rules::RuleBrowser,
     providers: Vec<(String, Value)>,
+    updating_providers: std::collections::HashSet<String>,
+    updating_all_providers: bool,
     show_providers: bool,
     snapshot: Option<Arc<Value>>,
     closed: VecDeque<Value>,
@@ -314,6 +316,8 @@ impl Workspace {
         self.generation += 1;
         self.busy = false;
         self.refreshing = false;
+        self.updating_providers.clear();
+        self.updating_all_providers = false;
         self.proxy_ui.clear_testing();
         self.groups.clear();
         self.rules.clear();
@@ -754,6 +758,8 @@ impl Workspace {
             toasts: None,
             busy: false,
             refreshing: false,
+            updating_providers: std::collections::HashSet::new(),
+            updating_all_providers: false,
             generation: 0,
         })
     }
@@ -1610,6 +1616,8 @@ impl Workspace {
         self.generation += 1;
         self.busy = false;
         self.refreshing = false;
+        self.updating_providers.clear();
+        self.updating_all_providers = false;
         self.proxy_ui.clear_testing();
         self.show_providers = false;
         if self.filter.is_none() {
@@ -1995,6 +2003,133 @@ impl Workspace {
         cx.notify();
     }
 
+    fn apply_providers(&mut self, data: Value, proxies: bool, cx: &mut Context<Self>) {
+        self.providers = data["providers"]
+            .as_object()
+            .map(|p| p.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+        if !proxies && self.page == Page::Rules {
+            self.schedule_rule_search(cx);
+        }
+    }
+
+    pub(super) fn update_provider(&mut self, proxies: bool, name: String, cx: &mut Context<Self>) {
+        if self.updating_all_providers || self.updating_providers.contains(&name) {
+            return;
+        }
+        self.updating_providers.insert(name.clone());
+        let generation = self.generation;
+        let api = self.api.clone();
+        let command = if proxies {
+            Command::UpdateProxyProvider { name: name.clone() }
+        } else {
+            Command::UpdateRuleProvider { name: name.clone() }
+        };
+        let list_cmd = if proxies {
+            Command::ProxyProviders
+        } else {
+            Command::RuleProviders
+        };
+        let task = singboard_core::runtime().spawn(async move {
+            api.execute(command).await?;
+            let list = api.execute(list_cmd).await.ok();
+            Ok::<_, String>(list)
+        });
+        cx.spawn(async move |weak, cx| {
+            let result = task.await.unwrap_or_else(|e| Err(e.to_string()));
+            let _ = weak.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.updating_providers.remove(&name);
+                match result {
+                    Ok(Some(data)) => this.apply_providers(data, proxies, cx),
+                    Ok(None) => this.refresh(cx),
+                    Err(error) => this.message(error, true, cx),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(super) fn update_all_providers(
+        &mut self,
+        proxies: bool,
+        names: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.updating_all_providers || !self.updating_providers.is_empty() || names.is_empty() {
+            return;
+        }
+        self.updating_all_providers = true;
+        for name in &names {
+            self.updating_providers.insert(name.clone());
+        }
+        let generation = self.generation;
+        let api = self.api.clone();
+        let list_cmd = if proxies {
+            Command::ProxyProviders
+        } else {
+            Command::RuleProviders
+        };
+        cx.spawn(async move |weak, cx| {
+            let mut failures = Vec::new();
+            for name in names {
+                let api_req = api.clone();
+                let req_name = name.clone();
+                let cmd = if proxies {
+                    Command::UpdateProxyProvider { name: req_name }
+                } else {
+                    Command::UpdateRuleProvider { name: req_name }
+                };
+                let step = singboard_core::runtime()
+                    .spawn(async move { api_req.execute(cmd).await })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                if let Err(e) = step {
+                    failures.push(format!("{name} · {e}"));
+                }
+                let mut alive = false;
+                let _ = weak.update(cx, |this, cx| {
+                    if this.generation != generation {
+                        return;
+                    }
+                    alive = true;
+                    this.updating_providers.remove(&name);
+                    cx.notify();
+                });
+                if !alive {
+                    return;
+                }
+            }
+            let list = singboard_core::runtime()
+                .spawn(async move { api.execute(list_cmd).await })
+                .await
+                .ok()
+                .and_then(Result::ok);
+            let _ = weak.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.updating_all_providers = false;
+                this.updating_providers.clear();
+                if let Some(data) = list {
+                    this.apply_providers(data, proxies, cx);
+                } else {
+                    this.refresh(cx);
+                }
+                if !failures.is_empty() {
+                    this.message(failures.join("\n"), true, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn set_node_delay(&mut self, name: &str, delay: Option<u64>) {
         for node in self
             .groups
@@ -2247,6 +2382,8 @@ impl Workspace {
                 self.generation += 1;
                 self.busy = false;
                 self.refreshing = false;
+                self.updating_providers.clear();
+                self.updating_all_providers = false;
                 self.proxy_ui.clear_testing();
                 self.show_providers = !self.show_providers;
                 if self.page == Page::Rules {

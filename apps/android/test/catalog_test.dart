@@ -1,5 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:singboard_native/catalog_page.dart';
+import 'package:singboard_native/glass_ui.dart';
 
 void main() {
   test('formatUpdatedRelative handles RFC3339 timestamps and zero times', () {
@@ -22,5 +24,43 @@ void main() {
     );
     expect(formatUpdatedRelative('0001-01-01T00:00:00Z', now: now), '');
     expect(formatUpdatedRelative('', now: now), '');
+  });
+
+  testWidgets('SpinningPanelIcon rotates while spinning and settles when stopped', (
+    tester,
+  ) async {
+    Future<void> pumpIcon(bool spinning) {
+      return tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SpinningPanelIcon(
+                'refresh',
+                size: 16,
+                color: Colors.blue,
+                spinning: spinning,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    await pumpIcon(false);
+    final transition = () => tester.widget<RotationTransition>(
+      find.descendant(
+        of: find.byType(SpinningPanelIcon),
+        matching: find.byType(RotationTransition),
+      ),
+    );
+    expect(transition().turns.value, 0.0);
+
+    await pumpIcon(true);
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(transition().turns.value, greaterThan(0.0));
+
+    await pumpIcon(false);
+    await tester.pumpAndSettle();
+    expect(transition().turns.value, 0.0);
   });
 }

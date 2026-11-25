@@ -31,6 +31,76 @@ class PanelIcon extends StatelessWidget {
   ));
 }
 
+class SpinningPanelIcon extends StatefulWidget {
+  final String name;
+  final double size;
+  final Color color;
+  final bool spinning;
+
+  const SpinningPanelIcon(
+    this.name, {
+    super.key,
+    required this.size,
+    required this.color,
+    required this.spinning,
+  });
+
+  @override
+  State<SpinningPanelIcon> createState() => _SpinningPanelIconState();
+}
+
+class _SpinningPanelIconState extends State<SpinningPanelIcon>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 850),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.spinning) _controller.repeat();
+  }
+
+  @override
+  void didUpdateWidget(SpinningPanelIcon old) {
+    super.didUpdateWidget(old);
+    if (widget.spinning && !old.spinning) {
+      _controller.repeat();
+    } else if (!widget.spinning && old.spinning) {
+      final rem = 1.0 - _controller.value;
+      if (rem > 0.02) {
+        _controller
+            .animateTo(
+              1.0,
+              duration: Duration(milliseconds: (rem * 500).round().clamp(80, 500)),
+              curve: Curves.easeOut,
+            )
+            .then((_) {
+              if (mounted && !widget.spinning) _controller.value = 0;
+            });
+      } else {
+        _controller.stop();
+        _controller.value = 0;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RotationTransition(
+      turns: _controller,
+      child: PanelIcon(widget.name, size: widget.size, color: widget.color),
+    );
+  }
+}
+
 double panelGutter(BuildContext context) => MediaQuery.sizeOf(context).width >= 768 ? 24 : 12;
 
 class SingboardColors {
