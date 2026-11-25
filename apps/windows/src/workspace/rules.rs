@@ -1413,47 +1413,43 @@ impl Workspace {
                             })
                             .map(|(name, _)| name.clone())
                             .collect();
-                        let spinning = self.updating_all_providers;
+                        let progress = self.updating_all_providers;
+                        let spinning = progress.is_some();
                         let disabled = spinning
                             || !self.updating_providers.is_empty()
                             || names.is_empty();
+                        let label = match progress {
+                            Some((done, total)) => format!("更新中 {done}/{total}"),
+                            None => "全部更新".into(),
+                        };
                         el.child(
-                            div()
-                                .id("rules-update-all")
-                                .role(Role::Button)
-                                .aria_label(if spinning {
-                                    "正在更新全部规则提供商"
-                                } else {
-                                    "更新全部规则提供商"
-                                })
-                                .tooltip(move |window, cx| {
-                                    gpui_component::tooltip::Tooltip::new(if spinning {
-                                        "正在更新全部规则提供商"
-                                    } else {
-                                        "更新全部规则提供商"
-                                    })
-                                    .build(window, cx)
-                                })
-                                .size(px(32.))
-                                .flex_none()
-                                .rounded_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .when(!disabled, |d| {
-                                    d.cursor_pointer()
-                                        .hover(|s| s.bg(palette.fill_strong()))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.update_all_providers(false, names.clone(), cx);
-                                        }))
-                                })
-                                .when(!spinning && disabled, |d| d.opacity(0.45))
-                                .child(super::settings::refresh_icon(
+                            super::settings::backdrop_action_pill(
+                                "rules-update-all",
+                                super::settings::refresh_icon(
                                     "rules-update-all-spin",
-                                    px(16.),
-                                    crate::glass::backdrop_ink(palette, cx),
+                                    px(13.),
+                                    if spinning {
+                                        palette.accent()
+                                    } else {
+                                        palette.ink().opacity(0.78)
+                                    },
                                     spinning,
-                                )),
+                                ),
+                                label,
+                                spinning,
+                                disabled,
+                                palette,
+                            )
+                            .aria_label(if spinning {
+                                "正在更新全部规则提供商"
+                            } else {
+                                "更新全部规则提供商"
+                            })
+                            .when(!disabled, |d| {
+                                d.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| {
+                                    this.update_all_providers(false, names.clone(), cx);
+                                }))
+                            }),
                         )
                     }),
             );
@@ -1846,8 +1842,8 @@ impl Workspace {
                                                 if !is_inline {
                                                     let updating =
                                                         this.updating_providers.contains(name);
-                                                    let disabled =
-                                                        updating || this.updating_all_providers;
+                                                    let disabled = updating
+                                                        || this.updating_all_providers.is_some();
                                                     line = line.child(
                                                         div()
                                                             .id(("rp-update", i))
@@ -1870,15 +1866,25 @@ impl Workspace {
                                                             .size(px(28.))
                                                             .flex_none()
                                                             .rounded_full()
+                                                            .border_1()
+                                                            .border_color(if updating {
+                                                                p.selection_border()
+                                                            } else {
+                                                                p.control_rim()
+                                                            })
+                                                            .bg(if updating {
+                                                                p.primary_soft()
+                                                            } else {
+                                                                p.fill()
+                                                            })
                                                             .flex()
                                                             .items_center()
                                                             .justify_center()
-                                                            .when(updating, |d| {
-                                                                d.bg(p.primary_soft())
-                                                            })
                                                             .when(!disabled, |d| {
                                                                 d.cursor_pointer()
-                                                                    .hover(|s| s.bg(p.fill()))
+                                                                    .hover(|s| {
+                                                                        s.bg(p.fill_strong())
+                                                                    })
                                                                     .on_click(cx.listener(
                                                                         move |this, _, _, cx| {
                                                                             cx.stop_propagation();
@@ -1901,7 +1907,7 @@ impl Workspace {
                                                                 if updating {
                                                                     p.accent()
                                                                 } else {
-                                                                    p.muted()
+                                                                    p.ink().opacity(0.78)
                                                                 },
                                                                 updating,
                                                             )),

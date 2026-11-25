@@ -305,7 +305,7 @@ class _CatalogPageState extends State<CatalogPage> {
 
   bool providers = false, busy = false, sortByLatency = false;
   final updatingProviders = <String>{};
-  bool updatingAllProviders = false;
+  (int, int)? updatingAllProviders;
   int providerUpdateGeneration = 0;
   bool preExpanded = false;
   int generation = 0;
@@ -356,7 +356,7 @@ class _CatalogPageState extends State<CatalogPage> {
       togglingRules.clear();
       providerUpdateGeneration++;
       updatingProviders.clear();
-      updatingAllProviders = false;
+      updatingAllProviders = null;
       if (endpointChanged) {
         delays.clear();
         v6Nodes.clear();
@@ -586,7 +586,7 @@ class _CatalogPageState extends State<CatalogPage> {
   Future<void> updateProvider(Item item) async {
     final name = item['name']?.toString() ?? '';
     if (name.isEmpty ||
-        updatingAllProviders ||
+        updatingAllProviders != null ||
         updatingProviders.contains(name)) {
       return;
     }
@@ -611,15 +611,17 @@ class _CatalogPageState extends State<CatalogPage> {
   }
 
   Future<void> updateAllProviders() async {
-    if (updatingAllProviders || updatingProviders.isNotEmpty) return;
+    if (updatingAllProviders != null || updatingProviders.isNotEmpty) return;
     final names = _updatableProviderNames();
     if (names.isEmpty) return;
     final runGen = providerUpdateGeneration;
     final endpoint = widget.endpoint;
     final secret = widget.secret;
     final op = widget.proxies ? 'update_proxy_provider' : 'update_rule_provider';
+    final total = names.length;
+    var done = 0;
     setState(() {
-      updatingAllProviders = true;
+      updatingAllProviders = (0, total);
       updatingProviders.addAll(names);
     });
     final failures = <String>[];
@@ -632,7 +634,11 @@ class _CatalogPageState extends State<CatalogPage> {
           failures.add('$name · $e');
         }
         if (!mounted || runGen != providerUpdateGeneration) return;
-        setState(() => updatingProviders.remove(name));
+        done++;
+        setState(() {
+          updatingProviders.remove(name);
+          updatingAllProviders = (done, total);
+        });
       }
       if (mounted && runGen == providerUpdateGeneration) {
         await load(silent: true);
@@ -645,7 +651,7 @@ class _CatalogPageState extends State<CatalogPage> {
     } finally {
       if (mounted && runGen == providerUpdateGeneration) {
         setState(() {
-          updatingAllProviders = false;
+          updatingAllProviders = null;
           updatingProviders.removeAll(names);
         });
       }
@@ -1622,51 +1628,32 @@ class _CatalogPageState extends State<CatalogPage> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       if (groupProgress != null)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: c.primarySoft,
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              SizedBox.square(
-                                dimension: 11,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 1.6,
-                                  color: c.selectionInk,
-                                ),
-                              ),
-                              const SizedBox(width: 5),
-                              Text(
-                                '测速中 ${groupProgress.$1}/${groupProgress.$2}',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                  color: c.selectionInk,
-                                  fontFeatures: const [FontFeature.tabularFigures()],
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      else
-                        GestureDetector(
-                          onTap: () => testGroup(group),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                            child: Text(
-                              '延迟测试',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: c.ink,
-                              ),
+                        _buildActionPill(
+                          icon: SizedBox.square(
+                            dimension: 11,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.6,
+                              color: c.selectionInk,
                             ),
                           ),
+                          label: '${groupProgress.$1}/${groupProgress.$2}',
+                          c: c,
+                          active: true,
+                          disabled: true,
+                        )
+                      else
+                        _buildActionPill(
+                          icon: PanelIcon(
+                            'bolt',
+                            size: 13,
+                            color: c.ink.withValues(alpha: 0.78),
+                          ),
+                          label: '测速',
+                          c: c,
+                          tooltip: '延迟测试',
+                          onTap: () => testGroup(group),
                         ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 4),
                       Visibility(
                         visible: hasSpeed,
                         maintainSize: true,
@@ -1827,6 +1814,57 @@ class _CatalogPageState extends State<CatalogPage> {
     );
   }
 
+  Widget _buildActionPill({
+    required Widget icon,
+    required String label,
+    required SingboardColors c,
+    bool active = false,
+    bool disabled = false,
+    VoidCallback? onTap,
+    String? tooltip,
+  }) {
+    final fg = active ? c.selectionInk : c.ink;
+    Widget pill = Opacity(
+      opacity: !active && disabled ? 0.45 : 1.0,
+      child: Material(
+        color: active ? c.primarySoft : c.fill,
+        shape: StadiumBorder(
+          side: BorderSide(
+            color: active ? c.selectionBorder : c.hairline,
+            width: active ? 0.85 : 0.65,
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: disabled ? null : onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4.5),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                icon,
+                const SizedBox(width: 4.5),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: fg,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (tooltip != null) {
+      pill = Tooltip(message: tooltip, child: pill);
+    }
+    return pill;
+  }
+
   Widget _buildProxyProviderCard(Item item, SingboardColors c) {
     final name = item['name']?.toString() ?? '';
     final nodes = (item['proxies'] as List? ?? []).cast<Item>();
@@ -1859,7 +1897,7 @@ class _CatalogPageState extends State<CatalogPage> {
               if (!expandedProviders.remove(name)) expandedProviders.add(name);
             }),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+              padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1881,14 +1919,14 @@ class _CatalogPageState extends State<CatalogPage> {
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 6),
-                            Text(
-                              '${nodes.length} 个节点 ($tested 已测试)',
-                              style: TextStyle(fontSize: 12, color: c.muted),
-                            ),
                             const SizedBox(width: 4),
                             AnimatedRotation(turns: open ? .25 : 0, duration: const Duration(milliseconds: 200), child: PanelIcon('chevron', size: 14, color: c.muted)),
                           ],
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          '${nodes.length} 个节点 ($tested 已测试)',
+                          style: TextStyle(fontSize: 12, color: c.muted),
                         ),
                         if (total > 0) ...[
                           const SizedBox(height: 4),
@@ -1927,72 +1965,62 @@ class _CatalogPageState extends State<CatalogPage> {
                       ],
                     ),
                   ),
+                  const SizedBox(width: 8),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       if (providerProgress != null)
-                        Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 4),
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: c.primarySoft,
-                            borderRadius: BorderRadius.circular(999),
+                        _buildActionPill(
+                          icon: SizedBox.square(
+                            dimension: 11,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.6,
+                              color: c.selectionInk,
+                            ),
                           ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              SizedBox.square(
-                                dimension: 12,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 1.6,
-                                  color: c.selectionInk,
-                                ),
-                              ),
-                              const SizedBox(width: 5),
-                              Text(
-                                '${providerProgress.$1}/${providerProgress.$2}',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                  color: c.selectionInk,
-                                  fontFeatures: const [FontFeature.tabularFigures()],
-                                ),
-                              ),
-                            ],
-                          ),
+                          label: '${providerProgress.$1}/${providerProgress.$2}',
+                          c: c,
+                          active: true,
+                          disabled: true,
                         )
                       else
-                        IconButton(
+                        _buildActionPill(
+                          icon: PanelIcon(
+                            'bolt',
+                            size: 13,
+                            color: c.ink.withValues(alpha: 0.78),
+                          ),
+                          label: '测速',
+                          c: c,
                           tooltip: '健康检查',
-                          icon: PanelIcon('bolt', size: 18, color: c.muted),
-                          onPressed: () => testProvider(item),
+                          onTap: () => testProvider(item),
                         ),
-                      if (vehicle.toLowerCase() != 'inline')
+                      if (vehicle.toLowerCase() != 'inline') ...[
+                        const SizedBox(width: 6),
                         Builder(
                           builder: (_) {
                             final itemUpdating = updatingProviders.contains(name);
-                            final disabled = itemUpdating || updatingAllProviders;
-                            return IconButton(
-                              tooltip: itemUpdating ? '正在更新' : '更新',
-                              style: itemUpdating
-                                  ? IconButton.styleFrom(
-                                      backgroundColor: c.primarySoft,
-                                      disabledBackgroundColor: c.primarySoft,
-                                    )
-                                  : null,
+                            final disabled =
+                                itemUpdating || updatingAllProviders != null;
+                            return _buildActionPill(
                               icon: SpinningPanelIcon(
                                 'refresh',
-                                size: 18,
-                                color: !itemUpdating && disabled
-                                    ? c.primary.withValues(alpha: 0.45)
-                                    : c.primary,
+                                size: 13,
+                                color: itemUpdating
+                                    ? c.selectionInk
+                                    : c.ink.withValues(alpha: 0.78),
                                 spinning: itemUpdating,
                               ),
-                              onPressed:
-                                  disabled ? null : () => updateProvider(item),
+                              label: itemUpdating ? '更新中' : '更新',
+                              c: c,
+                              active: itemUpdating,
+                              disabled: disabled,
+                              tooltip: itemUpdating ? '正在更新' : '更新',
+                              onTap: () => updateProvider(item),
                             );
                           },
                         ),
+                      ],
                     ],
                   ),
                 ],
@@ -2964,29 +2992,39 @@ class _CatalogPageState extends State<CatalogPage> {
               ),
             ),
             if (!isInline) ...[
-              const SizedBox(width: 4),
+              const SizedBox(width: 8),
               Builder(
                 builder: (_) {
                   final itemUpdating = updatingProviders.contains(name);
-                  final disabled = itemUpdating || updatingAllProviders;
-                  return GestureDetector(
-                    onTap: disabled ? null : () => updateProvider(item),
-                    child: Container(
-                      width: 30,
-                      height: 30,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
+                  final disabled = itemUpdating || updatingAllProviders != null;
+                  return Tooltip(
+                    message: itemUpdating ? '正在更新' : '更新',
+                    child: Opacity(
+                      opacity: !itemUpdating && disabled ? 0.45 : 1.0,
+                      child: Material(
                         color: itemUpdating ? c.primarySoft : c.fill,
-                      ),
-                      child: SpinningPanelIcon(
-                        'refresh',
-                        size: 16,
-                        color: itemUpdating
-                            ? c.selectionInk
-                            : (disabled
-                                ? c.muted.withValues(alpha: 0.45)
-                                : c.ink),
-                        spinning: itemUpdating,
+                        shape: CircleBorder(
+                          side: BorderSide(
+                            color: itemUpdating ? c.selectionBorder : c.hairline,
+                            width: itemUpdating ? 0.85 : 0.65,
+                          ),
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          onTap: disabled ? null : () => updateProvider(item),
+                          child: SizedBox(
+                            width: 28,
+                            height: 28,
+                            child: SpinningPanelIcon(
+                              'refresh',
+                              size: 14,
+                              color: itemUpdating
+                                  ? c.selectionInk
+                                  : c.ink.withValues(alpha: 0.78),
+                              spinning: itemUpdating,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   );
@@ -3074,35 +3112,65 @@ class _CatalogPageState extends State<CatalogPage> {
                 },
               ),
             )),
-            if (providers)
+            if (providers) ...[
+              const SizedBox(width: 8),
               Builder(
                 builder: (_) {
                   final hasUpdatable = _updatableProviderNames().isNotEmpty;
-                  final spinning = updatingAllProviders;
+                  final progress = updatingAllProviders;
+                  final spinning = progress != null;
                   final disabled = spinning ||
                       updatingProviders.isNotEmpty ||
                       !hasUpdatable;
-                  return GestureDetector(
-                    onTap: disabled ? null : updateAllProviders,
-                    child: GlassControl(
-                      radius: 999,
-                      tint: spinning ? c.primarySoft : null,
-                      child: SizedBox(
-                        width: 32,
-                        height: 32,
-                        child: SpinningPanelIcon(
-                          'refresh',
-                          size: 16,
-                          color: spinning
-                              ? c.selectionInk
-                              : (disabled ? c.muted : c.ink),
-                          spinning: spinning,
+                  final fg = spinning ? c.selectionInk : c.ink;
+                  return Opacity(
+                    opacity: !spinning && disabled ? 0.45 : 1.0,
+                    child: GestureDetector(
+                      onTap: disabled ? null : updateAllProviders,
+                      child: GlassControl(
+                        radius: 999,
+                        tint: spinning ? c.primarySoft : null,
+                        borderColor: spinning ? c.selectionBorder : null,
+                        child: Container(
+                          constraints: const BoxConstraints(minHeight: 30),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 5,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SpinningPanelIcon(
+                                'refresh',
+                                size: 13.5,
+                                color: spinning
+                                    ? c.selectionInk
+                                    : c.ink.withValues(alpha: 0.78),
+                                spinning: spinning,
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                progress != null
+                                    ? '更新中 ${progress.$1}/${progress.$2}'
+                                    : '全部更新',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: fg,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   );
                 },
               ),
+            ],
           ],
         ),
         const SizedBox(height: 10),

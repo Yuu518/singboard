@@ -143,6 +143,87 @@ pub(super) fn refresh_icon(
     }
 }
 
+pub(super) fn backdrop_action_pill(
+    id: impl Into<ElementId>,
+    icon: AnyElement,
+    label: impl Into<SharedString>,
+    active: bool,
+    disabled: bool,
+    p: Palette,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .relative()
+        .overflow_hidden()
+        .flex_none()
+        .h(crate::theme::text_px(30.))
+        .rounded_full()
+        .border_1()
+        .border_color(if active {
+            p.selection_border().opacity(0.6)
+        } else {
+            p.control_rim()
+        })
+        .when(!active && disabled, |el| el.opacity(0.45))
+        .child(crate::glass::control_layer(p, px(999.), !active))
+        .child(
+            div()
+                .relative()
+                .h_full()
+                .px(px(11.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .whitespace_nowrap()
+                .text_color(if active { p.accent() } else { p.ink() })
+                .when(active, |el| el.bg(p.primary_soft()))
+                .when(!disabled, |el| el.hover(|s| s.bg(p.fill_strong())))
+                .child(icon)
+                .child(label.into()),
+        )
+}
+
+pub(super) fn card_action_pill(
+    id: impl Into<ElementId>,
+    icon: AnyElement,
+    label: impl Into<SharedString>,
+    active: bool,
+    disabled: bool,
+    p: Palette,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .flex_none()
+        .h(crate::theme::text_px(26.))
+        .px(px(9.))
+        .rounded_full()
+        .border_1()
+        .border_color(if active {
+            p.selection_border()
+        } else {
+            p.control_rim()
+        })
+        .bg(if active { p.primary_soft() } else { p.fill() })
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .whitespace_nowrap()
+        .text_color(if active { p.accent() } else { p.ink() })
+        .when(!disabled, |el| {
+            el.cursor_pointer().hover(|s| s.bg(p.fill_strong()))
+        })
+        .when(!active && disabled, |el| el.opacity(0.45))
+        .child(icon)
+        .child(label.into())
+}
+
 fn btn_body(
     spinner_id: &'static str,
     label: impl Into<SharedString>,

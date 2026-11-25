@@ -606,6 +606,7 @@ class GlassControl extends StatelessWidget {
   final Widget child;
   final double radius;
   final Color? tint;
+  final Color? borderColor;
   final bool bordered;
 
   const GlassControl({
@@ -613,6 +614,7 @@ class GlassControl extends StatelessWidget {
     required this.child,
     this.radius = 10,
     this.tint,
+    this.borderColor,
     this.bordered = true,
   });
 
@@ -623,10 +625,11 @@ class GlassControl extends StatelessWidget {
     final fill = tint ?? c.fill;
     final edge = bordered
         ? Border.all(
-            color: c.dark
-                ? Colors.white.withValues(alpha: .12)
-                : Colors.black.withValues(alpha: .08),
-            width: 0.5,
+            color: borderColor ??
+                (c.dark
+                    ? Colors.white.withValues(alpha: .12)
+                    : Colors.black.withValues(alpha: .08)),
+            width: borderColor != null ? 0.85 : 0.5,
           )
         : null;
     if (!scope.hasWallpaper || scope.inPopover) {

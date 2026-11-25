@@ -198,7 +198,7 @@ pub struct Workspace {
     rule_browser: rules::RuleBrowser,
     providers: Vec<(String, Value)>,
     updating_providers: std::collections::HashSet<String>,
-    updating_all_providers: bool,
+    updating_all_providers: Option<(usize, usize)>,
     show_providers: bool,
     snapshot: Option<Arc<Value>>,
     closed: VecDeque<Value>,
@@ -317,7 +317,7 @@ impl Workspace {
         self.busy = false;
         self.refreshing = false;
         self.updating_providers.clear();
-        self.updating_all_providers = false;
+        self.updating_all_providers = None;
         self.proxy_ui.clear_testing();
         self.groups.clear();
         self.rules.clear();
@@ -759,7 +759,7 @@ impl Workspace {
             busy: false,
             refreshing: false,
             updating_providers: std::collections::HashSet::new(),
-            updating_all_providers: false,
+            updating_all_providers: None,
             generation: 0,
         })
     }
@@ -1617,7 +1617,7 @@ impl Workspace {
         self.busy = false;
         self.refreshing = false;
         self.updating_providers.clear();
-        self.updating_all_providers = false;
+        self.updating_all_providers = None;
         self.proxy_ui.clear_testing();
         self.show_providers = false;
         if self.filter.is_none() {
@@ -2014,7 +2014,7 @@ impl Workspace {
     }
 
     pub(super) fn update_provider(&mut self, proxies: bool, name: String, cx: &mut Context<Self>) {
-        if self.updating_all_providers || self.updating_providers.contains(&name) {
+        if self.updating_all_providers.is_some() || self.updating_providers.contains(&name) {
             return;
         }
         self.updating_providers.insert(name.clone());
@@ -2060,10 +2060,14 @@ impl Workspace {
         names: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        if self.updating_all_providers || !self.updating_providers.is_empty() || names.is_empty() {
+        if self.updating_all_providers.is_some()
+            || !self.updating_providers.is_empty()
+            || names.is_empty()
+        {
             return;
         }
-        self.updating_all_providers = true;
+        let total = names.len();
+        self.updating_all_providers = Some((0, total));
         for name in &names {
             self.updating_providers.insert(name.clone());
         }
@@ -2098,6 +2102,9 @@ impl Workspace {
                     }
                     alive = true;
                     this.updating_providers.remove(&name);
+                    if let Some((done, total)) = &mut this.updating_all_providers {
+                        *done = (*done + 1).min(*total);
+                    }
                     cx.notify();
                 });
                 if !alive {
@@ -2113,7 +2120,7 @@ impl Workspace {
                 if this.generation != generation {
                     return;
                 }
-                this.updating_all_providers = false;
+                this.updating_all_providers = None;
                 this.updating_providers.clear();
                 if let Some(data) = list {
                     this.apply_providers(data, proxies, cx);
@@ -2383,7 +2390,7 @@ impl Workspace {
                 self.busy = false;
                 self.refreshing = false;
                 self.updating_providers.clear();
-                self.updating_all_providers = false;
+                self.updating_all_providers = None;
                 self.proxy_ui.clear_testing();
                 self.show_providers = !self.show_providers;
                 if self.page == Page::Rules {
