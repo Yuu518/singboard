@@ -287,7 +287,11 @@ pub struct Workspace {
     pub(crate) toasts: Option<Entity<toast::ToastHost>>,
     busy: bool,
     refreshing: bool,
+    summary_inflight: bool,
+    summary_pending: bool,
+    last_summary_read: std::time::Instant,
     generation: u64,
+    endpoint_generation: u64,
 }
 
 impl Workspace {
@@ -316,8 +320,11 @@ impl Workspace {
         self.conn_feed = conn_feed;
         self.log_subscribed_level = log_level;
         self.generation += 1;
+        self.endpoint_generation += 1;
         self.busy = false;
         self.refreshing = false;
+        self.summary_inflight = false;
+        self.summary_pending = false;
         self.updating_providers.clear();
         self.updating_all_providers = None;
         self.proxy_ui.clear_testing();
@@ -763,10 +770,14 @@ impl Workspace {
             toasts: None,
             busy: false,
             refreshing: false,
+            summary_inflight: false,
+            summary_pending: false,
+            last_summary_read: std::time::Instant::now(),
             updating_providers: std::collections::HashSet::new(),
             updating_all_providers: None,
             segment_sliders: std::cell::RefCell::new(std::collections::HashMap::new()),
             generation: 0,
+            endpoint_generation: 0,
         })
     }
 
@@ -1153,9 +1164,14 @@ impl Workspace {
         }
         self.closed.truncate(500);
         self.poll_due_remote_profiles(cx);
+        if self.page == Page::Overview
+            && (reconnected || self.last_summary_read.elapsed().as_secs() >= 3)
+        {
+            self.refresh_summary(cx);
+        }
         if matches!(
             self.page,
-            Page::Proxies | Page::Rules | Page::Overview | Page::Logs | Page::Settings
+            Page::Proxies | Page::Rules | Page::Logs | Page::Settings
         ) && !self.refreshing
             && (reconnected || self.last_read.elapsed().as_secs() >= 30)
         {
@@ -1209,6 +1225,15 @@ impl Workspace {
                 .trim()
                 .to_ascii_lowercase()
         };
+        let exit_node = self.summary["exit"]["node"]
+            .as_str()
+            .unwrap_or("")
+            .trim();
+        let exit_direct = if self.summary["exit"]["direct"].as_bool().unwrap_or(false) {
+            "direct"
+        } else {
+            ""
+        };
         let mut selections: Vec<(String, String)> = if !self.groups.is_empty() {
             self.groups
                 .iter()
@@ -1226,7 +1251,7 @@ impl Workspace {
         } else {
             Vec::new()
         };
-        if mode.is_empty() && selections.is_empty() {
+        if mode.is_empty() && exit_node.is_empty() && selections.is_empty() {
             return String::new();
         }
         selections.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1235,7 +1260,7 @@ impl Workspace {
             .map(|(k, v)| format!("{k}={v}"))
             .collect::<Vec<_>>()
             .join(";");
-        format!("{mode}|{joined}")
+        format!("{mode}|{exit_node}|{exit_direct}|{joined}")
     }
 
     fn core_started_at(&self) -> Option<u64> {
@@ -1798,6 +1823,65 @@ impl Workspace {
         cx.notify();
     }
 
+    fn refresh_summary(&mut self, cx: &mut Context<Self>) {
+        if !self.api_enabled {
+            return;
+        }
+        if self.summary_inflight {
+            self.summary_pending = true;
+            return;
+        }
+        self.summary_inflight = true;
+        self.summary_pending = false;
+        self.last_summary_read = std::time::Instant::now();
+        let endpoint_generation = self.endpoint_generation;
+        let api = self.api.clone();
+        let task = singboard_core::runtime().spawn(async move { api.execute(Command::Summary).await });
+        cx.spawn(async move |weak, cx| {
+            let result = task.await.unwrap_or_else(|e| Err(e.to_string()));
+            let _ = weak.update(cx, |this, cx| {
+                if this.endpoint_generation != endpoint_generation {
+                    return;
+                }
+                this.summary_inflight = false;
+                match result {
+                    Ok(data) => {
+                        let mut changed = this.summary != data;
+                        if let Some(lvl) = data["config"]["log-level"].as_str() {
+                            let next_level = normalize_core_level(lvl);
+                            if this.core_level != next_level {
+                                this.core_level = next_level;
+                                if this.log_level == 0 {
+                                    this.resubscribe_logs();
+                                }
+                            }
+                        }
+                        if this.page == Page::Overview && !this.load_error.is_empty() {
+                            this.load_error.clear();
+                            changed = true;
+                        }
+                        this.summary = data;
+                        this.check_cached_proxy_fingerprint(cx);
+                        if changed {
+                            cx.notify();
+                        }
+                    }
+                    Err(error) => {
+                        if this.page == Page::Overview && this.summary.is_null() {
+                            this.load_error = error;
+                            cx.notify();
+                        }
+                    }
+                }
+                if this.summary_pending {
+                    this.summary_pending = false;
+                    this.refresh_summary(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.last_read = std::time::Instant::now();
         if self.page == Page::Config {
@@ -1812,13 +1896,16 @@ impl Workspace {
         if !self.api_enabled {
             return;
         }
+        if self.page == Page::Overview {
+            self.refresh_summary(cx);
+            return;
+        }
         let command = match (self.page, self.show_providers) {
             (Page::Proxies, false) => Command::Proxies,
             (Page::Proxies, true) => Command::ProxyProviders,
             (Page::Rules, false) => Command::Rules,
             (Page::Rules, true) => Command::RuleProviders,
             (Page::Settings | Page::Logs, _) => Command::Config,
-            (Page::Overview, _) => Command::Summary,
             _ => return,
         };
         self.run(command, cx);
@@ -1888,18 +1975,25 @@ impl Workspace {
             self.load_error.clear();
         }
         let generation = self.generation;
+        let endpoint_generation = self.endpoint_generation;
+        let is_exit_mutation = matches!(command, Command::Select { .. } | Command::SetMode { .. });
         let api = self.api.clone();
         let request = command.clone();
         let task = singboard_core::runtime().spawn(async move { api.execute(request).await });
         cx.spawn(async move |weak, cx| {
             let result = task.await.unwrap_or_else(|e| Err(e.to_string()));
             let _ = weak.update(cx, |this, cx| {
-                if this.generation != generation {
+                if is_exit_mutation {
+                    if this.endpoint_generation != endpoint_generation {
+                        return;
+                    }
+                } else if this.generation != generation {
                     return;
                 }
-                if is_read {
+                let same_page_gen = this.generation == generation;
+                if is_read && same_page_gen {
                     this.refreshing = false;
-                } else if is_exclusive_action {
+                } else if is_exclusive_action && same_page_gen {
                     this.busy = false;
                 }
                 if let Command::Delay { name, .. } = &command {
@@ -1984,16 +2078,24 @@ impl Workspace {
                         Command::Select { group, name } => {
                             if let Some(g) = this.groups.iter_mut().find(|g| g.name == group) {
                                 let old = std::mem::replace(&mut g.now, name.clone());
-                                this.undo = Some((group.clone(), old, std::time::Instant::now()));
+                                if same_page_gen {
+                                    this.undo = Some((group.clone(), old, std::time::Instant::now()));
+                                }
                             }
                             this.sync_group_selection_delay(&group, &name);
                             this.schedule_proxy_recheck(cx);
-                            this.refresh(cx);
+                            this.refresh_summary(cx);
+                            if same_page_gen {
+                                this.refresh(cx);
+                            }
                         }
                         Command::SetMode { mode } => {
                             this.mode = mode;
                             this.schedule_proxy_recheck(cx);
-                            this.refresh(cx);
+                            this.refresh_summary(cx);
+                            if same_page_gen {
+                                this.refresh(cx);
+                            }
                         }
                         Command::Summary => {
                             if let Some(lvl) = data["config"]["log-level"].as_str() {

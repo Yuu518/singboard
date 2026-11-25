@@ -563,7 +563,14 @@ impl Workspace {
                             .join(" › ")
                     })
                     .unwrap_or_default();
-                let latency = exit_val["latency"].as_u64();
+                let mut latency = exit_val["latency"].as_u64();
+                if !direct
+                    && let Some(super::proxies::CachedDelay::Failed { server_delay }) =
+                        self.node_delays.get(&node)
+                    && latency == *server_delay
+                {
+                    latency = Some(0);
+                }
                 (node, via, direct, latency)
             } else {
                 let route = self.summary["route"].as_str().unwrap_or("");

@@ -259,6 +259,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   String connectionStatus = '连接中', keyword = '', level = '跟随核心';
   int endpointRevision = 0;
   Timer? timer, profileTimer, summaryTimer, _summaryRetryTimer;
+  int _summaryTickCount = 0;
   bool _readingSummary = false, _summaryPending = false;
   int _reconnectGeneration = 0;
   Item summary = {}, metrics = {};
@@ -385,7 +386,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     _pendingTab = null;
     _swipeProgress.value = null;
     setState(() => tab = next);
-    if (next == 0) _syncNetwork();
+    if (next == 0) _onEnterOverview();
     if (!_pager.hasClients) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _pager.hasClients) _pager.jumpToPage(tab);
@@ -517,6 +518,16 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     if (current.isNotEmpty && current != abroadFingerprint) {
       _scheduleProxyRecheck();
     }
+  }
+
+  void _onEnterOverview() {
+    _syncNetwork();
+    if (timer != null) unawaited(readSummary());
+  }
+
+  void _onProxyChanged() {
+    _scheduleProxyRecheck();
+    if (timer != null) unawaited(readSummary());
   }
 
   void _scheduleProxyRecheck() {
@@ -1101,9 +1112,15 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     }
     if (timer != null) return;
     unawaited(readSummary());
+    _summaryTickCount = 0;
     summaryTimer ??= Timer.periodic(
-      const Duration(seconds: 30),
-      (_) => readSummary(),
+      const Duration(seconds: 3),
+      (_) {
+        _summaryTickCount++;
+        if (tab == 0 || _summaryTickCount % 10 == 0) {
+          unawaited(readSummary());
+        }
+      },
     );
     try {
       final eff = _effectiveLogLevel();
@@ -3657,7 +3674,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       chainSpeeds:
           (metrics['chainSpeeds'] as Map<String, dynamic>?) ??
               const {},
-      onProxyChanged: index == 1 ? _scheduleProxyRecheck : null,
+      onProxyChanged: index == 1 ? _onProxyChanged : null,
     ),
     2 => ConnectionsPage(
       key: ValueKey(endpointRevision),
@@ -3835,7 +3852,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                                     if (settled != tab) {
                                       if (settled != 0) hoveredTopology = null;
                                       setState(() => tab = settled);
-                                      if (settled == 0) _syncNetwork();
+                                      if (settled == 0) _onEnterOverview();
                                     }
                                   }
                                   return false;
@@ -3856,7 +3873,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                                     } else if (tab != i) {
                                       if (i != 0) hoveredTopology = null;
                                       setState(() => tab = i);
-                                      if (i == 0) _syncNetwork();
+                                      if (i == 0) _onEnterOverview();
                                     }
                                   },
                                   itemBuilder: (_, i) => _page(i),
