@@ -1,6 +1,6 @@
 [package]
 name = "singboard-core"
-version = "5.1.2"
+version = "5.1.3"
 edition = "2024"
 publish = false
 
