@@ -823,6 +823,7 @@ pub fn backdrop_image(cx: &App) -> Option<Arc<RenderImage>> {
     cx.try_global::<CardBackdrop>().and_then(|b| b.image.clone())
 }
 
+#[derive(Clone, Copy)]
 pub struct NavSelectionStyle {
     pub bg: gpui::Rgba,
     pub border: gpui::Rgba,

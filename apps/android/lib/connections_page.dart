@@ -689,10 +689,14 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                 ),
                 const SizedBox(width: 12),
                 GlassSegmented<bool>(
-                  items: [
-                    (false, '活跃 (${activeMatches.length})'),
-                    (true, '已关闭 (${historyMatches.length})'),
+                  items: const [
+                    (false, '活跃'),
+                    (true, '已关闭'),
                   ],
+                  counts: {
+                    false: activeMatches.length,
+                    true: historyMatches.length,
+                  },
                   value: closed,
                   onChanged: (v) => setState(() => closed = v),
                 ),

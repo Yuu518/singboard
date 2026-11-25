@@ -340,8 +340,14 @@ impl Palette {
     pub fn control_rim(self) -> Rgba {
         rgba(self.choose(0x00000010, 0xffffff1c))
     }
+    pub fn segment_track(self) -> Rgba {
+        rgba(self.choose(0x3c3c430f, 0xffffff14))
+    }
     pub fn thumb(self) -> Rgba {
-        rgb(self.choose(0xffffff, 0x636366))
+        rgba(self.choose(0xffffffcc, 0xffffff28))
+    }
+    pub fn thumb_rim(self) -> Rgba {
+        rgba(self.choose(0xffffffeb, 0xffffff38))
     }
     pub fn tile(self) -> Rgba {
         rgba(self.choose(0xffffff38, 0xffffff14))

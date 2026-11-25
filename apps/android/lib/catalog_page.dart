@@ -3091,19 +3091,14 @@ class _CatalogPageState extends State<CatalogPage> {
               scrollDirection: Axis.horizontal,
               child: GlassSegmented<bool>(
                 items: [
-                  (
-                    false,
-                    widget.proxies
-                        ? '代理组 (${items.length})'
-                        : '规则 (${items.length})',
-                  ),
-                  if (providersAvailable) (
-                    true,
-                    widget.proxies
-                        ? '代理提供商 (${providerItems.length})'
-                        : '规则提供商 (${providerItems.length})',
-                  ),
+                  (false, widget.proxies ? '代理组' : '规则'),
+                  if (providersAvailable)
+                    (true, widget.proxies ? '代理提供商' : '规则提供商'),
                 ],
+                counts: {
+                  false: items.length,
+                  if (providersAvailable) true: providerItems.length,
+                },
                 value: providers,
                 onChanged: (v) {
                   setState(() { providers = v; query = ''; _searchCtrl.clear(); });

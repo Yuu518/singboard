@@ -161,8 +161,12 @@ class SingboardColors {
       dark ? const Color(0x57767680) : const Color(0x33767680);
   Color get hairline =>
       dark ? const Color(0x80545458) : const Color(0x1F3C3C43);
+  Color get segmentTrack =>
+      dark ? const Color(0x14FFFFFF) : const Color(0x0F3C3C43);
   Color get segmentThumb =>
-      dark ? const Color(0xFF636366) : const Color(0xFFFFFFFF);
+      dark ? const Color(0x2BFFFFFF) : const Color(0xCCFFFFFF);
+  Color get segmentThumbRim =>
+      dark ? const Color(0x38FFFFFF) : const Color(0xEBFFFFFF);
   Color get glassRgb =>
       dark ? const Color(0xFF2C2C30) : const Color(0xFFFFFFFF);
   Color get backdropVeil =>
@@ -1168,63 +1172,191 @@ class GlassSearchField extends StatelessWidget {
   }
 }
 
-class GlassSegmented<T> extends StatelessWidget {
+class GlassSegmented<T> extends StatefulWidget {
   final List<(T, String)> items;
+  final Map<T, int>? counts;
   final T value;
   final ValueChanged<T> onChanged;
 
   const GlassSegmented({
     super.key,
     required this.items,
+    this.counts,
     required this.value,
     required this.onChanged,
   });
 
   @override
+  State<GlassSegmented<T>> createState() => _GlassSegmentedState<T>();
+}
+
+class _GlassSegmentedState<T> extends State<GlassSegmented<T>> {
+  final GlobalKey _stackKey = GlobalKey();
+  final Map<T, GlobalKey> _itemKeys = {};
+  double? _lensLeft;
+  double? _lensWidth;
+  bool _ready = false;
+
+  GlobalKey _keyFor(T key) => _itemKeys.putIfAbsent(key, GlobalKey.new);
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleMeasure();
+  }
+
+  @override
+  void didUpdateWidget(GlassSegmented<T> old) {
+    super.didUpdateWidget(old);
+    final activeKeys = {for (final (k, _) in widget.items) k};
+    _itemKeys.removeWhere((k, _) => !activeKeys.contains(k));
+    _scheduleMeasure();
+  }
+
+  void _scheduleMeasure() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final stackBox =
+          _stackKey.currentContext?.findRenderObject() as RenderBox?;
+      final itemBox =
+          _itemKeys[widget.value]?.currentContext?.findRenderObject()
+              as RenderBox?;
+      if (stackBox == null || itemBox == null || !stackBox.hasSize || !itemBox.hasSize) {
+        return;
+      }
+      final offset = itemBox.localToGlobal(Offset.zero, ancestor: stackBox);
+      final nextLeft = offset.dx;
+      final nextWidth = itemBox.size.width;
+      if (_lensLeft != nextLeft || _lensWidth != nextWidth || !_ready) {
+        setState(() {
+          _lensLeft = nextLeft;
+          _lensWidth = nextWidth;
+          _ready = true;
+        });
+      }
+    });
+  }
+
+  BoxDecoration _lensDecoration(
+    SingboardColors c,
+    ({Color bg, Color border, Color ink}) sel,
+  ) => BoxDecoration(
+    color: sel.bg,
+    borderRadius: BorderRadius.circular(999),
+    border: Border.all(color: sel.border, width: 0.85),
+    boxShadow: [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: c.dark ? 0.22 : 0.08),
+        blurRadius: c.dark ? 8 : 6,
+        offset: const Offset(0, 1.5),
+      ),
+    ],
+  );
+
+  @override
   Widget build(BuildContext context) {
     final c = SingboardColors.of(context);
+    final scope = GlassScope.of(context);
+    final sel = scope.navSelectionStyle(c, barAlpha: scope.controlAlpha);
+    final disableAnim = MediaQuery.disableAnimationsOf(context);
+    final showSlider = _ready && _lensLeft != null && _lensWidth != null;
+
     return GlassControl(
       radius: 999,
+      tint: c.segmentTrack,
       child: Padding(
         padding: const EdgeInsets.all(2.5),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
+        child: Stack(
+          key: _stackKey,
           children: [
-            for (final (key, label) in items)
-              GestureDetector(
-                onTap: () => onChanged(key),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOutCubic,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: key == value ? c.segmentThumb : Colors.transparent,
-                    borderRadius: BorderRadius.circular(999),
-                    boxShadow: key == value
-                        ? [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.12),
-                              blurRadius: 4,
-                              offset: const Offset(0, 1),
-                            ),
-                          ]
-                        : null,
-                  ),
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: key == value
-                          ? FontWeight.w600
-                          : FontWeight.w500,
-                      color: key == value ? c.ink : c.muted,
-                    ),
-                  ),
+            if (showSlider)
+              AnimatedPositioned(
+                duration: disableAnim
+                    ? Duration.zero
+                    : const Duration(milliseconds: 240),
+                curve: Curves.easeOutCubic,
+                left: _lensLeft!,
+                top: 0,
+                bottom: 0,
+                width: _lensWidth!,
+                child: IgnorePointer(
+                  child: DecoratedBox(decoration: _lensDecoration(c, sel)),
                 ),
               ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final (key, label) in widget.items)
+                  Builder(
+                    builder: (_) {
+                      final selected = key == widget.value;
+                      final count = widget.counts?[key];
+                      final fg = selected ? sel.ink : c.ink;
+                      return GestureDetector(
+                        key: _keyFor(key),
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => widget.onChanged(key),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 11,
+                            vertical: 4.5,
+                          ),
+                          decoration: !showSlider && selected
+                              ? _lensDecoration(c, sel)
+                              : null,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                label,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: selected
+                                      ? FontWeight.w600
+                                      : FontWeight.w500,
+                                  color: selected
+                                      ? fg
+                                      : fg.withValues(alpha: 0.68),
+                                ),
+                              ),
+                              if (count != null) ...[
+                                const SizedBox(width: 5),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 5.5,
+                                    vertical: 1,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: fg.withValues(
+                                      alpha: selected
+                                          ? (c.dark ? 0.16 : 0.10)
+                                          : (c.dark ? 0.08 : 0.05),
+                                    ),
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Text(
+                                    '$count',
+                                    style: TextStyle(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w500,
+                                      color: fg.withValues(
+                                        alpha: selected ? 0.78 : 0.48,
+                                      ),
+                                      fontFeatures: const [
+                                        FontFeature.tabularFigures(),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+              ],
+            ),
           ],
         ),
       ),

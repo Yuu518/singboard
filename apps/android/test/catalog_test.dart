@@ -63,4 +63,40 @@ void main() {
     await tester.pumpAndSettle();
     expect(transition().turns.value, 0.0);
   });
+
+  testWidgets('GlassSegmented renders count badges and slides on selection change', (
+    tester,
+  ) async {
+    var selected = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) => Center(
+              child: GlassSegmented<bool>(
+                items: const [(false, '代理组'), (true, '代理提供商')],
+                counts: const {false: 15, true: 5},
+                value: selected,
+                onChanged: (v) => setState(() => selected = v),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('代理组'), findsOneWidget);
+    expect(find.text('15'), findsOneWidget);
+    expect(find.text('代理提供商'), findsOneWidget);
+    expect(find.text('5'), findsOneWidget);
+    final before = tester.widget<AnimatedPositioned>(find.byType(AnimatedPositioned));
+    expect(before.left, 0.0);
+
+    await tester.tap(find.text('代理提供商'));
+    await tester.pumpAndSettle();
+    expect(selected, isTrue);
+    final after = tester.widget<AnimatedPositioned>(find.byType(AnimatedPositioned));
+    expect(after.left, greaterThan(0.0));
+  });
 }

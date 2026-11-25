@@ -610,7 +610,7 @@ impl Render for Editor {
             .gap(px(2.))
             .p(px(2.))
             .rounded_full()
-            .bg(palette.fill())
+            .bg(palette.segment_track())
             .border_1()
             .border_color(palette.control_rim())
             .child(
@@ -620,6 +620,12 @@ impl Render for Editor {
                     .px(px(10.))
                     .py(px(2.))
                     .rounded_full()
+                    .border_1()
+                    .border_color(if !in_module_mode {
+                        palette.thumb_rim()
+                    } else {
+                        rgba(0x00000000)
+                    })
                     .text_xs()
                     .when(!in_module_mode, |d| {
                         d.bg(palette.thumb())
@@ -627,7 +633,7 @@ impl Render for Editor {
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(palette.ink())
                     })
-                    .when(in_module_mode, |d| d.text_color(palette.ink().opacity(0.75)))
+                    .when(in_module_mode, |d| d.text_color(palette.ink().opacity(0.68)))
                     .child("整体编辑")
                     .on_click(cx.listener(|this, _, w, cx| {
                         if !this.module.is_empty() || !this.choices.is_empty() {
@@ -642,6 +648,12 @@ impl Render for Editor {
                     .px(px(10.))
                     .py(px(2.))
                     .rounded_full()
+                    .border_1()
+                    .border_color(if in_module_mode {
+                        palette.thumb_rim()
+                    } else {
+                        rgba(0x00000000)
+                    })
                     .text_xs()
                     .when(in_module_mode, |d| {
                         d.bg(palette.thumb())
@@ -649,7 +661,7 @@ impl Render for Editor {
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(palette.ink())
                     })
-                    .when(!in_module_mode, |d| d.text_color(palette.ink().opacity(0.75)))
+                    .when(!in_module_mode, |d| d.text_color(palette.ink().opacity(0.68)))
                     .child("分模块编辑")
                     .on_click(cx.listener(|this, _, w, cx| {
                         if this.busy || !this.module.is_empty() {

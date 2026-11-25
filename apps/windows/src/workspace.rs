@@ -185,6 +185,7 @@ pub struct Workspace {
     proxy_ui: proxies::ProxyUi,
     sort: bool,
     settings_layout: settings::SettingsLayout,
+    segment_sliders: std::cell::RefCell<std::collections::HashMap<&'static str, settings::SegmentSlider>>,
     tailscale: tailscale::TailscaleState,
     filter: Option<Entity<crate::search::Search>>,
     local: Option<crate::service::Snapshot>,
@@ -760,8 +761,17 @@ impl Workspace {
             refreshing: false,
             updating_providers: std::collections::HashSet::new(),
             updating_all_providers: None,
+            segment_sliders: std::cell::RefCell::new(std::collections::HashMap::new()),
             generation: 0,
         })
+    }
+
+    fn segment_slider(&self, key: &'static str) -> settings::SegmentSlider {
+        self.segment_sliders
+            .borrow_mut()
+            .entry(key)
+            .or_default()
+            .clone()
     }
 
     pub fn uptime(&self) -> Option<String> {
@@ -1601,6 +1611,9 @@ impl Workspace {
             self.conn_detail_scroll = ScrollHandle::new();
         }
         self.page = page;
+        if page_changed {
+            self.segment_sliders.borrow_mut().clear();
+        }
         if page == Page::Overview
             && self.local_state == CoreState::Running
             && self.proxy_dirty

@@ -224,6 +224,213 @@ pub(super) fn card_action_pill(
         .child(label.into())
 }
 
+#[derive(Default)]
+struct SegmentSliderInner {
+    track: Option<Bounds<Pixels>>,
+    slots: Vec<Option<Bounds<Pixels>>>,
+    active: Option<usize>,
+    last: Option<(f32, f32)>,
+    anim: Option<(std::time::Instant, f32, f32)>,
+}
+
+#[derive(Clone, Default)]
+pub(super) struct SegmentSlider(std::rc::Rc<std::cell::RefCell<SegmentSliderInner>>);
+
+impl SegmentSlider {
+    pub(super) fn prepare(&self, count: usize) {
+        let mut inner = self.0.borrow_mut();
+        if inner.slots.len() != count {
+            inner.slots.resize(count, None);
+        }
+    }
+
+    pub(super) fn track_element(
+        &self,
+        active: usize,
+        on_backdrop: bool,
+        sel: crate::glass::NavSelectionStyle,
+        p: Palette,
+    ) -> Div {
+        let pre_slider = self.0.clone();
+        let paint_slider = self.0.clone();
+        div()
+            .relative()
+            .overflow_hidden()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .p(px(2.))
+            .rounded_full()
+            .bg(p.segment_track())
+            .border_1()
+            .border_color(p.control_rim())
+            .when(on_backdrop, |el| {
+                el.child(crate::glass::control_layer(p, px(999.), false))
+            })
+            .child(
+                canvas(
+                    move |bounds, _, _| {
+                        pre_slider.borrow_mut().track = Some(bounds);
+                    },
+                    move |_, _, window, _| {
+                        let mut state = paint_slider.borrow_mut();
+                        let (Some(track), Some(target)) = (
+                            state.track,
+                            state.slots.get(active).copied().flatten(),
+                        ) else {
+                            return;
+                        };
+                        let target_x = f32::from(target.origin.x - track.origin.x);
+                        let target_w = f32::from(target.size.width);
+                        if state.active != Some(active) {
+                            if state.active.is_some()
+                                && let Some((from_x, from_w)) = state.last
+                            {
+                                state.anim =
+                                    Some((std::time::Instant::now(), from_x, from_w));
+                            }
+                            state.active = Some(active);
+                        }
+                        let (cur_x, cur_w) =
+                            if let Some((started, from_x, from_w)) = state.anim {
+                                let t = (started.elapsed().as_secs_f32() / 0.24)
+                                    .clamp(0., 1.);
+                                let ease = super::scrolling::ease_ios(t);
+                                if t < 1.0 {
+                                    window.request_animation_frame();
+                                } else {
+                                    state.anim = None;
+                                }
+                                (
+                                    from_x + (target_x - from_x) * ease,
+                                    from_w + (target_w - from_w) * ease,
+                                )
+                            } else {
+                                (target_x, target_w)
+                            };
+                        state.last = Some((cur_x, cur_w));
+                        let lens_bounds = Bounds::new(
+                            point(track.origin.x + px(cur_x), target.origin.y),
+                            size(px(cur_w), target.size.height),
+                        );
+                        let r = (lens_bounds.size.height * 0.5)
+                            .min(lens_bounds.size.width * 0.5);
+                        let dark = p.0;
+                        window.paint_drop_shadows(
+                            lens_bounds,
+                            r.into(),
+                            &[BoxShadow {
+                                color: hsla(
+                                    0.,
+                                    0.,
+                                    0.,
+                                    if dark { 0.28 } else { 0.08 },
+                                ),
+                                offset: point(px(0.), px(1.5)),
+                                blur_radius: px(if dark { 8. } else { 6. }),
+                                spread_radius: px(-0.5),
+                                inset: false,
+                            }],
+                        );
+                        window.paint_quad(quad(
+                            lens_bounds,
+                            r,
+                            sel.bg,
+                            px(1.),
+                            sel.border,
+                            BorderStyle::Solid,
+                        ));
+                        window.paint_inset_shadows(
+                            lens_bounds,
+                            r.into(),
+                            &[BoxShadow {
+                                color: hsla(
+                                    0.,
+                                    0.,
+                                    1.,
+                                    if dark { 0.16 } else { 0.36 },
+                                ),
+                                offset: point(px(0.), px(1.)),
+                                blur_radius: px(2.5),
+                                spread_radius: px(-0.5),
+                                inset: true,
+                            }],
+                        );
+                    },
+                )
+                .absolute()
+                .inset_0()
+                .size_full(),
+            )
+    }
+
+    pub(super) fn slot_measure(&self, index: usize) -> AnyElement {
+        let slider = self.0.clone();
+        canvas(
+            move |bounds, _, _| {
+                let mut inner = slider.borrow_mut();
+                if index < inner.slots.len() {
+                    inner.slots[index] = Some(bounds);
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+        .size_full()
+        .into_any_element()
+    }
+}
+
+pub(super) fn segment_label(
+    label: impl Into<SharedString>,
+    count: Option<usize>,
+    selected: bool,
+    sel_ink: Rgba,
+    p: Palette,
+) -> Div {
+    let fg = if selected { sel_ink } else { p.ink() };
+    let mut row = div()
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .text_xs()
+        .whitespace_nowrap()
+        .when(selected, |el| {
+            el.font_weight(FontWeight::SEMIBOLD).text_color(fg)
+        })
+        .when(!selected, |el| {
+            el.font_weight(FontWeight::MEDIUM)
+                .text_color(fg.opacity(0.68))
+        })
+        .child(label.into());
+    if let Some(n) = count {
+        row = row.child(
+            div()
+                .flex_none()
+                .h(crate::theme::text_px(16.))
+                .px(px(5.5))
+                .rounded_full()
+                .bg(fg.opacity(if selected {
+                    if p.0 { 0.16 } else { 0.10 }
+                } else if p.0 {
+                    0.08
+                } else {
+                    0.05
+                }))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(crate::theme::text_px(10.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(fg.opacity(if selected { 0.78 } else { 0.48 }))
+                .child(n.to_string()),
+        );
+    }
+    row
+}
+
 fn btn_body(
     spinner_id: &'static str,
     label: impl Into<SharedString>,
@@ -1269,40 +1476,33 @@ impl Workspace {
         let network_card = card().child(self.network_settings(&prefs, narrow, window, cx));
         let dns_card = card().child(self.dns_settings(&prefs, width, window, cx));
 
-        let mut theme_seg = div()
-            .flex()
-            .gap(px(2.))
-            .p(px(2.))
-            .rounded_full()
-            .bg(palette.fill())
-            .border_1()
-            .border_color(palette.control_rim());
-        for (i, (mode, name)) in [
+        let modes = [
             crate::theme::MODES[2],
             crate::theme::MODES[0],
             crate::theme::MODES[1],
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        ];
+        let active_theme_idx = modes
+            .iter()
+            .position(|(m, _)| *m == current_theme)
+            .unwrap_or(0);
+        let theme_slider = self.segment_slider("settings-theme");
+        theme_slider.prepare(modes.len());
+        let theme_sel = crate::glass::nav_selection_style(palette, self.glass_tint, cx);
+        let mut theme_seg = theme_slider.track_element(active_theme_idx, false, theme_sel, palette);
+        for (i, (mode, name)) in modes.into_iter().enumerate() {
+            let selected = current_theme == mode;
             theme_seg = theme_seg.child(
                 div()
                     .id(("set-theme", i))
+                    .relative()
                     .px(px(14.))
-                    .py(px(3.))
-                    .text_xs()
+                    .h(crate::theme::text_px(24.))
+                    .flex()
+                    .items_center()
                     .rounded_full()
                     .cursor_pointer()
-                    .when(current_theme == mode, |v| {
-                        v.bg(palette.thumb())
-                            .shadow_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(palette.ink())
-                    })
-                    .when(current_theme != mode, |v| {
-                        v.text_color(palette.ink().opacity(0.75))
-                    })
-                    .child(name)
+                    .child(theme_slider.slot_measure(i))
+                    .child(segment_label(name, None, selected, theme_sel.ink, palette))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if let Err(error) = crate::theme::Appearance::select(
                             mode,

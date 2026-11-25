@@ -280,18 +280,11 @@ impl Workspace {
         };
         let paused = self.frozen_connections.is_some();
 
-        let tabs = div()
-            .relative()
-            .overflow_hidden()
-            .flex()
-            .items_center()
-            .gap(px(2.))
-            .p(px(2.))
-            .rounded_full()
-            .bg(palette.fill())
-            .border_1()
-            .border_color(palette.control_rim())
-            .child(crate::glass::control_layer(palette, px(999.), true))
+        let conn_slider = self.segment_slider("connections-tabs");
+        conn_slider.prepare(2);
+        let conn_sel = crate::glass::nav_selection_style(palette, self.glass_tint, cx);
+        let tabs = conn_slider
+            .track_element(usize::from(self.history), true, conn_sel, palette)
             .child(
                 div()
                     .id("conn-tab-active")
@@ -300,19 +293,16 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .cursor_pointer()
-                    .px_3()
+                    .px(px(11.))
                     .rounded_full()
-                    .text_xs()
-                    .when(!self.history, |el| {
-                        el.bg(palette.thumb())
-                            .shadow_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(palette.ink())
-                    })
-                    .when(self.history, |el| {
-                        el.text_color(palette.ink().opacity(0.72))
-                    })
-                    .child(format!("活跃 ({active_count})"))
+                    .child(conn_slider.slot_measure(0))
+                    .child(super::settings::segment_label(
+                        "活跃",
+                        Some(active_count),
+                        !self.history,
+                        conn_sel.ink,
+                        palette,
+                    ))
                     .on_click(cx.listener(|this, _, _, cx| {
                         if this.history {
                             this.apply(Action::History, cx);
@@ -327,19 +317,16 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .cursor_pointer()
-                    .px_3()
+                    .px(px(11.))
                     .rounded_full()
-                    .text_xs()
-                    .when(self.history, |el| {
-                        el.bg(palette.thumb())
-                            .shadow_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(palette.ink())
-                    })
-                    .when(!self.history, |el| {
-                        el.text_color(palette.ink().opacity(0.72))
-                    })
-                    .child(format!("已关闭 ({closed_count})"))
+                    .child(conn_slider.slot_measure(1))
+                    .child(super::settings::segment_label(
+                        "已关闭",
+                        Some(closed_count),
+                        self.history,
+                        conn_sel.ink,
+                        palette,
+                    ))
                     .on_click(cx.listener(|this, _, _, cx| {
                         if !this.history {
                             this.apply(Action::History, cx);

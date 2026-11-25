@@ -641,7 +641,9 @@ impl Render for WallpaperEditor {
             .gap_1()
             .p(px(3.))
             .rounded_full()
-            .bg(palette.fill());
+            .bg(palette.segment_track())
+            .border_1()
+            .border_color(palette.control_rim());
         for (i, (preset, label)) in PRESETS.into_iter().enumerate() {
             let active = self.transform.aspect == preset;
             preset_row = preset_row.child(
@@ -650,13 +652,21 @@ impl Render for WallpaperEditor {
                     .px_3()
                     .py(px(3.))
                     .rounded_full()
+                    .border_1()
+                    .border_color(if active {
+                        palette.thumb_rim()
+                    } else {
+                        rgba(0x00000000)
+                    })
                     .text_xs()
                     .cursor_pointer()
                     .when(active, |el| {
                         el.bg(palette.thumb())
                             .shadow_sm()
                             .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(palette.ink())
                     })
+                    .when(!active, |el| el.text_color(palette.ink().opacity(0.68)))
                     .child(label)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this.transform.aspect == preset { return; }

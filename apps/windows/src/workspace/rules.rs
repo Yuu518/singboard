@@ -1313,18 +1313,14 @@ impl Workspace {
             String::new()
         };
 
-        let mut tabs = div()
-            .relative()
-            .overflow_hidden()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(2.))
-            .p(px(2.))
-            .rounded_full()
-            .border_1()
-            .border_color(palette.control_rim())
-            .child(crate::glass::control_layer(palette, px(999.), true))
+        let has_providers = !self.providers.is_empty() || self.show_providers;
+        let seg_count = if has_providers { 2 } else { 1 };
+        let seg_active = usize::from(has_providers && self.show_providers);
+        let tab_slider = self.segment_slider("rules-tabs");
+        tab_slider.prepare(seg_count);
+        let tab_sel = crate::glass::nav_selection_style(palette, self.glass_tint, cx);
+        let mut tabs = tab_slider
+            .track_element(seg_active, true, tab_sel, palette)
             .child(
                 div()
                     .id("rules-tab-rules")
@@ -1333,26 +1329,23 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .cursor_pointer()
-                    .px_3()
+                    .px(px(11.))
                     .rounded_full()
-                    .text_xs()
-                    .when(!self.show_providers, |el| {
-                        el.bg(palette.thumb())
-                            .shadow_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(palette.ink())
-                    })
-                    .when(self.show_providers, |el| {
-                        el.text_color(palette.ink().opacity(0.72))
-                    })
-                    .child(format!("规则 ({})", self.rules.len()))
+                    .child(tab_slider.slot_measure(0))
+                    .child(super::settings::segment_label(
+                        "规则",
+                        Some(self.rules.len()),
+                        !self.show_providers,
+                        tab_sel.ink,
+                        palette,
+                    ))
                     .on_click(cx.listener(|this, _, _, cx| {
                         if this.show_providers {
                             this.apply(Action::Providers, cx);
                         }
                     })),
             );
-        if !self.providers.is_empty() || self.show_providers {
+        if has_providers {
             tabs = tabs.child(
                 div()
                     .id("rules-tab-providers")
@@ -1361,19 +1354,16 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .cursor_pointer()
-                    .px_3()
+                    .px(px(11.))
                     .rounded_full()
-                    .text_xs()
-                    .when(self.show_providers, |el| {
-                        el.bg(palette.thumb())
-                            .shadow_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(palette.ink())
-                    })
-                    .when(!self.show_providers, |el| {
-                        el.text_color(palette.ink().opacity(0.72))
-                    })
-                    .child(format!("规则提供商 ({})", self.providers.len()))
+                    .child(tab_slider.slot_measure(1))
+                    .child(super::settings::segment_label(
+                        "规则提供商",
+                        Some(self.providers.len()),
+                        self.show_providers,
+                        tab_sel.ink,
+                        palette,
+                    ))
                     .on_click(cx.listener(|this, _, _, cx| {
                         if !this.show_providers {
                             this.apply(Action::Providers, cx);

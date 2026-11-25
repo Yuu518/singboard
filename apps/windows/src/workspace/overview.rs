@@ -1699,34 +1699,29 @@ impl Workspace {
             }
         };
 
-        let view_seg = div()
-            .relative()
-            .overflow_hidden()
-            .flex()
-            .gap(px(2.))
-            .p(px(2.))
-            .rounded_full()
-            .bg(palette.fill())
-            .border_1()
-            .border_color(palette.control_rim())
-            .child(crate::glass::control_layer(palette, px(999.), true))
+        let topo_slider = self.segment_slider("overview-topo");
+        topo_slider.prepare(2);
+        let topo_sel = crate::glass::nav_selection_style(palette, self.glass_tint, cx);
+        let view_seg = topo_slider
+            .track_element(usize::from(!self.chart), true, topo_sel, palette)
             .child(
                 div()
                     .id("topo-view-chart")
                     .relative()
                     .px(px(14.))
-                    .py(px(3.))
+                    .h(crate::theme::text_px(24.))
+                    .flex()
+                    .items_center()
                     .rounded_full()
-                    .text_size(crate::theme::text_px(12.))
                     .cursor_pointer()
-                    .when(self.chart, |el| {
-                        el.bg(palette.thumb())
-                            .shadow_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(palette.ink())
-                    })
-                    .when(!self.chart, |el| el.text_color(palette.ink().opacity(0.75)))
-                    .child("图")
+                    .child(topo_slider.slot_measure(0))
+                    .child(super::settings::segment_label(
+                        "图",
+                        None,
+                        self.chart,
+                        topo_sel.ink,
+                        palette,
+                    ))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.chart = true;
                         cx.notify();
@@ -1737,18 +1732,19 @@ impl Workspace {
                     .id("topo-view-list")
                     .relative()
                     .px(px(14.))
-                    .py(px(3.))
+                    .h(crate::theme::text_px(24.))
+                    .flex()
+                    .items_center()
                     .rounded_full()
-                    .text_size(crate::theme::text_px(12.))
                     .cursor_pointer()
-                    .when(!self.chart, |el| {
-                        el.bg(palette.thumb())
-                            .shadow_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(palette.ink())
-                    })
-                    .when(self.chart, |el| el.text_color(palette.ink().opacity(0.75)))
-                    .child("列表")
+                    .child(topo_slider.slot_measure(1))
+                    .child(super::settings::segment_label(
+                        "列表",
+                        None,
+                        !self.chart,
+                        topo_sel.ink,
+                        palette,
+                    ))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.chart = false;
                         cx.notify();
