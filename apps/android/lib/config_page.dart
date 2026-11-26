@@ -62,6 +62,7 @@ class ConfigPage extends StatefulWidget {
 class _ConfigPageState extends State<ConfigPage> {
   String directory = '', message = '';
   bool busy = false;
+  double _scrollProgress = 0.0;
   List<ConfigData> profiles = [];
 
   @override
@@ -321,29 +322,64 @@ class _ConfigPageState extends State<ConfigPage> {
     return GlassBackdrop(
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          foregroundColor: scope.backdropInk(c),
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          title: const GlassBackdropHeading(
-            '配置',
-            style: TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.w700,
+        body: Column(
+          children: [
+            GlassSubpageHeader(
+              title: '配置',
+              scrollProgress: _scrollProgress,
+              trailing: Tooltip(
+                message: '添加远程配置',
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(999),
+                    onTap: busy ? null : () => editSubscription(),
+                    child: Container(
+                      height: 32,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: GlassSubpageHeader.pillDecoration(c, scope),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          PanelIcon('plus', size: 15, color: c.ink),
+                          const SizedBox(width: 4),
+                          Text(
+                            '订阅',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: c.ink,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
-          ),
-          actions: [
-            IconButton(
-              tooltip: '添加远程配置',
-              onPressed: busy ? null : () => editSubscription(),
-              icon: PanelIcon('plus', size: 20, color: scope.backdropInk(c)),
-            ),
-          ],
-        ),
-        body: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
+            Expanded(
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (event) {
+                  if (event.metrics.axis == Axis.vertical && event.depth == 0) {
+                    final raw = ((event.metrics.pixels - event.metrics.minScrollExtent) / 32.0)
+                        .clamp(0.0, 1.0);
+                    final next = raw * raw * (3.0 - 2.0 * raw);
+                    if ((_scrollProgress - next).abs() > 0.015 ||
+                        (next == 0 && _scrollProgress != 0) ||
+                        (next == 1 && _scrollProgress != 1)) {
+                      setState(() => _scrollProgress = next);
+                    }
+                  }
+                  return false;
+                },
+                child: ListView(
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    8,
+                    16,
+                    MediaQuery.paddingOf(context).bottom + 28,
+                  ),
             children: [
               Row(
                 children: [
@@ -581,6 +617,9 @@ class _ConfigPageState extends State<ConfigPage> {
                 ),
             ],
           ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -821,7 +860,6 @@ class _ConfigEditorState extends State<ConfigEditor> {
   @override
   Widget build(BuildContext context) {
     final c = SingboardColors.of(context);
-    final scope = GlassScope.of(context);
     final headerTitle = widget.title?.isNotEmpty == true
         ? widget.title!
         : '配置编辑';
@@ -846,58 +884,59 @@ class _ConfigEditorState extends State<ConfigEditor> {
       child: GlassBackdrop(
         child: Scaffold(
           backgroundColor: Colors.transparent,
-          appBar: AppBar(
-            backgroundColor: Colors.transparent,
-            foregroundColor: scope.backdropInk(c),
-            elevation: 0,
-            scrolledUnderElevation: 0,
-            title: Row(
-              children: [
-                Flexible(
-                  child: GlassBackdropHeading(
-                    headerTitle,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
+          body: Column(
+            children: [
+              GlassSubpageHeader(
+                scrollProgress: 1.0,
+                titleWidget: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        headerTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: -0.2,
+                          color: c.ink,
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    GlassBackdropPill(
+                      dirty
+                          ? '未保存'
+                          : widget.type == 'profile'
+                              ? '远程副本'
+                              : '本地文件',
+                      muted: !dirty,
+                      colorOverride: dirty ? c.warningInk : null,
+                      style: const TextStyle(fontSize: 11.5),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                GlassBackdropPill(
-                  dirty
-                      ? '未保存'
-                      : widget.type == 'profile'
-                          ? '远程副本'
-                          : '本地文件',
-                  muted: !dirty,
-                  colorOverride: dirty ? c.warningInk : null,
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ],
-            ),
-            actions: [
-              Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: FilledButton(
+                trailing: FilledButton(
                   style: FilledButton.styleFrom(
                     backgroundColor: c.primary,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(horizontal: 14),
                     minimumSize: const Size(0, 32),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                   onPressed: busy ? null : () => execute('save'),
-                  child: const Text('保存', style: TextStyle(fontSize: 14)),
+                  child: const Text('保存', style: TextStyle(fontSize: 13)),
                 ),
               ),
-            ],
-          ),
-          body: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+              Expanded(
+                child: SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                   if (widget.type == 'profile')
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
@@ -1005,6 +1044,9 @@ class _ConfigEditorState extends State<ConfigEditor> {
                 ],
               ),
             ),
+          ),
+              ),
+            ],
           ),
         ),
       ),

@@ -38,6 +38,9 @@ class ConnectionsPage extends StatefulWidget {
   final ValueChanged<String> onSort;
   final List<Item> active, history;
   final num download, upload;
+  final bool showClosed;
+  final ValueNotifier<({int activeCount, int historyCount})>? tabCounts;
+  final ValueChanged<double>? onScrollProgress;
   const ConnectionsPage({
     super.key,
     required this.sort,
@@ -49,6 +52,9 @@ class ConnectionsPage extends StatefulWidget {
     required this.history,
     required this.download,
     required this.upload,
+    this.showClosed = false,
+    this.tabCounts,
+    this.onScrollProgress,
   });
   @override
   State<ConnectionsPage> createState() => _ConnectionsPageState();
@@ -56,7 +62,11 @@ class ConnectionsPage extends StatefulWidget {
 
 class _ConnectionsPageState extends State<ConnectionsPage> {
   final _searchCtrl = TextEditingController();
-  bool closed = false, busy = false;
+  final _scrollCtrl = ScrollController();
+  double _activeScrollOffset = 0;
+  double _closedScrollOffset = 0;
+  late bool closed = widget.showClosed;
+  bool busy = false;
   String query = '';
   static const sorts = {
     'recent': '最新',
@@ -169,9 +179,34 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
     return out;
   }
 
+  double _progressForOffset(double offset) {
+    final raw = (offset / 32.0).clamp(0.0, 1.0);
+    return raw * raw * (3.0 - 2.0 * raw);
+  }
+
   @override
   void didUpdateWidget(ConnectionsPage old) {
     super.didUpdateWidget(old);
+    if (widget.showClosed != old.showClosed) {
+      if (_scrollCtrl.hasClients) {
+        if (closed) {
+          _closedScrollOffset = _scrollCtrl.offset;
+        } else {
+          _activeScrollOffset = _scrollCtrl.offset;
+        }
+      }
+      closed = widget.showClosed;
+      final target = closed ? _closedScrollOffset : _activeScrollOffset;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollCtrl.hasClients) return;
+        final clamped = target.clamp(
+          _scrollCtrl.position.minScrollExtent,
+          _scrollCtrl.position.maxScrollExtent,
+        );
+        _scrollCtrl.jumpTo(clamped);
+        widget.onScrollProgress?.call(_progressForOffset(clamped));
+      });
+    }
     if (frozen == null && _closingIds.isNotEmpty) {
       final present = {
         for (final item in widget.active) item['id']?.toString() ?? '',
@@ -220,6 +255,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
       timer.cancel();
     }
     _closingTimers.clear();
+    _scrollCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -657,6 +693,18 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
         )
         .toList();
     final historyMatches = historyList.where(matches).toList();
+    final nextCounts = (
+      activeCount: activeMatches.length,
+      historyCount: historyMatches.length,
+    );
+    final countsNotifier = widget.tabCounts;
+    if (countsNotifier != null && countsNotifier.value != nextCounts) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && countsNotifier.value != nextCounts) {
+          countsNotifier.value = nextCounts;
+        }
+      });
+    }
     final sorted = closed ? List<Item>.of(historyMatches) : List<Item>.of(activeMatches);
     sorted.sort(compare);
     final rows = _prepareRows(sorted, (closed, effectiveSort, query));
@@ -673,173 +721,120 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
     final header = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        LayoutBuilder(
-          builder: (context, bounds) {
-            final title = Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const GlassBackdropHeading(
-                  '连接',
-                  style: TextStyle(
-                    fontSize: 26,
-                    height: 1.25,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -.65,
-                  ),
+        Row(
+          children: [
+            GlassControl(
+              radius: 999,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
                 ),
-                const SizedBox(width: 12),
-                GlassSegmented<bool>(
-                  items: const [
-                    (false, '活跃'),
-                    (true, '已关闭'),
-                  ],
-                  counts: {
-                    false: activeMatches.length,
-                    true: historyMatches.length,
-                  },
-                  value: closed,
-                  onChanged: (v) => setState(() => closed = v),
-                ),
-              ],
-            );
-            final actions = Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                GlassControl(
-                  radius: 999,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
+                child: Text.rich(
+                  TextSpan(
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: c.ink,
+                      fontFeatures: const [
+                        FontFeature.tabularFigures(),
+                      ],
                     ),
-                    child: Text.rich(
+                    children: [
                       TextSpan(
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: c.ink,
-                          fontFeatures: const [
-                            FontFeature.tabularFigures(),
-                          ],
+                        text: '↓ ',
+                        style: TextStyle(color: c.muted),
+                      ),
+                      TextSpan(
+                        text: formatBytes(
+                          frozen?.$3 ?? widget.download,
                         ),
-                        children: [
-                          TextSpan(
-                            text: '↓ ',
-                            style: TextStyle(color: c.muted),
-                          ),
-                          TextSpan(
-                            text: formatBytes(
-                              frozen?.$3 ?? widget.download,
-                            ),
-                          ),
-                          TextSpan(
-                            text: ' · ',
-                            style: TextStyle(color: c.muted),
-                          ),
-                          TextSpan(
-                            text: '↑ ',
-                            style: TextStyle(color: c.muted),
-                          ),
-                          TextSpan(
-                            text: formatBytes(
-                              frozen?.$4 ?? widget.upload,
-                            ),
-                          ),
-                        ],
                       ),
-                    ),
+                      TextSpan(
+                        text: ' · ',
+                        style: TextStyle(color: c.muted),
+                      ),
+                      TextSpan(
+                        text: '↑ ',
+                        style: TextStyle(color: c.muted),
+                      ),
+                      TextSpan(
+                        text: formatBytes(
+                          frozen?.$4 ?? widget.upload,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                IconButton(
-                  constraints: const BoxConstraints.tightFor(
-                    width: 32,
-                    height: 32,
-                  ),
-                  padding: EdgeInsets.zero,
-                  tooltip: frozen == null ? '暂停刷新' : '继续刷新',
-                  style: IconButton.styleFrom(
-                    backgroundColor: frozen == null
-                        ? Colors.transparent
-                        : c.primarySoft,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  onPressed: () => setState(
-                    () => frozen = frozen == null
-                        ? (
-                            List<Item>.of(widget.active),
-                            List<Item>.of(widget.history),
-                            widget.download,
-                            widget.upload,
-                          )
-                        : null,
-                  ),
-                  icon: PlaybackIcon(
-                    paused: frozen != null,
-                    color: frozen != null
-                        ? c.selectionInk
-                        : scope.backdropInk(c),
-                  ),
-                ),
-                Visibility(
-                  visible: !closed,
-                  maintainSize: true,
-                  maintainState: true,
-                  maintainAnimation: true,
-                  child: GlassControl(
-                    radius: 999,
-                    tint: c.dangerSoft,
-                    child: TextButton(
-                      onPressed: busy || liveRows.isEmpty
-                          ? null
-                          : () => disconnect(
-                              liveRows,
-                              all: query.isEmpty,
-                              batch: true,
-                            ),
-                      style: TextButton.styleFrom(
-                        backgroundColor: Colors.transparent,
-                        foregroundColor: c.dangerInk,
-                        minimumSize: const Size(0, 32),
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        textStyle: Theme.of(context).textTheme.bodyMedium
-                            ?.copyWith(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ),
-                      child: Text(
-                        query.isEmpty
-                            ? '断开全部'
-                            : '断开筛选结果 (${liveRows.length})',
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            );
-            return SizedBox(
-              width: bounds.maxWidth,
-              child: Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                runSpacing: 8,
-                spacing: 12,
-                children: [
-                  title,
-                  Align(
-                    widthFactor: bounds.maxWidth < 570 ? null : 1,
-                    alignment: Alignment.centerRight,
-                    child: actions,
-                  ),
-                ],
               ),
-            );
-          },
+            ),
+            const Spacer(),
+            IconButton(
+              constraints: const BoxConstraints.tightFor(
+                width: 32,
+                height: 32,
+              ),
+              padding: EdgeInsets.zero,
+              tooltip: frozen == null ? '暂停刷新' : '继续刷新',
+              style: IconButton.styleFrom(
+                backgroundColor: frozen == null
+                    ? Colors.transparent
+                    : c.primarySoft,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: () => setState(
+                () => frozen = frozen == null
+                    ? (
+                        List<Item>.of(widget.active),
+                        List<Item>.of(widget.history),
+                        widget.download,
+                        widget.upload,
+                      )
+                    : null,
+              ),
+              icon: PlaybackIcon(
+                paused: frozen != null,
+                color: frozen != null
+                    ? c.selectionInk
+                    : scope.backdropInk(c),
+              ),
+            ),
+            if (!closed) ...[
+              const SizedBox(width: 8),
+              GlassControl(
+                radius: 999,
+                tint: c.dangerSoft,
+                child: TextButton(
+                  onPressed: busy || liveRows.isEmpty
+                      ? null
+                      : () => disconnect(
+                          liveRows,
+                          all: query.isEmpty,
+                          batch: true,
+                        ),
+                  style: TextButton.styleFrom(
+                    backgroundColor: Colors.transparent,
+                    foregroundColor: c.dangerInk,
+                    minimumSize: const Size(0, 32),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    textStyle: Theme.of(context).textTheme.bodyMedium
+                        ?.copyWith(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                  child: Text(
+                    query.isEmpty
+                        ? '断开全部'
+                        : '断开筛选 (${liveRows.length})',
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
@@ -897,7 +892,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
           ),
         if (frozen != null)
           Padding(
-            padding: const EdgeInsets.only(top: 12),
+            padding: const EdgeInsets.only(top: 10),
             child: GlassCard(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               child: Row(
@@ -930,7 +925,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
               ),
             ),
           ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
       ],
     );
 
@@ -947,9 +942,10 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
             return false;
           },
           child: ListView.builder(
+            controller: _scrollCtrl,
             padding: EdgeInsets.fromLTRB(
               panelGutter(context) + MediaQuery.viewPaddingOf(context).left,
-              0,
+              6,
               panelGutter(context) + MediaQuery.viewPaddingOf(context).right,
               120 + MediaQuery.paddingOf(context).bottom,
             ),

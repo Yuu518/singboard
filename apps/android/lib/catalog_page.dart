@@ -205,9 +205,34 @@ class _RuleTrace {
   });
 }
 
+class CatalogTabMeta {
+  final int mainCount;
+  final int providerCount;
+  final bool providersAvailable;
+
+  const CatalogTabMeta({
+    this.mainCount = 0,
+    this.providerCount = 0,
+    this.providersAvailable = false,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      other is CatalogTabMeta &&
+      other.mainCount == mainCount &&
+      other.providerCount == providerCount &&
+      other.providersAvailable == providersAvailable;
+
+  @override
+  int get hashCode => Object.hash(mainCount, providerCount, providersAvailable);
+}
+
 class CatalogPage extends StatefulWidget {
   final String endpoint, secret;
   final bool proxies, enabled, active;
+  final bool showProviders;
+  final ValueNotifier<CatalogTabMeta>? tabMeta;
+  final ValueChanged<double>? onScrollProgress;
   final int reconnectGeneration;
   final Map<String, dynamic> preferences;
   final Map<String, dynamic> chainSpeeds;
@@ -220,6 +245,9 @@ class CatalogPage extends StatefulWidget {
     required this.proxies,
     this.enabled = true,
     this.active = true,
+    this.showProviders = false,
+    this.tabMeta,
+    this.onScrollProgress,
     this.reconnectGeneration = 0,
     this.preferences = const {},
     this.chainSpeeds = const {},
@@ -276,6 +304,9 @@ class _CatalogPageState extends State<CatalogPage> {
   static const _upperFields = {'protocol', 'network'};
 
   final _searchCtrl = TextEditingController();
+  final _scrollCtrl = ScrollController();
+  double _mainScrollOffset = 0;
+  double _providerScrollOffset = 0;
   List<Item> items = [];
   List<Item> providerItems = [];
   bool providersAvailable = false;
@@ -407,9 +438,53 @@ class _CatalogPageState extends State<CatalogPage> {
   int generation = 0;
   String query = '', error = '';
 
+  void _syncTabMeta() {
+    final notifier = widget.tabMeta;
+    if (notifier == null) return;
+    final next = CatalogTabMeta(
+      mainCount: items.length,
+      providerCount: providerItems.length,
+      providersAvailable: providersAvailable,
+    );
+    if (notifier.value != next) notifier.value = next;
+  }
+
+  double _progressForOffset(double offset) {
+    final raw = (offset / 32.0).clamp(0.0, 1.0);
+    return raw * raw * (3.0 - 2.0 * raw);
+  }
+
+  void _switchSubtab(bool next) {
+    final resolved = next && providersAvailable;
+    if (providers == resolved) return;
+    if (_scrollCtrl.hasClients) {
+      if (providers) {
+        _providerScrollOffset = _scrollCtrl.offset;
+      } else {
+        _mainScrollOffset = _scrollCtrl.offset;
+      }
+    }
+    providers = resolved;
+    query = '';
+    _searchCtrl.clear();
+    _syncAgeTimer();
+    if (!widget.proxies) scheduleMatch();
+    final target = providers ? _providerScrollOffset : _mainScrollOffset;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollCtrl.hasClients) return;
+      final clamped = target.clamp(
+        _scrollCtrl.position.minScrollExtent,
+        _scrollCtrl.position.maxScrollExtent,
+      );
+      _scrollCtrl.jumpTo(clamped);
+      widget.onScrollProgress?.call(_progressForOffset(clamped));
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    providers = widget.showProviders;
     sortByLatency = widget.preferences['proxySortLatency'] == true;
     expanded.addAll((widget.preferences['expandedProxyGroups'] as List? ?? []).whereType<String>());
     if (widget.enabled) load();
@@ -467,6 +542,9 @@ class _CatalogPageState extends State<CatalogPage> {
     } else if (widget.enabled && widget.active && !old.active) {
       load(silent: items.isNotEmpty);
     }
+    if (widget.showProviders != old.showProviders) {
+      _switchSubtab(widget.showProviders);
+    }
     if (widget.active != old.active) {
       _syncAgeTimer();
     }
@@ -477,6 +555,7 @@ class _CatalogPageState extends State<CatalogPage> {
     undoTimer?.cancel();
     ruleTimer?.cancel();
     ageTimer?.cancel();
+    _scrollCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -548,9 +627,14 @@ class _CatalogPageState extends State<CatalogPage> {
         }
         providerItems = nextProviders;
         providersAvailable = providerApiReady;
-        if (!providersAvailable) providers = false;
+        if (!providersAvailable) {
+          providers = false;
+        } else {
+          providers = widget.showProviders;
+        }
         error = '';
       });
+      _syncTabMeta();
       _syncAgeTimer();
       if (!widget.proxies && query.isNotEmpty) scheduleMatch();
     } catch (e) {
@@ -3224,35 +3308,40 @@ class _CatalogPageState extends State<CatalogPage> {
       children: [
         Row(
           children: [
-            GlassBackdropHeading(
-              widget.proxies ? '代理' : '规则',
-              style: const TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.4,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Flexible(child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: GlassSegmented<bool>(
-                items: [
-                  (false, widget.proxies ? '代理组' : '规则'),
-                  if (providersAvailable)
-                    (true, widget.proxies ? '代理提供商' : '规则提供商'),
-                ],
-                counts: {
-                  false: items.length,
-                  if (providersAvailable) true: providerItems.length,
-                },
-                value: providers,
+            Expanded(
+              child: GlassSearchField(
+                controller: _searchCtrl,
+                hint: widget.proxies
+                    ? (providers ? '搜索代理提供商' : '搜索节点或代理组')
+                    : providers
+                        ? (readable ? '输入域名或 IP，查找命中的规则提供商' : '开启 root 模式后可按域名或 IP 查找')
+                        : (readable ? '搜索规则、出站、域名或 IP' : '搜索规则或出站'),
+                value: query,
                 onChanged: (v) {
-                  setState(() { providers = v; query = ''; _searchCtrl.clear(); });
-                  _syncAgeTimer();
+                  setState(() => query = v.trim().toLowerCase());
                   if (!widget.proxies) scheduleMatch();
                 },
               ),
-            )),
+            ),
+            if (widget.proxies && !providers) ...[
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () {
+                  setState(() => sortByLatency = !sortByLatency);
+                  widget.preferences['proxySortLatency'] = sortByLatency;
+                  _savePreference('set_proxy_sort', {'enabled': sortByLatency});
+                },
+                child: GlassControl(
+                  radius: 999,
+                  tint: sortByLatency ? c.primarySoft : c.fill,
+                  child: SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: PanelIcon('sort', size: 18, color: sortByLatency ? c.selectionInk : c.ink),
+                  ),
+                ),
+              ),
+            ],
             if (providers) ...[
               const SizedBox(width: 8),
               Builder(
@@ -3273,7 +3362,7 @@ class _CatalogPageState extends State<CatalogPage> {
                         tint: spinning ? c.primarySoft : null,
                         borderColor: spinning ? c.selectionBorder : null,
                         child: Container(
-                          constraints: const BoxConstraints(minHeight: 30),
+                          constraints: const BoxConstraints(minHeight: 32),
                           padding: const EdgeInsets.symmetric(
                             horizontal: 10,
                             vertical: 5,
@@ -3314,45 +3403,6 @@ class _CatalogPageState extends State<CatalogPage> {
             ],
           ],
         ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: GlassSearchField(
-                controller: _searchCtrl,
-                hint: widget.proxies
-                    ? '搜索节点或代理组'
-                    : providers
-                        ? (readable ? '输入域名或 IP，查找命中的规则提供商' : '开启 root 模式后可按域名或 IP 查找')
-                        : (readable ? '搜索规则、出站、域名或 IP' : '搜索规则或出站'),
-                value: query,
-                onChanged: (v) {
-                  setState(() => query = v.trim().toLowerCase());
-                  if (!widget.proxies) scheduleMatch();
-                },
-              ),
-            ),
-            if (widget.proxies && !providers) ...[
-              const SizedBox(width: 8),
-              GestureDetector(
-                onTap: () {
-                  setState(() => sortByLatency = !sortByLatency);
-                  widget.preferences['proxySortLatency'] = sortByLatency;
-                  _savePreference('set_proxy_sort', {'enabled': sortByLatency});
-                },
-                child: GlassControl(
-                  radius: 999,
-                  tint: sortByLatency ? c.primarySoft : c.fill,
-                  child: SizedBox(
-                    width: 32,
-                    height: 32,
-                    child: PanelIcon('sort', size: 18, color: sortByLatency ? c.selectionInk : c.ink),
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
         if (matchError.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 6),
@@ -3368,7 +3418,7 @@ class _CatalogPageState extends State<CatalogPage> {
             padding: EdgeInsets.only(top: 8),
             child: LinearProgressIndicator(minHeight: 2),
           ),
-        SizedBox(height: widget.proxies ? 12 : 8),
+        SizedBox(height: widget.proxies ? 10 : 8),
       ],
     );
 
@@ -3382,9 +3432,10 @@ class _CatalogPageState extends State<CatalogPage> {
             ? (hasTraceBanner ? 3 : 2)
             : shown.length + 1;
     return ListView.builder(
+      controller: _scrollCtrl,
       padding: EdgeInsets.fromLTRB(
         panelGutter(context) + viewPad.left,
-        0,
+        6,
         panelGutter(context) + viewPad.right,
         120 + bottomPad,
       ),

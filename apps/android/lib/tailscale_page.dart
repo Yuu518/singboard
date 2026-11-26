@@ -31,6 +31,10 @@ class TailscalePage extends StatefulWidget {
 
 class _TailscalePageState extends State<TailscalePage> {
   int _tab = 0;
+  final _scrollCtrl = ScrollController();
+  final _tabOffsets = <double>[0.0, 0.0, 0.0];
+  double _scrollProgress = 0.0;
+  bool _subTabPinned = false;
   String _filter = 'all';
   String _query = '';
   final _collapsedGroups = <String>{};
@@ -118,6 +122,7 @@ class _TailscalePageState extends State<TailscalePage> {
     if (_upload != null) unawaited(_upload!.cancel());
     if (_downloadHandle != null) unawaited(widget.controller.closeFeed(_downloadHandle!));
     if (_sshHandle != null) unawaited(widget.controller.closeFeed(_sshHandle!));
+    _scrollCtrl.dispose();
     _searchCtrl.dispose();
     _sshUserCtrl.dispose();
     _sshCmdCtrl.dispose();
@@ -631,12 +636,64 @@ class _TailscalePageState extends State<TailscalePage> {
     );
   }
 
+  double _progressForOffset(double offset) {
+    final raw = (offset / 32.0).clamp(0.0, 1.0);
+    return raw * raw * (3.0 - 2.0 * raw);
+  }
+
+  void _selectSubTab(int index) {
+    if (_tab == index) {
+      if (_scrollCtrl.hasClients && _scrollCtrl.offset > 0) {
+        if (MediaQuery.disableAnimationsOf(context)) {
+          _scrollCtrl.jumpTo(0);
+        } else {
+          _scrollCtrl.animateTo(
+            0,
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutQuart,
+          );
+        }
+      }
+      return;
+    }
+    if (_scrollCtrl.hasClients) {
+      _tabOffsets[_tab] = _scrollCtrl.offset;
+    }
+    setState(() => _tab = index);
+    if (index == 1) unawaited(_ensureInbox());
+    final target = _tabOffsets[index];
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollCtrl.hasClients) return;
+      final clamped = target.clamp(
+        _scrollCtrl.position.minScrollExtent,
+        _scrollCtrl.position.maxScrollExtent,
+      );
+      _scrollCtrl.jumpTo(clamped);
+      final next = _progressForOffset(clamped);
+      if ((_scrollProgress - next).abs() > 0.005) {
+        setState(() => _scrollProgress = next);
+      }
+    });
+  }
+
+  void _onSubTabPinned(bool pinned) {
+    if (_subTabPinned == pinned) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _subTabPinned != pinned) {
+        setState(() => _subTabPinned = pinned);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = SingboardColors.of(context);
     final scope = GlassScope.of(context);
     final ep = widget.controller.currentEndpoint;
     final eps = widget.controller.endpoints;
+    final certDomains = ep != null
+        ? (ep['certDomains'] as List? ?? const []).map((e) => e.toString()).toList()
+        : const <String>[];
 
     return GlassBackdrop(
       child: Scaffold(
@@ -645,21 +702,18 @@ class _TailscalePageState extends State<TailscalePage> {
           children: [
             GlassSubpageHeader(
               title: 'Tailscale',
-              trailing: ep != null && (ep['certDomains'] as List? ?? const []).isNotEmpty
+              scrollProgress: _scrollProgress,
+              showBottomBorder: !_subTabPinned,
+              trailing: certDomains.isNotEmpty
                   ? Material(
                       color: Colors.transparent,
                       child: InkWell(
                         borderRadius: BorderRadius.circular(999),
-                        onTap: () => _showCertDialog(
-                          (ep['certDomains'] as List)
-                              .map((e) => e.toString())
-                              .toList(),
-                        ),
+                        onTap: () => _showCertDialog(certDomains),
                         child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 5,
-                          ),
+                          height: 32,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          alignment: Alignment.center,
                           decoration: GlassSubpageHeader.pillDecoration(c, scope),
                           child: Text(
                             'TLS 证书',
@@ -683,7 +737,22 @@ class _TailscalePageState extends State<TailscalePage> {
                         style: TextStyle(color: c.muted),
                       ),
                     )
-                  : _buildBody(c, ep, eps),
+                  : NotificationListener<ScrollNotification>(
+                      onNotification: (event) {
+                        if (event.metrics.axis == Axis.vertical && event.depth == 0) {
+                          final next = _progressForOffset(
+                            event.metrics.pixels - event.metrics.minScrollExtent,
+                          );
+                          if ((_scrollProgress - next).abs() > 0.015 ||
+                              (next == 0 && _scrollProgress != 0) ||
+                              (next == 1 && _scrollProgress != 1)) {
+                            setState(() => _scrollProgress = next);
+                          }
+                        }
+                        return false;
+                      },
+                      child: _buildBody(c, ep, eps),
+                    ),
             ),
           ],
         ),
@@ -710,232 +779,208 @@ class _TailscalePageState extends State<TailscalePage> {
     final activeExitName = activeExitId.isEmpty ? '' : tailscalePeerDisplayName(exitNode);
 
     final needsLogin = backendState == 'NeedsLogin' || authUrl.isNotEmpty;
+    final gutter = panelGutter(context);
+    final bottomPad = MediaQuery.paddingOf(context).bottom + 24;
 
-    return ListView(
-      padding: EdgeInsets.fromLTRB(
-        panelGutter(context),
-        10,
-        panelGutter(context),
-        MediaQuery.paddingOf(context).bottom + 24,
-      ),
-      children: [
-        if (eps.length > 1) ...[
-          Builder(
-            builder: (context) {
-              final scope = GlassScope.of(context);
-              final selChip = scope.adaptiveSelectionChip(c);
-              return SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    for (final item in eps)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: GestureDetector(
-                          onTap: () {
-                            widget.controller.selectEndpoint(
-                              item['endpointTag'].toString(),
-                            );
-                            _inboxTag = null;
-                            _inbox = null;
-                            if (_tab == 1) unawaited(_ensureInbox());
-                          },
-                          child: GlassControl(
-                            radius: 999,
-                            bordered: false,
-                            tint: item['endpointTag'] == tag
-                                ? selChip.bg
-                                : scope.adaptivePillBg(c),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 6,
+    return CustomScrollView(
+      controller: _scrollCtrl,
+      slivers: [
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(gutter, 6, gutter, needsLogin ? bottomPad : 0),
+          sliver: SliverToBoxAdapter(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (eps.length > 1) ...[
+                  Builder(
+                    builder: (context) {
+                      final scope = GlassScope.of(context);
+                      final selChip = scope.adaptiveSelectionChip(c);
+                      return SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            for (final item in eps)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: GestureDetector(
+                                  onTap: () {
+                                    widget.controller.selectEndpoint(
+                                      item['endpointTag'].toString(),
+                                    );
+                                    _inboxTag = null;
+                                    _inbox = null;
+                                    if (_tab == 1) unawaited(_ensureInbox());
+                                  },
+                                  child: GlassControl(
+                                    radius: 999,
+                                    bordered: false,
+                                    tint: item['endpointTag'] == tag
+                                        ? selChip.bg
+                                        : scope.adaptivePillBg(c),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 6,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(999),
+                                        border: Border.all(
+                                          color: item['endpointTag'] == tag
+                                              ? selChip.border
+                                              : scope.adaptivePillBorder(c),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        item['endpointTag'].toString(),
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: item['endpointTag'] == tag
+                                              ? selChip.ink
+                                              : c.ink,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (needsLogin)
+                  GlassCard(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
                               decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(999),
-                                border: Border.all(
-                                  color: item['endpointTag'] == tag
-                                      ? selChip.border
-                                      : scope.adaptivePillBorder(c),
-                                ),
+                                shape: BoxShape.circle,
+                                color: c.warning,
                               ),
-                              child: Text(
-                                item['endpointTag'].toString(),
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: item['endpointTag'] == tag
-                                      ? selChip.ink
-                                      : c.ink,
-                                ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '等待节点授权${stateText.isEmpty ? '' : ' · $stateText'}',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: c.ink,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '端点 $tag 需要完成 Tailscale 登录授权。授权完成后设备列表将自动刷新。',
+                          style: TextStyle(fontSize: 12, color: c.muted),
+                        ),
+                        if (authUrl.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: c.fill,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              authUrl,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontFamily: 'monospace',
+                                color: c.ink,
                               ),
                             ),
                           ),
-                        ),
-                      ),
-                  ],
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-        ],
-        if (needsLogin)
-          GlassCard(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: c.warning,
-                      ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              FilledButton(
+                                onPressed: () => _platformChannel
+                                    .invokeMethod('openUrl', {'url': authUrl}),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: c.primary,
+                                  foregroundColor: Colors.white,
+                                  shape: const StadiumBorder(),
+                                ),
+                                child: const Text('在浏览器中打开'),
+                              ),
+                              TextButton(
+                                onPressed: () {
+                                  Clipboard.setData(ClipboardData(text: authUrl));
+                                  _toast('已复制授权链接');
+                                },
+                                child: const Text('复制链接'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '等待节点授权${stateText.isEmpty ? '' : ' · $stateText'}',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: c.ink,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '端点 $tag 需要完成 Tailscale 登录授权。授权完成后设备列表将自动刷新。',
-                  style: TextStyle(fontSize: 12, color: c.muted),
-                ),
-                if (authUrl.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: c.fill,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      authUrl,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                        color: c.ink,
-                      ),
-                    ),
+                  )
+                else
+                  _buildHeroCard(
+                    c,
+                    selfPeer,
+                    networkName,
+                    backendState,
+                    stateText,
+                    activeExitId,
+                    activeExitName,
+                    peers,
                   ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      FilledButton(
-                        onPressed: () => _platformChannel
-                            .invokeMethod('openUrl', {'url': authUrl}),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: c.primary,
-                          foregroundColor: Colors.white,
-                          shape: const StadiumBorder(),
-                        ),
-                        child: const Text('在浏览器中打开'),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          Clipboard.setData(ClipboardData(text: authUrl));
-                          _toast('已复制授权链接');
-                        },
-                        child: const Text('复制链接'),
-                      ),
-                    ],
-                  ),
-                ],
               ],
             ),
-          )
-        else ...[
-          _buildHeroCard(
-            c,
-            selfPeer,
-            networkName,
-            backendState,
-            stateText,
-            activeExitId,
-            activeExitName,
-            peers,
-          ),
-          const SizedBox(height: 12),
-          GlassCard(
-            radius: 999,
-            padding: const EdgeInsets.all(4),
-            child: Row(
-              children: [
-                _segTab(c, 0, '设备 ($onlineCount/${peers.length})', null),
-                _segTab(c, 1, 'Taildrop', null),
-                _segTab(c, 2, 'SSH 终端', _sshReady ? '1' : null),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          if (_tab == 0) _buildDevicesTab(c, ep, activeExitId),
-          if (_tab == 1) _buildTaildropTab(c, ep, canShare),
-          if (_tab == 2) _buildSshTab(c, ep),
-        ],
-      ],
-    );
-  }
-
-  Widget _segTab(SingboardColors c, int index, String label, String? badge) {
-    final active = _tab == index;
-    final sel = GlassScope.of(context).adaptiveSelectionChip(c);
-    return Expanded(
-      child: GestureDetector(
-        onTap: () {
-          setState(() => _tab = index);
-          if (index == 1) unawaited(_ensureInbox());
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: active ? sel.bg : Colors.transparent,
-            borderRadius: BorderRadius.circular(999),
-            border: active ? Border.all(color: sel.border) : null,
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: active ? FontWeight.w600 : FontWeight.w500,
-                  color: active ? sel.ink : c.ink.withValues(alpha: 0.78),
-                ),
-              ),
-              if (badge != null) ...[
-                const SizedBox(width: 4),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: c.primary,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    badge,
-                    style: const TextStyle(fontSize: 10, color: Colors.white),
-                  ),
-                ),
-              ],
-            ],
           ),
         ),
-      ),
+        if (!needsLogin) ...[
+          SliverPersistentHeader(
+            pinned: true,
+            delegate: _TailscaleStickyTabDelegate(
+              onPinnedChanged: _onSubTabPinned,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: GlassSegmented<int>(
+                  items: const [
+                    (0, '设备'),
+                    (1, 'Taildrop'),
+                    (2, 'SSH 终端'),
+                  ],
+                  badges: {
+                    0: '$onlineCount/${peers.length}',
+                    if (_sshReady) 2: '1',
+                  },
+                  value: _tab,
+                  onChanged: _selectSubTab,
+                ),
+              ),
+            ),
+          ),
+          SliverPadding(
+            padding: EdgeInsets.fromLTRB(gutter, 4, gutter, bottomPad),
+            sliver: SliverToBoxAdapter(
+              child: switch (_tab) {
+                0 => _buildDevicesTab(c, ep, activeExitId),
+                1 => _buildTaildropTab(c, ep, canShare),
+                _ => _buildSshTab(c, ep),
+              },
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -3028,4 +3073,37 @@ class _TaildropQuickShareSheetState extends State<TaildropQuickShareSheet> {
       ),
     );
   }
+}
+
+class _TailscaleStickyTabDelegate extends SliverPersistentHeaderDelegate {
+  final Widget child;
+  final ValueChanged<bool> onPinnedChanged;
+
+  const _TailscaleStickyTabDelegate({
+    required this.child,
+    required this.onPinnedChanged,
+  });
+
+  @override
+  double get minExtent => 50;
+
+  @override
+  double get maxExtent => 50;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    final pinned = overlapsContent || shrinkOffset > 0.5;
+    onPinnedChanged(pinned);
+    return GlassStickyBar(
+      pinned: pinned,
+      child: child,
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _TailscaleStickyTabDelegate old) => true;
 }

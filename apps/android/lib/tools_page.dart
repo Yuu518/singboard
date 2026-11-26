@@ -28,6 +28,7 @@ class _ToolsPageState extends State<ToolsPage> {
   String message = '';
   bool hideResult = false;
   bool busy = false;
+  double _scrollProgress = 0.0;
 
   @override
   void initState() {
@@ -152,73 +153,104 @@ class _ToolsPageState extends State<ToolsPage> {
   }
 
   @override
-  Widget build(BuildContext context) => GlassBackdrop(child: Scaffold(
-    backgroundColor: Colors.transparent,
-    appBar: AppBar(backgroundColor: Colors.transparent, leading: IconButton(tooltip: '返回', onPressed: () => Navigator.maybePop(context), icon: PanelIcon('back', size: 18, color: SingboardColors.of(context).ink)), title: const Text('面板设置与工具')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        if (forms.isNotEmpty) ...[
-          DropdownButton<int>(
-            isExpanded: true,
-            value: selected,
-            onChanged: busy ? null : (i) => select(i!),
-            items: [
-              for (var i = 0; i < forms.length; i++)
-                DropdownMenuItem(value: i, child: Text(forms[i]['title'])),
-            ],
+  Widget build(BuildContext context) => GlassBackdrop(
+    child: Scaffold(
+      backgroundColor: Colors.transparent,
+      body: Column(
+        children: [
+          GlassSubpageHeader(
+            title: '面板设置与工具',
+            scrollProgress: _scrollProgress,
           ),
-          for (final f in forms[selected]['fields'])
-            if (f['label'] != '')
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: (f['choices'] as List).isEmpty
-                    ? TextField(
-                        key: ValueKey('$selected/${f['key']}'),
-                        controller: inputs[f['key']],
-                        decoration: InputDecoration(labelText: f['label']),
-                        obscureText: f['secret'],
-                        enabled: !busy,
-                      )
-                    : InputDecorator(
-                        decoration: InputDecoration(labelText: f['label']),
-                        child: DropdownButton<String>(
-                          isExpanded: true,
-                          value: inputs[f['key']]!.text,
-                          onChanged: busy
-                              ? null
-                              : (v) =>
-                                    setState(() => inputs[f['key']]!.text = v!),
-                          items: [
-                            for (final entry in f['choices'])
-                              DropdownMenuItem<String>(
-                                value: entry[0],
-                                child: Text(entry[1]),
-                              ),
-                          ],
-                        ),
-                      ),
-              ),
-          Wrap(
-            spacing: 8,
-            children: [
-              for (final a in forms[selected]['actions'])
-                TextButton(
-                  onPressed: busy ? null : () => run(a[0], a[1]),
-                  child: Text(a[1]),
+          Expanded(
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (event) {
+                if (event.metrics.axis == Axis.vertical && event.depth == 0) {
+                  final raw = ((event.metrics.pixels - event.metrics.minScrollExtent) / 32.0)
+                      .clamp(0.0, 1.0);
+                  final next = raw * raw * (3.0 - 2.0 * raw);
+                  if ((_scrollProgress - next).abs() > 0.015 ||
+                      (next == 0 && _scrollProgress != 0) ||
+                      (next == 1 && _scrollProgress != 1)) {
+                    setState(() => _scrollProgress = next);
+                  }
+                }
+                return false;
+              },
+              child: ListView(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  8,
+                  16,
+                  MediaQuery.paddingOf(context).bottom + 24,
                 ),
-            ],
+                children: [
+                  if (forms.isNotEmpty) ...[
+                    DropdownButton<int>(
+                      isExpanded: true,
+                      value: selected,
+                      onChanged: busy ? null : (i) => select(i!),
+                      items: [
+                        for (var i = 0; i < forms.length; i++)
+                          DropdownMenuItem(value: i, child: Text(forms[i]['title'])),
+                      ],
+                    ),
+                    for (final f in forms[selected]['fields'])
+                      if (f['label'] != '')
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: (f['choices'] as List).isEmpty
+                              ? TextField(
+                                  key: ValueKey('$selected/${f['key']}'),
+                                  controller: inputs[f['key']],
+                                  decoration: InputDecoration(labelText: f['label']),
+                                  obscureText: f['secret'],
+                                  enabled: !busy,
+                                )
+                              : InputDecorator(
+                                  decoration: InputDecoration(labelText: f['label']),
+                                  child: DropdownButton<String>(
+                                    isExpanded: true,
+                                    value: inputs[f['key']]!.text,
+                                    onChanged: busy
+                                        ? null
+                                        : (v) =>
+                                              setState(() => inputs[f['key']]!.text = v!),
+                                    items: [
+                                      for (final entry in f['choices'])
+                                        DropdownMenuItem<String>(
+                                          value: entry[0],
+                                          child: Text(entry[1]),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                        ),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        for (final a in forms[selected]['actions'])
+                          TextButton(
+                            onPressed: busy ? null : () => run(a[0], a[1]),
+                            child: Text(a[1]),
+                          ),
+                      ],
+                    ),
+                  ],
+                  if (busy) const LinearProgressIndicator(),
+                  if (message.isNotEmpty && selected == 3)
+                    TextButton(
+                      onPressed: () => setState(() => hideResult = !hideResult),
+                      child: Text(hideResult ? '显示结果' : '隐藏结果'),
+                    ),
+                  if (message.isNotEmpty && (selected != 3 || !hideResult))
+                    SelectableText(message),
+                ],
+              ),
+            ),
           ),
         ],
-        if (busy) const LinearProgressIndicator(),
-        if (message.isNotEmpty && selected == 3)
-          TextButton(
-            onPressed: () => setState(() => hideResult = !hideResult),
-            child: Text(hideResult ? '显示结果' : '隐藏结果'),
-          ),
-        if (message.isNotEmpty && (selected != 3 || !hideResult))
-          SelectableText(message),
-      ],
+      ),
     ),
-  ));
+  );
 }

@@ -2526,6 +2526,18 @@ impl Workspace {
             TailscaleTab::Ssh => self.render_tailscale_ssh(&ep, p, tint, cx),
         };
 
+        let top = div()
+            .w_full()
+            .px(px(20.))
+            .pb_3()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .text_color(p.ink())
+            .child(header)
+            .child(segmented);
+
         let page_content = div()
             .w_full()
             .flex()
@@ -2533,15 +2545,14 @@ impl Workspace {
             .gap_4()
             .pb_6()
             .text_color(p.ink())
-            .child(header)
             .child(hero_card)
-            .child(segmented)
             .child(body);
 
         div()
             .size_full()
             .flex()
             .flex_col()
+            .child(top)
             .child(self.scroll_pane("tailscale-scroll", page_content, cx))
     }
 

@@ -913,30 +913,108 @@ class GlassApiGate extends StatelessWidget {
   }
 }
 
+class GlassStatusPill extends StatelessWidget {
+  final bool connected;
+  final bool busy;
+  final String statusText;
+  final bool compact;
+  final VoidCallback? onTap;
+
+  const GlassStatusPill({
+    super.key,
+    required this.connected,
+    this.busy = false,
+    required this.statusText,
+    this.compact = false,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SingboardColors.of(context);
+    final scope = GlassScope.of(context);
+    final pill = Container(
+      height: 32,
+      padding: EdgeInsets.symmetric(horizontal: compact ? 9 : 12),
+      decoration: GlassSubpageHeader.pillDecoration(c, scope),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (busy)
+            SizedBox.square(
+              dimension: 12,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: c.warning,
+              ),
+            )
+          else
+            Container(
+              width: 14,
+              height: 14,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: connected ? c.successSoft : c.dangerSoft,
+              ),
+              alignment: Alignment.center,
+              child: Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: connected ? c.success : c.error,
+                ),
+              ),
+            ),
+          const SizedBox(width: 5),
+          Text(
+            statusText,
+            style: TextStyle(
+              fontSize: compact ? 11.5 : 12,
+              height: 16 / 12,
+              fontFeatures: const [FontFeature.tabularFigures()],
+              fontWeight: FontWeight.w500,
+              color: c.ink,
+            ),
+          ),
+        ],
+      ),
+    );
+    if (onTap == null) return pill;
+    return GestureDetector(onTap: onTap, child: pill);
+  }
+}
+
 class GlassAppHeader extends StatelessWidget {
   final String title;
   final String? scrolledTitle;
+  final Widget? leading;
   final bool scrolled;
   final double scrollProgress;
   final bool showStatusPill;
   final double statusPillOpacity;
+  final bool compactStatusPill;
   final bool connected;
   final bool busy;
   final String statusText;
   final VoidCallback? onStatusTap;
+  final VoidCallback? onSettingsTap;
 
   const GlassAppHeader({
     super.key,
-    required this.title,
+    this.title = 'singboard',
     this.scrolledTitle,
+    this.leading,
     this.scrolled = false,
     this.scrollProgress = 0.0,
     required this.showStatusPill,
     this.statusPillOpacity = 1.0,
+    this.compactStatusPill = false,
     required this.connected,
     this.busy = false,
     required this.statusText,
     this.onStatusTap,
+    this.onSettingsTap,
   });
 
   @override
@@ -953,7 +1031,7 @@ class GlassAppHeader extends StatelessWidget {
       letterSpacing: -0.2,
       color: c.ink,
     );
-    final Widget titleWidget = scrolledTitle != null && scrolledTitle != title
+    final Widget defaultTitle = scrolledTitle != null && scrolledTitle != title
         ? Stack(
             alignment: Alignment.centerLeft,
             children: [
@@ -992,8 +1070,8 @@ class GlassAppHeader extends StatelessWidget {
     final bar = Container(
       padding: EdgeInsets.only(
         top: MediaQuery.paddingOf(context).top,
-        left: panelGutter(context) + 4 + MediaQuery.paddingOf(context).left,
-        right: panelGutter(context) + 4 + MediaQuery.paddingOf(context).right,
+        left: panelGutter(context) + MediaQuery.paddingOf(context).left,
+        right: panelGutter(context) + MediaQuery.paddingOf(context).right,
       ),
       decoration: BoxDecoration(
         color: surface > 0.01
@@ -1016,91 +1094,64 @@ class GlassAppHeader extends StatelessWidget {
             : null,
       ),
       child: SizedBox(
-        height: 48,
+        height: 52,
         child: Row(
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: Image.asset('assets/favicon.png', width: 24, height: 24),
-            ),
-            const SizedBox(width: 8),
-            Expanded(child: titleWidget),
-            if (showStatusPill && statusPillOpacity > 0.01)
+            if (leading != null)
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: leading!,
+                ),
+              )
+            else ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Image.asset('assets/favicon.png', width: 24, height: 24),
+              ),
+              const SizedBox(width: 8),
+              Expanded(child: defaultTitle),
+            ],
+            if (showStatusPill && statusPillOpacity > 0.01) ...[
+              const SizedBox(width: 8),
               Opacity(
                 opacity: statusPillOpacity.clamp(0.0, 1.0),
                 child: IgnorePointer(
                   ignoring: statusPillOpacity < 0.5,
-                  child: GestureDetector(
+                  child: GlassStatusPill(
+                    connected: connected,
+                    busy: busy,
+                    statusText: statusText,
+                    compact: compactStatusPill,
                     onTap: onStatusTap,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 5,
                   ),
-                  decoration: BoxDecoration(
-                    color: Color.lerp(
-                      c.fill,
-                      Colors.white.withValues(alpha: c.dark ? .12 : .28),
-                      1.0 - t,
-                    ),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(
-                      color: Color.lerp(
-                        c.hairline,
-                        Colors.white.withValues(alpha: c.dark ? .19 : .55),
-                        1.0 - t,
-                      )!,
-                      width: 0.75,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(
-                          alpha: c.dark ? (.16 + .14 * (1.0 - t)) : (.04 + .06 * (1.0 - t)),
-                        ),
-                        blurRadius: 8,
-                        spreadRadius: -2,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (busy) SizedBox.square(dimension: 12, child: CircularProgressIndicator(strokeWidth: 2, color: c.warning))
-                      else Container(
-                        width: 14,
-                        height: 14,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: connected ? c.successSoft : c.dangerSoft,
-                        ),
+                ),
+              ),
+            ],
+            if (onSettingsTap != null) ...[
+              const SizedBox(width: 8),
+              Tooltip(
+                message: '设置',
+                child: Semantics(
+                  button: true,
+                  label: '设置',
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: onSettingsTap,
+                      child: Container(
+                        width: 32,
+                        height: 32,
                         alignment: Alignment.center,
-                        child: Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: connected ? c.success : c.error,
-                          ),
-                        ),
+                        decoration: GlassSubpageHeader.pillDecoration(c, scope),
+                        child: PanelIcon('settings', size: 17, color: c.ink),
                       ),
-                      const SizedBox(width: 5),
-                      Text(
-                        statusText,
-                        style: TextStyle(
-                          fontSize: 12,
-                          height: 16 / 12,
-                          fontFeatures: const [FontFeature.tabularFigures()],
-                          fontWeight: FontWeight.w500,
-                          color: c.ink,
-                        ),
-                      ),
-                      ],
                     ),
                   ),
                 ),
               ),
-              ),
+            ],
           ],
         ),
       ),
@@ -1175,6 +1226,8 @@ class GlassSearchField extends StatelessWidget {
 class GlassSegmented<T> extends StatefulWidget {
   final List<(T, String)> items;
   final Map<T, int>? counts;
+  final Map<T, String>? badges;
+  final bool compact;
   final T value;
   final ValueChanged<T> onChanged;
 
@@ -1182,6 +1235,8 @@ class GlassSegmented<T> extends StatefulWidget {
     super.key,
     required this.items,
     this.counts,
+    this.badges,
+    this.compact = false,
     required this.value,
     required this.onChanged,
   });
@@ -1291,15 +1346,16 @@ class _GlassSegmentedState<T> extends State<GlassSegmented<T>> {
                     builder: (_) {
                       final selected = key == widget.value;
                       final count = widget.counts?[key];
+                      final badge = widget.badges?[key] ?? (count != null ? '$count' : null);
                       final fg = selected ? sel.ink : c.ink;
                       return GestureDetector(
                         key: _keyFor(key),
                         behavior: HitTestBehavior.opaque,
                         onTap: () => widget.onChanged(key),
                         child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 11,
-                            vertical: 4.5,
+                          padding: EdgeInsets.symmetric(
+                            horizontal: widget.compact ? 9.5 : 11,
+                            vertical: widget.compact ? 4.5 : 5,
                           ),
                           decoration: !showSlider && selected
                               ? _lensDecoration(c, sel)
@@ -1319,7 +1375,7 @@ class _GlassSegmentedState<T> extends State<GlassSegmented<T>> {
                                       : fg.withValues(alpha: 0.68),
                                 ),
                               ),
-                              if (count != null) ...[
+                              if (badge != null && badge.isNotEmpty) ...[
                                 const SizedBox(width: 5),
                                 Container(
                                   padding: const EdgeInsets.symmetric(
@@ -1335,7 +1391,7 @@ class _GlassSegmentedState<T> extends State<GlassSegmented<T>> {
                                     borderRadius: BorderRadius.circular(999),
                                   ),
                                   child: Text(
-                                    '$count',
+                                    badge,
                                     style: TextStyle(
                                       fontSize: 10.5,
                                       fontWeight: FontWeight.w500,
@@ -1607,19 +1663,27 @@ class _BackdropScrimPainter extends CustomPainter {
 }
 
 class GlassSubpageHeader extends StatelessWidget {
-  final String title;
+  final String? title;
+  final Widget? titleWidget;
+  final bool centerTitle;
+  final double scrollProgress;
+  final bool showBottomBorder;
   final VoidCallback? onBack;
   final Widget? trailing;
 
   const GlassSubpageHeader({
     super.key,
-    required this.title,
+    this.title,
+    this.titleWidget,
+    this.centerTitle = false,
+    this.scrollProgress = 1.0,
+    this.showBottomBorder = true,
     this.onBack,
     this.trailing,
   });
 
   static double totalHeight(BuildContext context) =>
-      MediaQuery.paddingOf(context).top + 48;
+      MediaQuery.paddingOf(context).top + 52;
 
   static BoxDecoration pillDecoration(
     SingboardColors c,
@@ -1661,57 +1725,78 @@ class GlassSubpageHeader extends StatelessWidget {
     final t = scope.tint.clamp(0.0, 1.0);
     final pad = MediaQuery.paddingOf(context);
     final gutter = panelGutter(context);
-    final blur = scope.hasWallpaper ? _glassBlurSigma(t) : 0.0;
+    final progress = scrollProgress.clamp(0.0, 1.0);
+    final surface = scope.hasWallpaper ? 1.0 : progress;
+    final blur = surface > 0.01 && scope.hasWallpaper
+        ? _glassBlurSigma(t) * surface
+        : 0.0;
+    final bodyTitle = titleWidget ??
+        Text(
+          title ?? '',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.2,
+            color: c.ink,
+          ),
+        );
     final bar = Container(
       padding: EdgeInsets.only(
         top: pad.top,
-        left: gutter + 4 + pad.left,
-        right: gutter + 4 + pad.right,
+        left: gutter + pad.left,
+        right: gutter + pad.right,
       ),
       decoration: BoxDecoration(
-        color: c.glassRgb.withValues(
-          alpha: scope.hasWallpaper
-              ? scope.alpha(0.35 + 0.45 * t, .6)
-              : (0.72 + 0.16 * t),
-        ),
-        image: scope.grain,
-        border: Border(
-          bottom: BorderSide(color: c.hairline, width: 0.5),
-        ),
+        color: surface > 0.01
+            ? c.glassRgb.withValues(
+                alpha: (scope.hasWallpaper
+                        ? scope.alpha(0.35 + 0.45 * t, .6)
+                        : (0.72 + 0.16 * t)) *
+                    surface,
+              )
+            : Colors.transparent,
+        image: surface > 0.01 ? scope.grain : null,
+        border: surface > 0.01 && showBottomBorder
+            ? Border(
+                bottom: BorderSide(
+                  color: c.hairline.withValues(alpha: c.hairline.a * surface),
+                  width: 0.5,
+                ),
+              )
+            : null,
       ),
       child: SizedBox(
-        height: 48,
+        height: 52,
         child: Row(
           children: [
             Tooltip(
               message: '返回',
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: onBack ?? () => Navigator.maybePop(context),
-                  child: Container(
-                    width: 28,
-                    height: 28,
-                    alignment: Alignment.center,
-                    decoration: pillDecoration(c, scope),
-                    child: PanelIcon('back', size: 14, color: c.ink),
+              child: Semantics(
+                button: true,
+                label: '返回',
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: onBack ?? () => Navigator.maybePop(context),
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      alignment: Alignment.center,
+                      decoration: pillDecoration(c, scope),
+                      child: PanelIcon('back', size: 15, color: c.ink),
+                    ),
                   ),
                 ),
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: -0.2,
-                  color: c.ink,
-                ),
+              child: Align(
+                alignment: centerTitle ? Alignment.center : Alignment.centerLeft,
+                child: bodyTitle,
               ),
             ),
             if (trailing != null) ...[
@@ -1721,6 +1806,58 @@ class GlassSubpageHeader extends StatelessWidget {
           ],
         ),
       ),
+    );
+    if (blur > 0) {
+      return ClipRect(
+        child: _GlassFilter(
+          blur: blur,
+          lens: false,
+          child: bar,
+        ),
+      );
+    }
+    return bar;
+  }
+}
+
+class GlassStickyBar extends StatelessWidget {
+  final bool pinned;
+  final Widget child;
+
+  const GlassStickyBar({
+    super.key,
+    required this.pinned,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SingboardColors.of(context);
+    final scope = GlassScope.of(context);
+    final t = scope.tint.clamp(0.0, 1.0);
+    final pad = MediaQuery.paddingOf(context);
+    final gutter = panelGutter(context);
+    final blur = pinned && scope.hasWallpaper ? _glassBlurSigma(t) : 0.0;
+    final bar = Container(
+      alignment: Alignment.center,
+      padding: EdgeInsets.only(
+        left: gutter + pad.left,
+        right: gutter + pad.right,
+      ),
+      decoration: BoxDecoration(
+        color: pinned
+            ? c.glassRgb.withValues(
+                alpha: scope.hasWallpaper
+                    ? scope.alpha(0.35 + 0.45 * t, .6)
+                    : (0.72 + 0.16 * t),
+              )
+            : Colors.transparent,
+        image: pinned ? scope.grain : null,
+        border: pinned
+            ? Border(bottom: BorderSide(color: c.hairline, width: 0.5))
+            : null,
+      ),
+      child: child,
     );
     if (blur > 0) {
       return ClipRect(

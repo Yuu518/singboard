@@ -10,7 +10,6 @@ void main() {
       GlassBottomNavItem('connections', '连接'),
       GlassBottomNavItem('logs', '日志'),
       GlassBottomNavItem('rules', '规则'),
-      GlassBottomNavItem('settings', '设置'),
     ];
     var index = 0;
     final changes = <int>[];
@@ -100,5 +99,58 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('断开连接'));
     expect(clicks, 1);
+  });
+
+  testWidgets('单层顶栏承载次标签切换与设置入口，二级页顶栏支持自定义次标签', (tester) async {
+    var showProviders = false;
+    var settingsClicks = 0;
+    var subTab = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (_, update) => Scaffold(
+            body: Column(
+              children: [
+                GlassAppHeader(
+                  leading: GlassSegmented<bool>(
+                    compact: true,
+                    items: const [(false, '代理组'), (true, '提供商')],
+                    counts: const {false: 6, true: 2},
+                    value: showProviders,
+                    onChanged: (v) => update(() => showProviders = v),
+                  ),
+                  showStatusPill: true,
+                  compactStatusPill: true,
+                  connected: true,
+                  statusText: '运行中',
+                  onSettingsTap: () => settingsClicks++,
+                ),
+                GlassSubpageHeader(
+                  centerTitle: true,
+                  scrollProgress: 0.5,
+                  titleWidget: GlassSegmented<int>(
+                    compact: true,
+                    items: const [(0, '设备'), (1, 'Taildrop'), (2, 'SSH')],
+                    badges: const {0: '4/6'},
+                    value: subTab,
+                    onChanged: (v) => update(() => subTab = v),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('提供商'));
+    await tester.pumpAndSettle();
+    expect(showProviders, isTrue);
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pumpAndSettle();
+    expect(settingsClicks, 1);
+    await tester.tap(find.text('Taildrop'));
+    await tester.pumpAndSettle();
+    expect(subTab, 1);
   });
 }

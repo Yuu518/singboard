@@ -25,6 +25,7 @@ class SettingsPage extends StatefulWidget {
   final double fontScale;
   final double glassTint;
   final String? wallpaperPath;
+  final Widget? headerTrailing;
   final Future<void> Function() onReload;
   final Future<void> Function(String mode) onSetMode;
   final Future<void> Function() onProbeRoot;
@@ -50,6 +51,7 @@ class SettingsPage extends StatefulWidget {
     required this.fontScale,
     required this.glassTint,
     required this.wallpaperPath,
+    this.headerTrailing,
     required this.onReload,
     required this.onSetMode,
     required this.onProbeRoot,
@@ -81,12 +83,12 @@ class _SettingsPageState extends State<SettingsPage>
     ('/connections', '连接'),
     ('/logs', '日志'),
     ('/rules', '规则'),
-    ('/settings', '设置'),
   ];
 
   late double _tint = widget.glassTint;
   late double _fontScale = widget.fontScale;
   final _scrollCtrl = ScrollController();
+  double _scrollProgress = 0.0;
   final _fontSliderKey = GlobalKey();
   final _fontSliderLink = LayerLink();
   OverlayEntry? _fontPreviewEntry;
@@ -118,9 +120,21 @@ class _SettingsPageState extends State<SettingsPage>
   String _protocol = 'http';
   String _serviceProtocol = 'http';
 
+  void _onScroll() {
+    if (!_scrollCtrl.hasClients) return;
+    final raw = (_scrollCtrl.offset / 32.0).clamp(0.0, 1.0);
+    final next = raw * raw * (3.0 - 2.0 * raw);
+    if ((_scrollProgress - next).abs() > 0.015 ||
+        (next == 0 && _scrollProgress != 0) ||
+        (next == 1 && _scrollProgress != 1)) {
+      setState(() => _scrollProgress = next);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _scrollCtrl.addListener(_onScroll);
     _channel
         .invokeMethod<String>('version')
         .then((v) {
@@ -2335,35 +2349,33 @@ class _SettingsPageState extends State<SettingsPage>
 
     final viewPad = MediaQuery.viewPaddingOf(context);
     final bottomPad = MediaQuery.paddingOf(context).bottom;
-    return ListView(
-      controller: _scrollCtrl,
-      padding: EdgeInsets.fromLTRB(
-        panelGutter(context) + viewPad.left,
-        0,
-        panelGutter(context) + viewPad.right,
-        120 + bottomPad,
-      ),
-      children: [
-        Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 20),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: GlassBackdropHeading(
-                      '设置',
-                      style: TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
+    return GlassBackdrop(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Column(
+          children: [
+            GlassSubpageHeader(
+              title: '设置',
+              scrollProgress: _scrollProgress,
+              trailing: widget.headerTrailing,
+            ),
+            Expanded(
+              child: ListView(
+                controller: _scrollCtrl,
+                padding: EdgeInsets.fromLTRB(
+                  panelGutter(context) + viewPad.left,
+                  8,
+                  panelGutter(context) + viewPad.right,
+                  28 + bottomPad,
                 ),
-                const SettingsSectionHeader('核心与服务', first: true),
+                children: [
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const SettingsSectionHeader('核心与服务', first: true),
                 _card([
                   SettingsRow(
                     title: 'Root 管理本机核心',
@@ -2788,6 +2800,11 @@ class _SettingsPageState extends State<SettingsPage>
           ),
         ),
       ],
+    ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

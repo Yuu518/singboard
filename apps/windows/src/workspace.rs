@@ -1624,7 +1624,7 @@ impl Workspace {
 
     pub fn header_scroll_progress(&self) -> f32 {
         match self.page {
-            Page::Overview | Page::Settings | Page::Tailscale => {
+            Page::Overview | Page::Settings => {
                 let scrolled = (-f32::from(self.page_scroll.offset().y)).max(0.);
                 scrolling::smoothstep(12., 36., scrolled)
             }

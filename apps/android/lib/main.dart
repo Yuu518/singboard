@@ -352,15 +352,39 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     return false;
   }
   final _pager = PageController();
-  final _pageKeys = List.generate(6, (_) => GlobalKey());
-  final _scrollProgress = List<double>.filled(6, 0.0);
+  final _pageKeys = List.generate(5, (_) => GlobalKey());
+  final _scrollProgress = List<double>.filled(5, 0.0);
   final _headerScroll = ValueNotifier<int>(0);
   final _swipeProgress = ValueNotifier<double?>(null);
+  bool _proxyProviders = false;
+  bool _ruleProviders = false;
+  bool _connectionsClosed = false;
+  final _proxyTabMeta = ValueNotifier<CatalogTabMeta>(const CatalogTabMeta());
+  final _ruleTabMeta = ValueNotifier<CatalogTabMeta>(const CatalogTabMeta());
+  final _connTabCounts = ValueNotifier<({int activeCount, int historyCount})>(
+    (activeCount: 0, historyCount: 0),
+  );
+  final _settingsTick = ValueNotifier<int>(0);
+  bool _settingsOpen = false;
   bool _userSwiping = false;
   int? _pendingTab;
   late final _pageFade = AnimationController(vsync: this, duration: const Duration(milliseconds: 260), value: 1);
   double _tabDir = 1.0;
   int? _targetPage;
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    if (_settingsOpen) _settingsTick.value++;
+  }
+
+  void _setPageScrollProgress(int index, double progress) {
+    if (index < 0 || index >= _scrollProgress.length) return;
+    if ((_scrollProgress[index] - progress).abs() > 0.005) {
+      _scrollProgress[index] = progress;
+      _headerScroll.value++;
+    }
+  }
 
   void _selectTab(int next) {
     if (next != 0) hoveredTopology = null;
@@ -1007,7 +1031,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       _fontScale.value =
           fontScale is num ? fontScale.toDouble().clamp(0.9, 1.4) : 1.0;
       final startPage = prefs['startPage'] as String? ?? '/home';
-      final start = const ['/home', '/proxies', '/connections', '/logs', '/rules', '/settings']
+      final start = const ['/home', '/proxies', '/connections', '/logs', '/rules']
           .indexOf(startPage == '/overview' ? '/home' : startPage);
       if (initial && start >= 0) _selectTab(start);
       if (!initial &&
@@ -1322,6 +1346,10 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     _pager.dispose();
     _headerScroll.dispose();
     _swipeProgress.dispose();
+    _proxyTabMeta.dispose();
+    _ruleTabMeta.dispose();
+    _connTabCounts.dispose();
+    _settingsTick.dispose();
     _pageFade.dispose();
     _logScroll.dispose();
     _logSearchFocus.dispose();
@@ -1935,7 +1963,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
               GestureDetector(
                 onTap: canStart
                     ? () => rootOperation('root_start', '启动核心')
-                    : () => _selectTab(5),
+                    : _openSettings,
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 20,
@@ -2290,26 +2318,8 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
         ),
     ];
     return ListView(
-      padding: EdgeInsets.fromLTRB(inset.left, 4, inset.right, 96 + MediaQuery.viewPaddingOf(context).bottom),
+      padding: EdgeInsets.fromLTRB(inset.left, 8, inset.right, 96 + MediaQuery.viewPaddingOf(context).bottom),
       children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Transform.translate(
-              offset: const Offset(0, -3),
-              child: const GlassBackdropHeading(
-                '概览',
-                style: TextStyle(
-                  fontSize: 26,
-                  height: 1.25,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -0.4,
-                ),
-              ),
-            ),
-          ),
-        ),
         GlassCard(
           radius: 22,
           floating: true,
@@ -2379,7 +2389,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                                   ),
                                 ),
                                 GestureDetector(
-                                  onTap: () => _selectTab(5),
+                                  onTap: _openSettings,
                                   child: Text(
                                     modeText,
                                     style: TextStyle(
@@ -2979,10 +2989,6 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       shown = [];
     }
     final totalCount = countLines(source);
-    final shownCount = countLines(shown);
-    final countText = shownCount == totalCount
-        ? '$totalCount'
-        : '$shownCount / $totalCount';
     final clearedCount = clearedLogs == null ? 0 : countLines(clearedLogs!);
     final apiUnreachable = logStatus != '已连接' && _logFailures >= 3;
     final showReconnecting =
@@ -3010,7 +3016,6 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       });
     }
 
-    final scope = GlassScope.of(context);
     final inset = _pageInsets();
     final wide = MediaQuery.sizeOf(context).width >= 640;
     final clearance = MediaQuery.viewInsetsOf(context).bottom > 0
@@ -3032,19 +3037,85 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
         radius: 10,
         child: Container(
           height: 32,
-          constraints: const BoxConstraints(minWidth: 156),
-          padding: const EdgeInsets.only(left: 12, right: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
           child: Row(
             mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                level == '跟随核心' ? '跟随核心（$coreLvl）' : level,
-                style: TextStyle(fontSize: 14, color: c.ink),
+                level == '跟随核心'
+                    ? (wide ? '跟随核心（$coreLvl）' : '核心($coreLvl)')
+                    : level,
+                style: TextStyle(fontSize: 13, color: c.ink),
               ),
               const SizedBox(width: 4),
-              PanelIcon('select-caret', size: 16, color: c.ink),
+              PanelIcon('select-caret', size: 15, color: c.ink),
             ],
+          ),
+        ),
+      ),
+    );
+
+    final pauseBtn = GestureDetector(
+      onTap: () => setState(() {
+        if (frozen == null) {
+          frozen = List.of(entries);
+          pausedAt = total;
+        } else {
+          frozen = null;
+        }
+      }),
+      child: GlassControl(
+        radius: 999,
+        tint: frozen != null ? c.primarySoft : null,
+        borderColor: frozen != null ? c.selectionBorder : null,
+        child: SizedBox(
+          width: 32,
+          height: 32,
+          child: PlaybackIcon(
+            paused: frozen != null,
+            color: frozen != null ? c.selectionInk : c.ink,
+          ),
+        ),
+      ),
+    );
+
+    final clearBtn = GestureDetector(
+      onTap: entries.isEmpty && frozen == null
+          ? null
+          : () {
+              final removed = List.of(entries);
+              clearedTimer?.cancel();
+              setState(() {
+                entries.clear();
+                frozen = null;
+                expandedLogs.clear();
+                clearedLogs = countLines(removed) > 0 ? removed : null;
+              });
+              if (clearedLogs != null) {
+                clearedTimer = Timer(
+                  const Duration(seconds: 8),
+                  () {
+                    if (mounted) setState(() => clearedLogs = null);
+                  },
+                );
+              }
+            },
+      child: Opacity(
+        opacity: entries.isEmpty && frozen == null ? 0.45 : 1.0,
+        child: GlassControl(
+          radius: 999,
+          child: Container(
+            height: 32,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            alignment: Alignment.center,
+            child: Text(
+              '清空',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: c.ink,
+              ),
+            ),
           ),
         ),
       ),
@@ -3053,119 +3124,53 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     return Column(
       children: [
         Padding(
-          padding: EdgeInsets.fromLTRB(inset.left, 4, inset.right, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Transform.translate(
-                    offset: const Offset(0, -3),
-                    child: const GlassBackdropHeading(
-                      '日志',
-                      style: TextStyle(
-                        fontSize: 26,
-                        height: 1.25,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.4,
+          padding: EdgeInsets.fromLTRB(inset.left, 6, inset.right, 10),
+          child: wide
+              ? Row(
+                  children: [
+                    Expanded(
+                      child: GlassSearchField(
+                        controller: _logSearchCtrl,
+                        focusNode: _logSearchFocus,
+                        hint: '搜索日志内容',
+                        value: keyword,
+                        onChanged: (text) =>
+                            setState(() => keyword = text.trim().toLowerCase()),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  GlassBackdropPill(
-                    countText,
-                    muted: true,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontFeatures: [FontFeature.tabularFigures()],
+                    const SizedBox(width: 8),
+                    picker,
+                    const SizedBox(width: 8),
+                    pauseBtn,
+                    const SizedBox(width: 8),
+                    clearBtn,
+                  ],
+                )
+              : Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: GlassSearchField(
+                            controller: _logSearchCtrl,
+                            focusNode: _logSearchFocus,
+                            hint: '搜索日志内容',
+                            value: keyword,
+                            onChanged: (text) => setState(
+                              () => keyword = text.trim().toLowerCase(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        picker,
+                        const SizedBox(width: 6),
+                        pauseBtn,
+                        const SizedBox(width: 6),
+                        clearBtn,
+                      ],
                     ),
-                  ),
-                  const Spacer(),
-                  if (wide) ...[picker, const SizedBox(width: 8)],
-                  GestureDetector(
-                    onTap: () => setState(() {
-                      if (frozen == null) {
-                        frozen = List.of(entries);
-                        pausedAt = total;
-                      } else {
-                        frozen = null;
-                      }
-                    }),
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: frozen != null
-                            ? c.primarySoft
-                            : Colors.transparent,
-                      ),
-                      child: PlaybackIcon(
-                        paused: frozen != null,
-                        color: frozen != null
-                            ? c.selectionInk
-                            : scope.backdropInk(c),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: entries.isEmpty && frozen == null
-                        ? null
-                        : () {
-                            final removed = List.of(entries);
-                            clearedTimer?.cancel();
-                            setState(() {
-                              entries.clear();
-                              frozen = null;
-                              expandedLogs.clear();
-                              clearedLogs = countLines(removed) > 0
-                                  ? removed
-                                  : null;
-                            });
-                            if (clearedLogs != null) {
-                              clearedTimer = Timer(
-                                const Duration(seconds: 8),
-                                () {
-                                  if (mounted)
-                                    setState(() => clearedLogs = null);
-                                },
-                              );
-                            }
-                          },
-                    child: GlassBackdropPill(
-                      '清空',
-                      muted: entries.isEmpty && frozen == null,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 6,
-                      ),
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: GlassSearchField(
-                      controller: _logSearchCtrl,
-                      focusNode: _logSearchFocus,
-                      hint: '搜索日志内容',
-                      value: keyword,
-                      onChanged: (text) =>
-                          setState(() => keyword = text.trim().toLowerCase()),
-                    ),
-                  ),
-                  if (!wide) ...[const SizedBox(width: 8), picker],
-                ],
-              ),
-            ],
-          ),
+                  ],
+                ),
         ),
         if (frozen != null || clearedCount > 0 || showReconnecting)
           Padding(
@@ -3205,7 +3210,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                             clearedLogs = null;
                           });
                         } else {
-                          _selectTab(5);
+                          _openSettings();
                         }
                       },
                       child: Padding(
@@ -3301,7 +3306,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                             ),
                             const SizedBox(height: 16),
                             GestureDetector(
-                              onTap: () => _selectTab(5),
+                              onTap: _openSettings,
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 18,
@@ -3637,7 +3642,137 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     );
   }
 
-  static const _titles = ['概览', '代理', '连接', '日志', '规则', '设置'];
+  static const _titles = ['概览', '代理', '连接', '日志', '规则'];
+
+  String _logHeaderCount() {
+    const levels = ['error', 'warn', 'info', 'debug'];
+    String normalizeLvl(String? raw) {
+      final lower = (raw ?? 'info').toLowerCase();
+      if (lower == 'warning') return 'warn';
+      if (lower == 'silent') return 'error';
+      return levels.contains(lower) ? lower : 'info';
+    }
+    int rank(String value) {
+      final index = levels.indexOf(value == 'warning' ? 'warn' : value);
+      return index < 0 ? 4 : index;
+    }
+    final source = frozen ?? entries;
+    final coreLvl = normalizeLvl(summary['config']?['log-level'] as String?);
+    final current = level == '跟随核心' ? coreLvl : level;
+    var totalCount = 0;
+    var shownCount = 0;
+    for (final r in source) {
+      if (r['type'] == 'marker') continue;
+      totalCount++;
+      if (rank(r['type'].toString().toLowerCase()) <= rank(current) &&
+          (keyword.isEmpty ||
+              r['payload'].toString().toLowerCase().contains(keyword))) {
+        shownCount++;
+      }
+    }
+    return shownCount == totalCount ? '$totalCount' : '$shownCount / $totalCount';
+  }
+
+  ({bool connected, bool busy, String statusText, VoidCallback? onStatusTap}) _headerStatus() {
+    final rootEnabled = preferences['nativeRootEnabled'] == true;
+    final running = rootEnabled ? rootRunning : summary.isNotEmpty;
+    final state = rootService['state'];
+    final busy = rootEnabled && (probing || state == 'starting' || state == 'stopping');
+    final uptime = rootRunning ? rootService['uptimeSeconds'] as int? : null;
+    final statusText = uptime != null
+        ? _uptime(uptime)
+        : state == 'starting'
+            ? '启动中'
+            : state == 'stopping'
+                ? '停止中'
+                : rootEnabled
+                    ? (running ? '运行中' : '已停止')
+                    : running
+                        ? '已连接'
+                        : overviewConnecting
+                            ? '连接中'
+                            : '未连接';
+    final onStatusTap = rootEnabled && !busy && (running || state == 'stopped' || state == 'not_installed')
+        ? () => rootOperation(rootRunning ? 'root_stop' : 'root_start', rootRunning ? '停止核心' : '启动核心')
+        : null;
+    return (
+      connected: running,
+      busy: busy,
+      statusText: statusText,
+      onStatusTap: onStatusTap,
+    );
+  }
+
+  Future<void> _openSettings() async {
+    if (_settingsOpen || !mounted) return;
+    _settingsOpen = true;
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ListenableBuilder(
+            listenable: Listenable.merge([
+              _settingsTick,
+              _theme,
+              _fontScale,
+              _glassTint,
+              _wallpaper,
+            ]),
+            builder: (_, __) {
+              final st = _headerStatus();
+              return SettingsPage(
+                preferences: preferences,
+                summary: summary,
+                endpoint: endpoint,
+                tailscale: _tailscale,
+                clashConnected: overviewLive,
+                rootStatus: switch (rootService['state']) {
+                  'running' => '运行中',
+                  'stopped' => '已停止',
+                  'not_installed' => '未安装服务',
+                  'unknown' => '状态未知',
+                  _ => rootStatus,
+                },
+                rootRunning: rootRunning,
+                probing: probing,
+                rootAction: _rootAction,
+                themeMode: _theme.value,
+                fontScale: _fontScale.value,
+                glassTint: _glassTint.value,
+                wallpaperPath: _wallpaper.value,
+                headerTrailing: GlassStatusPill(
+                  connected: st.connected,
+                  busy: st.busy,
+                  statusText: st.statusText,
+                  onTap: st.onStatusTap,
+                ),
+                onReload: () => loadPreferences(),
+                onSetMode: setMode,
+                onProbeRoot: probe,
+                onRootAction: rootOperation,
+                onOpenTools: openTools,
+                onThemeChanged: (m) => _theme.value = m,
+                onFontScaleChanged: (s) => _fontScale.value = s,
+                onTintChanged: (t) => _glassTint.value = t,
+                onWallpaperChanged: (p) {
+                  final prev = _wallpaper.value;
+                  if (prev != null && prev.isNotEmpty) {
+                    unawaited(FileImage(File(prev)).evict());
+                  }
+                  if (p != null && p.isNotEmpty) {
+                    unawaited(FileImage(File(p)).evict());
+                  }
+                  _wallpaper.value = p;
+                  _wallpaperRev.value++;
+                },
+              );
+            },
+          ),
+        ),
+      );
+    } finally {
+      _settingsOpen = false;
+    }
+  }
 
   (String, String, bool)? _gate(int page) {
     if (page < 1 || page > 4) return null;
@@ -3661,76 +3796,42 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   Widget _page(int index) {
     final gate = _gate(index);
     final content = switch (index) {
-    0 => overview(),
-    1 || 4 => CatalogPage(
-      key: ValueKey((endpointRevision, index)),
-      endpoint: endpoint,
-      secret: secret,
-      proxies: index == 1,
-      enabled: gate == null,
-      active: tab == index,
-      reconnectGeneration: _reconnectGeneration,
-      preferences: preferences,
-      chainSpeeds:
-          (metrics['chainSpeeds'] as Map<String, dynamic>?) ??
-              const {},
-      onProxyChanged: index == 1 ? _onProxyChanged : null,
-    ),
-    2 => ConnectionsPage(
-      key: ValueKey(endpointRevision),
-      endpoint: endpoint,
-      secret: secret,
-      status: connectionStatus,
-      sort: preferences['connectionSort'] as String? ?? '',
-      onSort: (key) {
-        preferences['connectionSort'] = key;
-      },
-      active: active,
-      history: history,
-      download: metrics['download'] as num? ?? 0,
-      upload: metrics['upload'] as num? ?? 0,
-    ),
-    3 => logPage(),
-    _ => SettingsPage(
-      preferences: preferences,
-      summary: summary,
-      endpoint: endpoint,
-      tailscale: _tailscale,
-      clashConnected: overviewLive,
-      rootStatus: switch (rootService['state']) {
-        'running' => '运行中',
-        'stopped' => '已停止',
-        'not_installed' => '未安装服务',
-        'unknown' => '状态未知',
-        _ => rootStatus,
-      },
-      rootRunning: rootRunning,
-      probing: probing,
-      rootAction: _rootAction,
-      themeMode: _theme.value,
-      fontScale: _fontScale.value,
-      glassTint: _glassTint.value,
-      wallpaperPath: _wallpaper.value,
-      onReload: () => loadPreferences(),
-      onSetMode: setMode,
-      onProbeRoot: probe,
-      onRootAction: rootOperation,
-      onOpenTools: openTools,
-      onThemeChanged: (m) => _theme.value = m,
-      onFontScaleChanged: (s) => _fontScale.value = s,
-      onTintChanged: (t) => _glassTint.value = t,
-      onWallpaperChanged: (p) {
-        final prev = _wallpaper.value;
-        if (prev != null && prev.isNotEmpty) {
-          unawaited(FileImage(File(prev)).evict());
-        }
-        if (p != null && p.isNotEmpty) {
-          unawaited(FileImage(File(p)).evict());
-        }
-        _wallpaper.value = p;
-        _wallpaperRev.value++;
-      },
-    ),
+      0 => overview(),
+      1 || 4 => CatalogPage(
+        key: ValueKey((endpointRevision, index)),
+        endpoint: endpoint,
+        secret: secret,
+        proxies: index == 1,
+        enabled: gate == null,
+        active: tab == index,
+        showProviders: index == 1 ? _proxyProviders : _ruleProviders,
+        tabMeta: index == 1 ? _proxyTabMeta : _ruleTabMeta,
+        onScrollProgress: (p) => _setPageScrollProgress(index, p),
+        reconnectGeneration: _reconnectGeneration,
+        preferences: preferences,
+        chainSpeeds:
+            (metrics['chainSpeeds'] as Map<String, dynamic>?) ??
+                const {},
+        onProxyChanged: index == 1 ? _onProxyChanged : null,
+      ),
+      2 => ConnectionsPage(
+        key: ValueKey(endpointRevision),
+        endpoint: endpoint,
+        secret: secret,
+        status: connectionStatus,
+        sort: preferences['connectionSort'] as String? ?? '',
+        onSort: (key) {
+          preferences['connectionSort'] = key;
+        },
+        active: active,
+        history: history,
+        download: metrics['download'] as num? ?? 0,
+        upload: metrics['upload'] as num? ?? 0,
+        showClosed: _connectionsClosed,
+        tabCounts: _connTabCounts,
+        onScrollProgress: (p) => _setPageScrollProgress(index, p),
+      ),
+      _ => logPage(),
     };
     return _PagerPanel(key: _pageKeys[index], child: NotificationListener<ScrollNotification>(
       onNotification: (event) {
@@ -3749,19 +3850,103 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     ));
   }
 
+  Widget? _buildHeaderLeading(BuildContext context, int activeIdx) {
+    final c = SingboardColors.of(context);
+    if (activeIdx == 0) return null;
+    if (activeIdx == 1) {
+      final meta = _proxyTabMeta.value;
+      if (meta.providersAvailable) {
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: GlassSegmented<bool>(
+            compact: true,
+            items: const [(false, '代理组'), (true, '提供商')],
+            counts: {false: meta.mainCount, true: meta.providerCount},
+            value: _proxyProviders,
+            onChanged: (v) => setState(() => _proxyProviders = v),
+          ),
+        );
+      }
+      return Text(
+        '代理',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.2,
+          color: c.ink,
+        ),
+      );
+    }
+    if (activeIdx == 2) {
+      final counts = _connTabCounts.value;
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: GlassSegmented<bool>(
+          compact: true,
+          items: const [(false, '活跃'), (true, '已关闭')],
+          counts: {false: counts.activeCount, true: counts.historyCount},
+          value: _connectionsClosed,
+          onChanged: (v) => setState(() => _connectionsClosed = v),
+        ),
+      );
+    }
+    if (activeIdx == 3) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '日志',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -0.2,
+              color: c.ink,
+            ),
+          ),
+          const SizedBox(width: 8),
+          GlassBackdropPill(
+            _logHeaderCount(),
+            muted: true,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            style: const TextStyle(
+              fontSize: 12,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      );
+    }
+    final meta = _ruleTabMeta.value;
+    if (meta.providersAvailable) {
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: GlassSegmented<bool>(
+          compact: true,
+          items: const [(false, '规则'), (true, '规则集')],
+          counts: {false: meta.mainCount, true: meta.providerCount},
+          value: _ruleProviders,
+          onChanged: (v) => setState(() => _ruleProviders = v),
+        ),
+      );
+    }
+    return Text(
+      '规则',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        letterSpacing: -0.2,
+        color: c.ink,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final rootEnabled = preferences['nativeRootEnabled'] == true;
-    final running = rootEnabled ? rootRunning : summary.isNotEmpty;
-    final state = rootService['state'];
-    final busy = rootEnabled && (probing || state == 'starting' || state == 'stopping');
-    final uptime = rootRunning ? rootService['uptimeSeconds'] as int? : null;
-    final statusText = uptime != null ? _uptime(uptime) : state == 'starting' ? '启动中'
-        : state == 'stopping' ? '停止中' : rootEnabled ? (running ? '运行中' : '已停止')
-        : running ? '已连接' : overviewConnecting ? '连接中' : '未连接';
-    final onStatusTap = rootEnabled && !busy && (running || state == 'stopped' || state == 'not_installed')
-        ? () => rootOperation(rootRunning ? 'root_stop' : 'root_start', rootRunning ? '停止核心' : '启动核心')
-        : null;
+    final st = _headerStatus();
     return PopScope(
       canPop: !showSetupWizard && tab == 0,
       onPopInvokedWithResult: (popped, _) {
@@ -3782,8 +3967,14 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                       body: Column(
                         children: [
                           AnimatedBuilder(
-                            animation: Listenable.merge([_pager, _headerScroll]),
-                            builder: (_, __) {
+                            animation: Listenable.merge([
+                              _pager,
+                              _headerScroll,
+                              _proxyTabMeta,
+                              _ruleTabMeta,
+                              _connTabCounts,
+                            ]),
+                            builder: (ctx, __) {
                               final pos = _pager.positions.length == 1 && _pager.position.haveDimensions
                                   ? (_pager.page ?? tab.toDouble())
                                   : tab.toDouble();
@@ -3792,19 +3983,19 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                               final frac = (pos - lo).clamp(0.0, 1.0);
                               final headerProgress =
                                   _scrollProgress[lo] + (_scrollProgress[hi] - _scrollProgress[lo]) * frac;
-                              final titleIdx = _scrollProgress[lo] >= _scrollProgress[hi] ? lo : hi;
+                              final activeIdx = pos.round().clamp(0, _titles.length - 1);
                               return GlassAppHeader(
                                 title: 'singboard',
-                                scrolledTitle: titleIdx != 3 && headerProgress > 0.01
-                                    ? _titles[titleIdx]
-                                    : null,
+                                leading: _buildHeaderLeading(ctx, activeIdx),
                                 scrollProgress: headerProgress,
                                 showStatusPill: true,
                                 statusPillOpacity: pos.clamp(0.0, 1.0),
-                                connected: running,
-                                busy: busy,
-                                statusText: statusText,
-                                onStatusTap: onStatusTap,
+                                compactStatusPill: activeIdx == 1 || activeIdx == 2 || activeIdx == 4,
+                                connected: st.connected,
+                                busy: st.busy,
+                                statusText: st.statusText,
+                                onStatusTap: st.onStatusTap,
+                                onSettingsTap: _openSettings,
                               );
                             },
                           ),
@@ -3899,7 +4090,6 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                             GlassBottomNavItem('connections', '连接'),
                             GlassBottomNavItem('logs', '日志'),
                             GlassBottomNavItem('rules', '规则'),
-                            GlassBottomNavItem('settings', '设置'),
                           ],
                         ),
                       ),
@@ -3921,7 +4111,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
                   setState(() {
                     showSetupWizard = false;
                   });
-                  _selectTab(5);
+                  unawaited(_openSettings());
                   unawaited(loadPreferences());
                 },
               ),

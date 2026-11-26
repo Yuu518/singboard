@@ -178,7 +178,9 @@ class _GlassBottomNavState extends State<GlassBottomNav>
   Widget build(BuildContext context) {
     final c = SingboardColors.of(context), scope = GlassScope.of(context);
     final inset = MediaQuery.viewPaddingOf(context);
-    final margin = MediaQuery.sizeOf(context).width < 360 ? 12.0 : 24.0;
+    final margin = MediaQuery.sizeOf(context).width < 360
+        ? 12.0
+        : (widget.items.length <= 5 ? 16.0 : 24.0);
     final barAlpha = scope.alpha(
       0.08 + 0.22 * scope.tint + 0.40 * scope.tint * scope.tint,
       .58,
