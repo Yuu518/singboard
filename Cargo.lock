@@ -6787,7 +6787,7 @@ dependencies = [
 
 [[package]]
 name = "singboard-core"
-version = "5.1.4"
+version = "5.1.5"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -6819,7 +6819,7 @@ dependencies = [
 
 [[package]]
 name = "singboard-gpui"
-version = "5.1.4"
+version = "5.1.5"
 dependencies = [
  "anyhow",
  "embed-resource",
