@@ -8,6 +8,7 @@ use singboard_core::service_api::{Command as ApiCommand, Feed as ApiFeed, Servic
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Mutex;
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -91,9 +92,11 @@ pub(super) enum TailscaleDialog {
 
 pub(super) struct TailscaleState {
     api: Option<Arc<Mutex<ServiceApi>>>,
+    api_epoch: Arc<AtomicU64>,
     generation: u64,
     settings_rev: u64,
     last_retry: Option<std::time::Instant>,
+    target_url: Option<String>,
     pub(super) status: ServiceApiStatus,
     pub(super) endpoints: Vec<Value>,
     pub(super) selected_endpoint: Option<String>,
@@ -133,9 +136,11 @@ impl Default for TailscaleState {
     fn default() -> Self {
         Self {
             api: None,
+            api_epoch: Arc::new(AtomicU64::new(0)),
             generation: 0,
             settings_rev: u64::MAX,
             last_retry: None,
+            target_url: None,
             status: ServiceApiStatus::NotConfigured,
             endpoints: Vec::new(),
             selected_endpoint: None,
@@ -253,6 +258,36 @@ impl TailscaleState {
         self.ssh_banner.clear();
         self.ssh_status.clear();
     }
+}
+
+fn is_loopback_url(url: &str) -> bool {
+    reqwest::Url::parse(url).ok().is_some_and(|u| {
+        u.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        })
+    })
+}
+
+fn reduce_status_events(events: &[Value], finished: bool) -> (Option<Value>, bool) {
+    let mut latest = None;
+    let mut disconnected = false;
+    for ev in events {
+        if ev["reconnecting"].as_bool() == Some(true) || ev.get("error").is_some() {
+            disconnected = true;
+            latest = None;
+        } else if let Some(data) = ev.get("data") {
+            disconnected = false;
+            latest = Some(data.clone());
+        }
+    }
+    if finished {
+        disconnected = true;
+    }
+    (latest, disconnected)
 }
 
 fn display_host(url: &str) -> String {
@@ -522,14 +557,71 @@ impl Workspace {
         self.tailscale.has_endpoints()
     }
 
+    fn local_tailscale_target(&self) -> bool {
+        self.tailscale
+            .target_url
+            .as_deref()
+            .map(is_loopback_url)
+            .unwrap_or_else(|| self.local_endpoint())
+    }
+
+    pub(super) fn local_tailscale_stopped(&self) -> bool {
+        self.local_tailscale_target()
+            && self.service_settled
+            && self.service_transition().is_none()
+            && (self.local_state.is_stopped() || self.local_state == CoreState::NotInstalled)
+    }
+
     pub(super) fn tailscale_status_chip(&self) -> (String, StatusTone) {
+        if matches!(self.tailscale.status, ServiceApiStatus::Error) && self.local_tailscale_stopped()
+        {
+            return ("未连接".into(), StatusTone::Muted);
+        }
         self.tailscale.status_chip()
     }
 
+    pub(super) fn disconnect_tailscale(&mut self, cx: &mut Context<Self>) {
+        self.tailscale.generation = self.tailscale.generation.wrapping_add(1);
+        let epoch = self.tailscale.generation;
+        self.tailscale.api_epoch.store(epoch, Ordering::SeqCst);
+        self.tailscale.clear_streams();
+        self.tailscale.endpoints.clear();
+        self.tailscale.selected_endpoint = None;
+        self.tailscale.selected_peer = None;
+        self.tailscale.upload_target = None;
+        self.tailscale.ssh_peer = None;
+        self.tailscale.dialog = None;
+        self.tailscale.status = ServiceApiStatus::Error;
+        self.tailscale.last_retry = Some(std::time::Instant::now());
+        if self.page == Page::Tailscale {
+            self.page = Page::Overview;
+        }
+        if let Some(api) = self.tailscale.api.clone() {
+            let api_epoch = self.tailscale.api_epoch.clone();
+            singboard_core::runtime().spawn(async move {
+                let mut guard = api.lock().await;
+                if api_epoch.load(Ordering::SeqCst) == epoch {
+                    let _ = guard.execute(ApiCommand::Disconnect).await;
+                }
+            });
+        }
+        cx.notify();
+    }
+
     pub(super) fn sync_tailscale(&mut self, force: bool, cx: &mut Context<Self>) {
+        if !force
+            && self.local_tailscale_stopped()
+            && matches!(
+                self.tailscale.status,
+                ServiceApiStatus::Connected { .. } | ServiceApiStatus::Connecting
+            )
+        {
+            self.disconnect_tailscale(cx);
+            return;
+        }
         let rev = singboard_core::settings::Settings::revision();
         let retry_due = matches!(self.tailscale.status, ServiceApiStatus::Error)
-            && (!self.local_endpoint() || self.local_state == CoreState::Running)
+            && (!self.local_tailscale_target() || self.local_state == CoreState::Running)
             && self
                 .tailscale
                 .last_retry
@@ -549,11 +641,13 @@ impl Workspace {
     ) {
         let Some(api) = self.tailscale.ensure_api() else {
             self.tailscale.status = ServiceApiStatus::NotConfigured;
+            self.tailscale.target_url = None;
             self.tailscale.endpoints.clear();
             return;
         };
         self.tailscale.generation = self.tailscale.generation.wrapping_add(1);
         let epoch = self.tailscale.generation;
+        self.tailscale.api_epoch.store(epoch, Ordering::SeqCst);
         self.tailscale.clear_streams();
         self.tailscale.selected_service_tag = service_tag.clone();
         self.tailscale.status = ServiceApiStatus::Connecting;
@@ -564,7 +658,7 @@ impl Workspace {
             let candidates = guard
                 .execute(ApiCommand::Discover)
                 .await
-                .map_err(|e| (e.code, e.message))?;
+                .map_err(|e| (e.code, e.message, None))?;
             let list: Vec<(String, String)> = candidates
                 .as_array()
                 .into_iter()
@@ -577,7 +671,12 @@ impl Workspace {
                 })
                 .collect();
             if list.is_empty() {
-                return Ok::<_, (&'static str, String)>((None, Vec::new(), None, None));
+                return Ok::<_, (&'static str, String, Option<String>)>((
+                    None,
+                    Vec::new(),
+                    None,
+                    None,
+                ));
             }
             if service_tag.is_none() && list.len() > 1 {
                 return Ok((None, list, None, None));
@@ -599,26 +698,42 @@ impl Workspace {
                     service_tag: if tag.is_empty() { None } else { Some(tag) },
                 })
                 .await
-                .map_err(|e| (e.code, e.message))?;
-            let initial_status = guard.execute(ApiCommand::Status).await.ok();
+                .map_err(|e| (e.code, e.message, Some(url.clone())))?;
+            let initial_status = guard
+                .execute(ApiCommand::Status)
+                .await
+                .map_err(|e| (e.code, e.message, Some(url.clone())))?;
             let handle = guard
                 .execute(ApiCommand::Open {
                     feed: ApiFeed::Status,
                 })
                 .await
-                .ok()
-                .and_then(|v| v.as_u64());
-            Ok((Some((url, auto_discovered)), list, initial_status, handle))
+                .map_err(|e| (e.code, e.message, Some(url.clone())))?
+                .as_u64()
+                .ok_or_else(|| ("internal", "无法创建状态订阅".to_owned(), Some(url.clone())))?;
+            Ok((
+                Some((url, auto_discovered)),
+                list,
+                Some(initial_status),
+                Some(handle),
+            ))
         });
 
         cx.spawn(async move |weak, cx| {
-            let res = task.await.unwrap_or_else(|e| Err(("internal", e.to_string())));
+            let res = task
+                .await
+                .unwrap_or_else(|e| Err(("internal", e.to_string(), None)));
             let _ = weak.update(cx, |this, cx| {
                 if this.tailscale.generation != epoch {
                     return;
                 }
                 match res {
                     Ok((Some((url, auto_discovered)), _, initial, handle)) => {
+                        this.tailscale.target_url = Some(url.clone());
+                        if this.local_tailscale_stopped() {
+                            this.disconnect_tailscale(cx);
+                            return;
+                        }
                         this.tailscale.status = ServiceApiStatus::Connected {
                             url,
                             auto_discovered,
@@ -629,14 +744,17 @@ impl Workspace {
                         }
                     }
                     Ok((None, list, _, _)) if list.len() > 1 => {
+                        this.tailscale.target_url = None;
                         this.tailscale.status = ServiceApiStatus::SelectService(list);
                         this.tailscale.endpoints.clear();
                     }
                     Ok((None, _, _, _)) => {
+                        this.tailscale.target_url = None;
                         this.tailscale.status = ServiceApiStatus::NotConfigured;
                         this.tailscale.endpoints.clear();
                     }
-                    Err((code, _)) => {
+                    Err((code, _, url)) => {
+                        this.tailscale.target_url = url;
                         this.tailscale.status = if code == "notConfigured" {
                             ServiceApiStatus::NotConfigured
                         } else {
@@ -742,7 +860,7 @@ impl Workspace {
             for (kind, handle) in handles {
                 let drained = match guard.execute(ApiCommand::Drain { handle }).await {
                     Ok(value) => value,
-                    Err(error) if kind == "upload" => {
+                    Err(error) if kind == "upload" || kind == "status" => {
                         serde_json::json!({"finished": true, "events": [{"error": error}]})
                     }
                     Err(_) => continue,
@@ -772,13 +890,16 @@ impl Workspace {
                     }
                     match kind {
                         "status" if this.tailscale.status_handle == Some(handle) => {
-                            for ev in events {
-                                if let Some(data) = ev.get("data") {
-                                    this.apply_tailscale_status(data.clone());
-                                }
-                            }
+                            let (latest, disconnected) = reduce_status_events(&events, finished);
                             if finished {
                                 this.tailscale.status_handle = None;
+                            }
+                            if disconnected {
+                                this.disconnect_tailscale(cx);
+                                break;
+                            }
+                            if let Some(data) = latest {
+                                this.apply_tailscale_status(data);
                             }
                         }
                         "inbox" if this.tailscale.inbox_handle == Some(handle) => {
@@ -4124,5 +4245,53 @@ impl Workspace {
         );
 
         div().w_full().flex_none().flex().flex_col().gap_3().child(top_bar).child(term_box)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_loopback_url, reduce_status_events};
+    use serde_json::json;
+
+    #[test]
+    fn loopback_url_detection_handles_v4_v6_localhost_and_remote() {
+        assert!(is_loopback_url("http://127.0.0.1:8080"));
+        assert!(is_loopback_url("https://[::1]:443"));
+        assert!(is_loopback_url("http://localhost:9090"));
+        assert!(!is_loopback_url("https://router.example:8443"));
+        assert!(!is_loopback_url("http://192.168.1.2:8080"));
+    }
+
+    #[test]
+    fn status_events_mark_disconnected_on_reconnecting_error_or_finish() {
+        let (latest, disc) = reduce_status_events(
+            &[
+                json!({"data": {"endpoints": [{"endpointTag": "ts"}]}}),
+                json!({"reconnecting": true, "error": {"code": "unavailable"}}),
+            ],
+            false,
+        );
+        assert!(disc);
+        assert!(latest.is_none());
+
+        let (latest, disc) = reduce_status_events(
+            &[json!({"error": {"code": "cancelled", "message": "closed"}})],
+            true,
+        );
+        assert!(disc);
+        assert!(latest.is_none());
+
+        let (latest, disc) = reduce_status_events(
+            &[
+                json!({"reconnecting": true}),
+                json!({"data": {"endpoints": [{"endpointTag": "ts"}]}}),
+            ],
+            false,
+        );
+        assert!(!disc);
+        assert!(latest.is_some());
+
+        let (_, disc) = reduce_status_events(&[], true);
+        assert!(disc);
     }
 }

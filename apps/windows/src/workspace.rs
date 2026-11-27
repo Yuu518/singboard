@@ -900,6 +900,18 @@ impl Workspace {
                 if !was_running && now_running {
                     this.reconnect_feeds(cx);
                     this.refresh(cx);
+                    if matches!(this.tailscale.status, tailscale::ServiceApiStatus::Error) {
+                        this.sync_tailscale(true, cx);
+                    }
+                } else if !now_running
+                    && this.local_tailscale_stopped()
+                    && matches!(
+                        this.tailscale.status,
+                        tailscale::ServiceApiStatus::Connected { .. }
+                            | tailscale::ServiceApiStatus::Connecting
+                    )
+                {
+                    this.disconnect_tailscale(cx);
                 }
                 cx.notify();
             });

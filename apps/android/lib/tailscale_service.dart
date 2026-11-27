@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -9,15 +10,28 @@ import 'native_service_api.dart';
 
 enum ServiceChipTone { ok, warn, error, muted }
 
+typedef TailscaleRequestHandler =
+    Future<dynamic> Function(String op, Map<String, dynamic> args);
+
 class TailscaleController extends ChangeNotifier {
   static const _channel = MethodChannel('singboard/config');
+
+  final TailscaleRequestHandler? _requestHandler;
+  final Duration _pollInterval;
+  final Duration _retryDelay;
 
   NativeServiceApi? _api;
   int _generation = 0;
   int? _statusHandle;
   Timer? _pollTimer;
+  Timer? _retryTimer;
   bool _draining = false;
   bool? _lastShareEnabled;
+  String? _targetUrl;
+  bool _connected = false;
+  bool _localBackend = false;
+  bool _coreKnownStopped = false;
+  Future<void> _disconnectOp = Future<void>.value();
 
   String chipText = '未配置';
   ServiceChipTone chipTone = ServiceChipTone.muted;
@@ -27,7 +41,27 @@ class TailscaleController extends ChangeNotifier {
   List<Map<String, dynamic>> discoveredServices = [];
   bool connecting = false;
 
+  TailscaleController({
+    TailscaleRequestHandler? requestHandler,
+    Duration pollInterval = const Duration(milliseconds: 900),
+    Duration retryDelay = const Duration(seconds: 8),
+  }) : _requestHandler = requestHandler,
+       _pollInterval = pollInterval,
+       _retryDelay = retryDelay;
+
   bool get hasEndpoints => endpoints.isNotEmpty;
+
+  bool get _isLocalTarget =>
+      _targetUrl != null ? _isLoopbackUrl(_targetUrl!) : _localBackend;
+
+  bool get _localCoreStopped => _isLocalTarget && _coreKnownStopped;
+
+  bool get _canRetryWhenDisconnected =>
+      !_connected &&
+      !connecting &&
+      !_localCoreStopped &&
+      (chipTone == ServiceChipTone.error ||
+          (chipTone == ServiceChipTone.muted && chipText == '未连接'));
 
   int get unreadCount => endpoints.fold<int>(
     0,
@@ -58,6 +92,9 @@ class TailscaleController extends ChangeNotifier {
     String op, [
     Map<String, dynamic> args = const {},
   ]) async {
+    if (_requestHandler case final handler?) {
+      return handler(op, args);
+    }
     final api = await _ensureApi();
     return api.request(op, args);
   }
@@ -77,21 +114,57 @@ class TailscaleController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void updateCoreState({
+    required bool localBackend,
+    required bool coreRunning,
+    required bool knownStopped,
+  }) {
+    _localBackend = localBackend;
+    _coreKnownStopped = knownStopped;
+    if (_localCoreStopped) {
+      _retryTimer?.cancel();
+      _retryTimer = null;
+      if (_connected || connecting || endpoints.isNotEmpty) {
+        _handleDisconnected(localCoreStopped: true);
+      } else if (chipTone == ServiceChipTone.error) {
+        chipText = '未连接';
+        chipTone = ServiceChipTone.muted;
+        notifyListeners();
+      }
+      return;
+    }
+    if (coreRunning && _canRetryWhenDisconnected) {
+      unawaited(sync());
+    }
+  }
+
+  void retryIfDisconnected() {
+    if (_canRetryWhenDisconnected) {
+      unawaited(sync());
+    }
+  }
+
   Future<void> sync({String? serviceTag}) async {
     final epoch = ++_generation;
     _pollTimer?.cancel();
     _pollTimer = null;
+    _retryTimer?.cancel();
+    _retryTimer = null;
     _statusHandle = null;
+    _connected = false;
     selectedServiceTag = serviceTag ?? selectedServiceTag;
     connecting = true;
     endpoints = [];
+    selectedEndpointTag = null;
     chipText = '连接中';
     chipTone = ServiceChipTone.warn;
     notifyListeners();
 
     try {
-      final api = await _ensureApi();
-      await api.request('disconnect');
+      await _disconnectOp;
+      if (_generation != epoch) return;
+      await request('disconnect');
+      if (_generation != epoch) return;
       final candidates = await discover();
       if (_generation != epoch) return;
       discoveredServices = candidates;
@@ -99,6 +172,7 @@ class TailscaleController extends ChangeNotifier {
         selectedServiceTag = null;
       }
       if (candidates.isEmpty) {
+        _targetUrl = null;
         connecting = false;
         endpoints = [];
         chipText = '未配置';
@@ -108,6 +182,7 @@ class TailscaleController extends ChangeNotifier {
         return;
       }
       if (selectedServiceTag == null && candidates.length > 1) {
+        _targetUrl = null;
         connecting = false;
         endpoints = [];
         chipText = '发现 ${candidates.length} 个服务';
@@ -125,75 +200,162 @@ class TailscaleController extends ChangeNotifier {
       final tag = chosen['serviceTag']?.toString() ?? '';
       selectedServiceTag = tag;
       final url = chosen['url']?.toString() ?? '';
-      await api.request('connect', {
+      _targetUrl = url.isEmpty ? null : url;
+      if (_localCoreStopped) {
+        connecting = false;
+        endpoints = [];
+        chipText = '未连接';
+        chipTone = ServiceChipTone.muted;
+        _syncShareTarget(false);
+        notifyListeners();
+        return;
+      }
+      await request('connect', {
         if (tag.isNotEmpty) 'serviceTag': tag,
       });
       if (_generation != epoch) return;
+      final snap = await request('status');
+      if (_generation != epoch) return;
+      final handleRaw = await request('open', {'feed': 'status'});
+      if (_generation != epoch) return;
+      final handle = (handleRaw as num?)?.toInt();
+      if (handle == null) {
+        throw const ServiceApiException('internal', '无法创建状态订阅');
+      }
+      if (_localCoreStopped) {
+        _handleDisconnected(localCoreStopped: true);
+        return;
+      }
       final host = _displayHost(url);
       chipText = tag.isNotEmpty ? '$host (自动)' : host;
       chipTone = ServiceChipTone.ok;
       connecting = false;
-      try {
-        final snap = await api.request('status');
-        if (_generation == epoch && snap is Map) {
-          _applyStatus(Map<String, dynamic>.from(snap));
-        }
-      } catch (_) {}
-      final handle = await api.request('open', {'feed': 'status'});
-      if (_generation != epoch) return;
-      _statusHandle = (handle as num?)?.toInt();
+      _connected = true;
+      _statusHandle = handle;
+      if (snap is Map) {
+        _applyStatus(Map<String, dynamic>.from(snap));
+      }
       _startPolling(epoch);
       notifyListeners();
     } on ServiceApiException catch (e) {
       if (_generation != epoch) return;
       connecting = false;
+      _connected = false;
       endpoints = [];
+      selectedEndpointTag = null;
       if (e.code == 'notConfigured') {
+        _targetUrl = null;
         chipText = '未配置';
+        chipTone = ServiceChipTone.muted;
+      } else if (_localCoreStopped) {
+        chipText = '未连接';
         chipTone = ServiceChipTone.muted;
       } else {
         chipText = '不可达';
         chipTone = ServiceChipTone.error;
+        _scheduleRetry();
       }
-      _syncShareTarget(discoveredServices.length > 1);
+      _syncShareTarget(!_localCoreStopped && discoveredServices.length > 1);
       notifyListeners();
     } catch (_) {
       if (_generation != epoch) return;
       connecting = false;
+      _connected = false;
       endpoints = [];
-      chipText = '不可达';
-      chipTone = ServiceChipTone.error;
-      _syncShareTarget(discoveredServices.length > 1);
+      selectedEndpointTag = null;
+      if (_localCoreStopped) {
+        chipText = '未连接';
+        chipTone = ServiceChipTone.muted;
+      } else {
+        chipText = '不可达';
+        chipTone = ServiceChipTone.error;
+        _scheduleRetry();
+      }
+      _syncShareTarget(!_localCoreStopped && discoveredServices.length > 1);
       notifyListeners();
     }
   }
 
   void _startPolling(int epoch) {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(milliseconds: 900), (_) {
+    _pollTimer = Timer.periodic(_pollInterval, (_) {
       _drainStatus(epoch);
     });
+  }
+
+  void _scheduleRetry() {
+    if (_localCoreStopped) return;
+    _retryTimer?.cancel();
+    _retryTimer = Timer(_retryDelay, () {
+      _retryTimer = null;
+      if (_canRetryWhenDisconnected) {
+        unawaited(sync());
+      }
+    });
+  }
+
+  void _handleDisconnected({required bool localCoreStopped}) {
+    final epoch = ++_generation;
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    _statusHandle = null;
+    _connected = false;
+    connecting = false;
+    endpoints = [];
+    selectedEndpointTag = null;
+    if (localCoreStopped) {
+      chipText = '未连接';
+      chipTone = ServiceChipTone.muted;
+    } else {
+      chipText = '不可达';
+      chipTone = ServiceChipTone.error;
+      _scheduleRetry();
+    }
+    _syncShareTarget(!localCoreStopped && discoveredServices.length > 1);
+    notifyListeners();
+    if (_requestHandler != null || _api != null) {
+      _disconnectOp = _disconnectOp
+          .then((_) async {
+            if (_generation != epoch) return;
+            await request('disconnect');
+          })
+          .catchError((Object _) {});
+    }
   }
 
   Future<void> _drainStatus(int epoch) async {
     if (_draining || _generation != epoch) return;
     final handle = _statusHandle;
-    final api = _api;
-    if (handle == null || api == null) return;
+    if (handle == null) return;
+    if (_requestHandler == null && _api == null) return;
     _draining = true;
     try {
-      final raw = await api.request('drain', {'handle': handle});
+      final raw = await request('drain', {'handle': handle});
       if (_generation != epoch || raw is! Map) return;
       final events = (raw['events'] as List?) ?? const [];
+      var disconnected = false;
       for (final ev in events) {
-        if (ev is Map && ev['data'] is Map) {
+        if (ev is! Map) continue;
+        if (ev['reconnecting'] == true || ev['error'] != null) {
+          disconnected = true;
+        } else if (ev['data'] is Map) {
+          disconnected = false;
           _applyStatus(Map<String, dynamic>.from(ev['data'] as Map));
         }
       }
       if (raw['finished'] == true) {
         _statusHandle = null;
+        disconnected = true;
+      }
+      if (disconnected) {
+        _handleDisconnected(localCoreStopped: _localCoreStopped);
       }
     } catch (_) {
+      if (_generation == epoch) {
+        _handleDisconnected(localCoreStopped: _localCoreStopped);
+      }
     } finally {
       _draining = false;
     }
@@ -299,10 +461,22 @@ class TailscaleController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _generation++;
     _pollTimer?.cancel();
+    _retryTimer?.cancel();
     _api?.close();
     _api = null;
     super.dispose();
+  }
+
+  static bool _isLoopbackUrl(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null || uri.host.isEmpty) return false;
+    if (uri.host.toLowerCase() == 'localhost') return true;
+    final ip = InternetAddress.tryParse(
+      uri.host.replaceAll(RegExp(r'^\[|\]$'), ''),
+    );
+    return ip?.isLoopback ?? false;
   }
 
   static String _displayHost(String url) {

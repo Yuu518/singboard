@@ -271,6 +271,29 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   int _rootGeneration = 0, _trafficFailures = 0, _connectionFailures = 0;
   bool _samplingRoot = false, _rootComponentSynced = false;
   bool get rootRunning => rootService['state'] == 'running';
+  bool get _isLocalEndpoint {
+    final uri = Uri.tryParse(endpoint);
+    if (uri == null || uri.host.isEmpty) return false;
+    if (uri.host.toLowerCase() == 'localhost') return true;
+    final ip = InternetAddress.tryParse(
+      uri.host.replaceAll(RegExp(r'^\[|\]$'), ''),
+    );
+    return ip?.isLoopback ?? false;
+  }
+
+  void _syncTailscaleCoreState({bool? forceStopped}) {
+    final nativeRoot = preferences['nativeRootEnabled'] == true;
+    final state = rootService['state'];
+    final knownStopped =
+        nativeRoot &&
+        (forceStopped ?? (state == 'stopped' || state == 'not_installed'));
+    _tailscale.updateCoreState(
+      localBackend: _isLocalEndpoint,
+      coreRunning: !nativeRoot || rootRunning,
+      knownStopped: knownStopped,
+    );
+  }
+
   bool get _coreAvailable => preferences['nativeRootEnabled'] != true || rootRunning;
   bool get overviewLive =>
       _coreAvailable && trafficStatus == '已连接' && connectionStatus == '已连接';
@@ -861,6 +884,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
             appendSample(cpuTrend, (cpu * 10).round());
           }
         });
+        _syncTailscaleCoreState();
         if (hadState && !wasRunning && nowRunning && _rootAction == null) {
           setState(() {
             summary = {};
@@ -999,7 +1023,6 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
       final prefs =
           await configRequest(dir, 'preferences') as Map<String, dynamic>;
       if (!mounted) return;
-      unawaited(_tailscale.sync());
       final previousEndpoint = endpoint, previousSecret = secret;
       if (preferences['nativeRootEnabled'] != prefs['nativeRootEnabled']) {
         _rootGeneration++;
@@ -1020,6 +1043,8 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
         endpoint = 'http://127.0.0.1:9090';
         secret = '';
       }
+      _syncTailscaleCoreState();
+      unawaited(_tailscale.sync());
       _theme.value = switch (prefs['theme']) {
         'light' => ThemeMode.light,
         'dark' => ThemeMode.dark,
@@ -1217,6 +1242,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
     if (reconnected) {
       _reconnectGeneration++;
       unawaited(readSummary());
+      _tailscale.retryIfDisconnected();
     }
     _syncNetwork();
     if (snapshot['connections'] case final Map data) {
@@ -1327,6 +1353,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       setState(connect);
+      _tailscale.retryIfDisconnected();
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       if (timer != null) poll();
@@ -1418,6 +1445,9 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
         _syncNetwork();
       }
     });
+    if (action == 'root_stop') {
+      _syncTailscaleCoreState(forceStopped: true);
+    }
     try {
       final reply = await configRequest(await configDirectory(), 'tool', {
         'action': action,
@@ -1435,6 +1465,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
               _summaryRetryTimer = null;
               _syncNetwork();
             });
+            _syncTailscaleCoreState(forceStopped: true);
           } else {
             setState(() {
               summary = {};
@@ -1442,6 +1473,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
               disconnect();
               connect();
             });
+            _tailscale.retryIfDisconnected();
           }
         }
       }
@@ -3712,6 +3744,7 @@ class _DashboardState extends State<Dashboard> with WidgetsBindingObserver, Sing
           builder: (_) => ListenableBuilder(
             listenable: Listenable.merge([
               _settingsTick,
+              _tailscale,
               _theme,
               _fontScale,
               _glassTint,
